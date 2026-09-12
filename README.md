@@ -85,6 +85,24 @@ sudo aw clean                   # orphans, caches, journal, stale images
 Add your own entries without forking by copying `catalog/apps.yaml` to
 `/etc/anakut-worker/apps.yaml`. See `docs/APPS.md`.
 
+## Onboarding a new worker
+
+A fresh box has no inbound access and no agent, so enrollment is always
+**initiated by the worker** and **authorized from the console**. Pick a mode:
+
+| Mode | How it starts | Best for |
+|------|---------------|----------|
+| Join token | `curl ... | sudo bash -s -- --token <t>` | one box, first install |
+| Claim & approve | first-boot service announces itself | headless boxes, small fleets |
+| Fleet image | golden image with a fleet identity | many identical boxes |
+
+The worker generates a keypair, announces itself, waits as **pending**, and on
+approval receives a device credential plus its desired configuration. It then
+self-configures with the same `init` / `bootstrap` / `apply` path and joins an
+outbound-only channel. No inbound port is ever opened.
+
+Full protocol, API sketch and security model: `docs/ENROLLMENT.md`.
+
 ## Design principles
 
 | Principle | Meaning |
@@ -96,8 +114,8 @@ Add your own entries without forking by copying `catalog/apps.yaml` to
 | **Reversible** | Snapshots before updates; every capability can be cleanly removed. |
 | **Portable** | Bash + a handful of packages. x86_64 or aarch64 Arch-based systems. |
 
-See `docs/DESIGN.md`, `docs/CAPABILITIES.md`, `docs/SECURITY.md` and
-`docs/ROLLOUT.md`.
+See `docs/DESIGN.md`, `docs/CAPABILITIES.md`, `docs/SECURITY.md`,
+`docs/ROLLOUT.md` and `docs/ENROLLMENT.md`.
 
 ## Commands
 
