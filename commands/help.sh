@@ -22,6 +22,13 @@ CAPABILITIES
 OPERATIONS
   status                    Node, runtime and capability status
   power <status|apply|off>  Headless / always-on power policy
+  clean                     Remove orphans, caches and junk
+
+APPS
+  app list [category]       Browse the curated tool catalog
+  app search <term>         Search the catalog
+  app install <id>...       Install tools on demand
+  app remove <id>...        Uninstall tools
   doctor                    Scored security + health audit
   update                    Snapshot, upgrade, roll back on failure
   snapshot <list|create|rollback> [arg]

@@ -43,6 +43,16 @@ always_on:
   watchdog: false              # systemd hardware watchdog (needs /dev/watchdog)
   watchdog_sec: 20
 
+# Remove things that are no longer used. See: aw clean
+cleanup:
+  orphans: true                # remove unneeded dependencies
+  package_cache: true          # keep the last 2 package versions
+  journal: true                # vacuum the system journal
+  containers: true             # prune unused container images
+  volumes: false               # prune unused volumes (destructive)
+  tmp: true                    # clear stale /tmp entries
+  max_age_days: 2
+
 access:
   tunnel:
     enabled: false

@@ -55,6 +55,10 @@ if have yq; then
   check "available has tunnel"     'run_aw list --available && has "access.tunnel"'
   check "status renders"           'run_aw status && has "Anakut Worker"'
   check "power status renders"     'run_aw power status && has "sleep.target"'
+  check "app list runs"            'run_aw app list && has "ripgrep"'
+  check "app search works"         'run_aw app search backup && has "restic"'
+  check "app install dry-run"      'run_aw --dry-run app install ripgrep && has "pacman"'
+  check "clean dry-run"            'run_aw --dry-run clean'
   check "dry-run enable resolves"  'run_aw --dry-run enable access.tunnel && has "access.tunnel"'
   check "dry-run enable pulls dep" 'run_aw --dry-run enable access.tunnel && has "core"'
 else

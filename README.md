@@ -69,6 +69,22 @@ install script and an uninstall script. Adding tooling is configuration, not a f
 | `obs.uptime` | Uptime monitoring + alerts |
 | `dev.toolchain` | Runtimes for building/testing on-box |
 
+## Apps and cleanup
+
+The bootstrap stays minimal. Tools are installed on demand from a curated
+catalog of 74 common apps, and anything no longer used can be removed:
+
+```bash
+aw app list containers          # browse by category
+aw app search backup
+sudo aw app install ripgrep lazygit btop
+sudo aw app remove lazygit
+sudo aw clean                   # orphans, caches, journal, stale images
+```
+
+Add your own entries without forking by copying `catalog/apps.yaml` to
+`/etc/anakut-worker/apps.yaml`. See `docs/APPS.md`.
+
 ## Design principles
 
 | Principle | Meaning |
@@ -98,6 +114,8 @@ aw update                             Snapshot, upgrade, verify, roll back on fa
 aw snapshot <list|create|rollback>
 aw secrets <init|set|get|list|env>
 aw capability add <path>              Register an out-of-tree capability
+aw app list | search | install | remove
+aw clean                              Remove orphans, caches and junk
 aw help
 ```
 

@@ -1,0 +1,447 @@
+# anakut-worker curated tool catalog.
+version: 1
+apps:
+  ripgrep:
+    name: ripgrep
+    description: Fast recursive regex search (rg)
+    category: cli
+    manager: pacman
+    packages: [ripgrep]
+  fd:
+    name: fd
+    description: Simple, fast alternative to find
+    category: cli
+    manager: pacman
+    packages: [fd]
+  bat:
+    name: bat
+    description: cat with syntax highlighting
+    category: cli
+    manager: pacman
+    packages: [bat]
+  eza:
+    name: eza
+    description: Modern ls replacement
+    category: cli
+    manager: pacman
+    packages: [eza]
+  fzf:
+    name: fzf
+    description: Fuzzy finder for the shell
+    category: cli
+    manager: pacman
+    packages: [fzf]
+  zoxide:
+    name: zoxide
+    description: Smarter cd
+    category: cli
+    manager: pacman
+    packages: [zoxide]
+  httpie:
+    name: httpie
+    description: User-friendly HTTP client
+    category: cli
+    manager: pacman
+    packages: [httpie]
+  aria2:
+    name: aria2
+    description: Multi-protocol download utility
+    category: cli
+    manager: pacman
+    packages: [aria2]
+  tmux:
+    name: tmux
+    description: Terminal multiplexer
+    category: cli
+    manager: pacman
+    packages: [tmux]
+  tree:
+    name: tree
+    description: Directory tree viewer
+    category: cli
+    manager: pacman
+    packages: [tree]
+  ncdu:
+    name: ncdu
+    description: Interactive disk usage analyzer
+    category: cli
+    manager: pacman
+    packages: [ncdu]
+  duf:
+    name: duf
+    description: Disk usage overview
+    category: cli
+    manager: pacman
+    packages: [duf]
+  dust:
+    name: dust
+    description: Intuitive du replacement
+    category: cli
+    manager: pacman
+    packages: [dust]
+  procs:
+    name: procs
+    description: Modern ps replacement
+    category: cli
+    manager: pacman
+    packages: [procs]
+  sd:
+    name: sd
+    description: Intuitive sed replacement
+    category: cli
+    manager: pacman
+    packages: [sd]
+  delta:
+    name: delta
+    description: Better git diffs
+    category: cli
+    manager: pacman
+    packages: [git-delta]
+  lazygit:
+    name: lazygit
+    description: Terminal UI for git
+    category: cli
+    manager: pacman
+    packages: [lazygit]
+  gh:
+    name: gh
+    description: GitHub CLI
+    category: cli
+    manager: pacman
+    packages: [github-cli]
+  glow:
+    name: glow
+    description: Markdown renderer for the terminal
+    category: cli
+    manager: pacman
+    packages: [glow]
+  tealdeer:
+    name: tealdeer
+    description: Fast tldr client
+    category: cli
+    manager: pacman
+    packages: [tealdeer]
+  just:
+    name: just
+    description: Command runner (make alternative)
+    category: cli
+    manager: pacman
+    packages: [just]
+  direnv:
+    name: direnv
+    description: Per-directory environment loader
+    category: cli
+    manager: pacman
+    packages: [direnv]
+  starship:
+    name: starship
+    description: Cross-shell prompt
+    category: cli
+    manager: pacman
+    packages: [starship]
+  rsync:
+    name: rsync
+    description: Fast incremental file transfer
+    category: cli
+    manager: pacman
+    packages: [rsync]
+  neovim:
+    name: neovim
+    description: Modal text editor
+    category: dev
+    manager: pacman
+    packages: [neovim]
+  helix:
+    name: helix
+    description: Post-modern modal editor
+    category: dev
+    manager: pacman
+    packages: [helix]
+  git-lfs:
+    name: git-lfs
+    description: Git large file storage
+    category: dev
+    manager: pacman
+    packages: [git-lfs]
+  uv:
+    name: uv
+    description: Extremely fast Python package manager
+    category: dev
+    manager: pacman
+    packages: [uv]
+  rustup:
+    name: rustup
+    description: Rust toolchain manager
+    category: dev
+    manager: pacman
+    packages: [rustup]
+  go:
+    name: go
+    description: Go toolchain
+    category: dev
+    manager: pacman
+    packages: [go]
+  base-devel:
+    name: base-devel
+    description: gcc, make and build essentials
+    category: dev
+    manager: pacman
+    packages: [base-devel]
+  cmake:
+    name: cmake
+    description: Cross-platform build system
+    category: dev
+    manager: pacman
+    packages: [cmake]
+  claude-code:
+    name: Claude Code
+    description: Anthropic coding agent CLI
+    category: agents
+    manager: npm
+    packages: ["@anthropic-ai/claude-code"]
+  codex:
+    name: Codex CLI
+    description: OpenAI coding agent CLI
+    category: agents
+    manager: npm
+    packages: ["@openai/codex"]
+  gemini-cli:
+    name: Gemini CLI
+    description: Google coding agent CLI
+    category: agents
+    manager: npm
+    packages: ["@google/gemini-cli"]
+  opencode:
+    name: opencode
+    description: Open-source terminal coding agent
+    category: agents
+    manager: npm
+    packages: [opencode-ai]
+  aider:
+    name: aider
+    description: AI pair programming in the terminal
+    category: agents
+    manager: pipx
+    packages: [aider-chat]
+  llm:
+    name: llm
+    description: Run prompts against many models from the CLI
+    category: agents
+    manager: pipx
+    packages: [llm]
+  ollama:
+    name: Ollama
+    description: Run local models (optional; most boxes use cloud LLMs)
+    category: agents
+    manager: pacman
+    packages: [ollama]
+  pnpm:
+    name: pnpm
+    description: Fast, disk-efficient package manager
+    category: dev
+    manager: npm
+    packages: [pnpm]
+  docker:
+    name: docker
+    description: Container engine
+    category: containers
+    manager: pacman
+    packages: [docker, docker-compose]
+  podman:
+    name: podman
+    description: Daemonless container engine
+    category: containers
+    manager: pacman
+    packages: [podman, podman-compose]
+  buildah:
+    name: buildah
+    description: Build OCI images without a daemon
+    category: containers
+    manager: pacman
+    packages: [buildah]
+  skopeo:
+    name: skopeo
+    description: Inspect and copy container images
+    category: containers
+    manager: pacman
+    packages: [skopeo]
+  dive:
+    name: dive
+    description: Explore container image layers
+    category: containers
+    manager: pacman
+    packages: [dive]
+  lazydocker:
+    name: lazydocker
+    description: Terminal UI for docker
+    category: containers
+    manager: pacman
+    packages: [lazydocker]
+  nmap:
+    name: nmap
+    description: Network scanner
+    category: network
+    manager: pacman
+    packages: [nmap]
+  mtr:
+    name: mtr
+    description: traceroute plus ping
+    category: network
+    manager: pacman
+    packages: [mtr]
+  iperf3:
+    name: iperf3
+    description: Network bandwidth testing
+    category: network
+    manager: pacman
+    packages: [iperf3]
+  tailscale:
+    name: tailscale
+    description: Private mesh VPN
+    category: network
+    manager: pacman
+    packages: [tailscale]
+  wireguard-tools:
+    name: wireguard-tools
+    description: WireGuard VPN userspace tools
+    category: network
+    manager: pacman
+    packages: [wireguard-tools]
+  cloudflared:
+    name: cloudflared
+    description: Cloudflare Tunnel client
+    category: network
+    manager: paru
+    packages: [cloudflared-bin]
+  dnstools:
+    name: dig / whois
+    description: DNS and domain troubleshooting
+    category: network
+    manager: pacman
+    packages: [bind, whois]
+  age:
+    name: age
+    description: Modern file encryption
+    category: security
+    manager: pacman
+    packages: [age]
+  sops:
+    name: sops
+    description: Encrypted config and secrets
+    category: security
+    manager: pacman
+    packages: [sops]
+  rkhunter:
+    name: rkhunter
+    description: Rootkit and malware scanner
+    category: security
+    manager: pacman
+    packages: [rkhunter]
+  lynis:
+    name: lynis
+    description: Security auditing tool
+    category: security
+    manager: pacman
+    packages: [lynis]
+  clamav:
+    name: ClamAV
+    description: Antivirus scanner
+    category: security
+    manager: pacman
+    packages: [clamav]
+  fail2ban:
+    name: fail2ban
+    description: Ban brute-force attackers
+    category: security
+    manager: pacman
+    packages: [fail2ban]
+  gnupg:
+    name: GnuPG
+    description: Signing and encryption
+    category: security
+    manager: pacman
+    packages: [gnupg]
+  btop:
+    name: btop
+    description: Resource monitor TUI
+    category: monitoring
+    manager: pacman
+    packages: [btop]
+  htop:
+    name: htop
+    description: Interactive process viewer
+    category: monitoring
+    manager: pacman
+    packages: [htop]
+  nvtop:
+    name: nvtop
+    description: GPU monitor for NVIDIA/AMD/Intel
+    category: monitoring
+    manager: pacman
+    packages: [nvtop]
+  lm_sensors:
+    name: lm_sensors
+    description: Temperature and fan monitoring
+    category: monitoring
+    manager: pacman
+    packages: [lm_sensors]
+  smartmontools:
+    name: smartmontools
+    description: Disk health monitoring
+    category: monitoring
+    manager: pacman
+    packages: [smartmontools]
+  sysstat:
+    name: sysstat
+    description: sar, iostat and friends
+    category: monitoring
+    manager: pacman
+    packages: [sysstat]
+  ffmpeg:
+    name: ffmpeg
+    description: Audio and video toolkit
+    category: media
+    manager: pacman
+    packages: [ffmpeg]
+  imagemagick:
+    name: ImageMagick
+    description: Image conversion and editing
+    category: media
+    manager: pacman
+    packages: [imagemagick]
+  yt-dlp:
+    name: yt-dlp
+    description: Download audio and video
+    category: media
+    manager: pacman
+    packages: [yt-dlp]
+  rclone:
+    name: rclone
+    description: Sync to cloud storage
+    category: storage
+    manager: pacman
+    packages: [rclone]
+  restic:
+    name: restic
+    description: Encrypted, deduplicated backups
+    category: storage
+    manager: pacman
+    packages: [restic]
+  borg:
+    name: BorgBackup
+    description: Deduplicating backup program
+    category: storage
+    manager: pacman
+    packages: [borg]
+  nfs-utils:
+    name: NFS utilities
+    description: Network filesystem client/server
+    category: storage
+    manager: pacman
+    packages: [nfs-utils]
+  samba:
+    name: Samba
+    description: SMB file sharing
+    category: storage
+    manager: pacman
+    packages: [samba]
