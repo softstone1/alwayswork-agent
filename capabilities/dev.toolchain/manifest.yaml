@@ -1,0 +1,6 @@
+id: dev.toolchain
+name: Development toolchain
+description: Node, Python and pnpm for building and testing on the box.
+version: 1
+requires: [core]
+profiles: [full]

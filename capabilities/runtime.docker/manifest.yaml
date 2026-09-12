@@ -1,0 +1,6 @@
+id: runtime.docker
+name: Docker runtime
+description: Docker engine with hardened defaults and no socket exposure to workers.
+version: 1
+requires: [core]
+profiles: [worker, agent, assistant, full]

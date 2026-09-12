@@ -1,0 +1,6 @@
+id: core
+name: Core foundation
+description: Base packages, firewall, kernel hardening, secret store, update timer.
+version: 1
+requires: []
+profiles: [foundation, worker, agent, assistant, full]

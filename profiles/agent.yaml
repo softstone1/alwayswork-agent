@@ -1,0 +1,8 @@
+profile: agent
+description: Foundation + runtime + the agent control plane.
+capabilities:
+  - core
+  - runtime.docker
+  - backup.restic
+  - obs.uptime
+  - agents.core

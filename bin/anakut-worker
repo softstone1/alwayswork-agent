@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# anakut-worker — secure, capability-based bootstrapper for Arch/CachyOS mini PCs.
+set -euo pipefail
+
+SELF="${BASH_SOURCE[0]}"
+while [[ -L "$SELF" ]]; do
+  target="$(readlink "$SELF")"
+  if [[ "$target" == /* ]]; then SELF="$target"; else SELF="$(cd "$(dirname "$SELF")" && pwd)/$target"; fi
+done
+BIN_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+AW_ROOT="${AW_ROOT:-$(cd "$BIN_DIR/.." && pwd)}"
+export AW_ROOT
+
+# shellcheck source=../lib/core.sh
+source "$AW_ROOT/lib/core.sh"
+# shellcheck source=../lib/config.sh
+source "$AW_ROOT/lib/config.sh"
+# shellcheck source=../lib/hardware.sh
+source "$AW_ROOT/lib/hardware.sh"
+# shellcheck source=../lib/engine.sh
+source "$AW_ROOT/lib/engine.sh"
+# shellcheck source=../lib/firewall.sh
+source "$AW_ROOT/lib/firewall.sh"
+# shellcheck source=../lib/secrets.sh
+source "$AW_ROOT/lib/secrets.sh"
+# shellcheck source=../lib/snapshot.sh
+source "$AW_ROOT/lib/snapshot.sh"
+# shellcheck source=../lib/capability.sh
+source "$AW_ROOT/lib/capability.sh"
+# shellcheck source=../lib/power.sh
+source "$AW_ROOT/lib/power.sh"
+
+# --- global flags -----------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case "${1}" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --yes|-y)  ASSUME_YES=1; shift ;;
+    --json)    JSON_OUT=1; shift ;;
+    --version|-V) printf 'anakut-worker %s\n' "$AW_VERSION"; exit 0 ;;
+    --help|-h) source "$AW_ROOT/commands/help.sh"; cmd_help; exit 0 ;;
+    --) shift; break ;;
+    -*) die "unknown global flag: ${1} (try: aw help)" ;;
+    *) break ;;
+  esac
+done
+
+cmd="${1:-help}"
+[[ $# -gt 0 ]] && shift
+
+case "$cmd" in
+  init|bootstrap|apply|enable|disable|list|status|doctor|update|snapshot|secrets|capability|power|help)
+    # shellcheck source=/dev/null
+    source "$AW_ROOT/commands/$cmd.sh"
+    "cmd_$cmd" "$@"
+    ;;
+  version) printf 'anakut-worker %s\n' "$AW_VERSION" ;;
+  *) die "unknown command: $cmd (try: aw help)" ;;
+esac

@@ -1,0 +1,6 @@
+id: agents.core
+name: Agent control plane
+description: Workspace layout, hardened agent runner and a systemd task template.
+version: 1
+requires: [core]
+profiles: [agent, full]

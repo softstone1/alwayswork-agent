@@ -1,0 +1,6 @@
+id: runtime.podman
+name: Podman runtime
+description: Daemonless, rootless container runtime. Best isolation, no root daemon.
+version: 1
+requires: [core]
+profiles: [full]

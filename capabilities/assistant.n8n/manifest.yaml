@@ -1,0 +1,6 @@
+id: assistant.n8n
+name: Automation hub (n8n)
+description: Self-hosted workflow automation on localhost, for assistant tasks.
+version: 1
+requires: [core]
+profiles: [assistant, full]

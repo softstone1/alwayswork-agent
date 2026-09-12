@@ -1,0 +1,6 @@
+id: access.tunnel
+name: Cloudflare Tunnel
+description: Outbound-only secure public access. Opens no inbound ports.
+version: 1
+requires: [core]
+profiles: [full]

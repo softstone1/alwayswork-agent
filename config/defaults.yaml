@@ -1,0 +1,61 @@
+# anakut-worker desired state.
+# Edit this, then run: aw apply
+version: 1
+name: anakut-worker
+profile: foundation
+timezone: UTC
+
+hardening:
+  firewall: true
+  default_deny: true
+  ssh: disabled            # disabled | tailscale | lan
+  auto_snapshots: true
+  container_hardening: true
+  cve_scan: true
+  snapper_config: root
+
+engine:
+  runtime: none            # docker | podman | none
+  rootless: false
+
+# Limits are defaults, never walls.
+#   auto  -> derived from RAM and max_concurrent
+#   fixed -> use limits.defaults.memory_mb
+#   off   -> pass no --memory/--cpus flags at all
+limits:
+  mode: auto
+  reserve_for_host_mb: 4096
+  max_concurrent: 8
+  defaults:
+    cpu: 2
+    memory_mb: 2048
+    pids: 512
+
+# Headless, always-on operation (no monitor, 24/7). Reversible via
+# 'aw power off'. Set always_on.enabled: false to manage power yourself.
+always_on:
+  enabled: true
+  disable_suspend: true        # mask sleep/suspend/hibernate targets
+  ignore_lid_switch: true      # laptops / some mini PCs
+  ignore_idle: true            # no idle-triggered action
+  ignore_power_key: false      # set true to make the power button a no-op
+  wifi_powersave_off: true     # stop Wi-Fi dropping when idle
+  watchdog: false              # systemd hardware watchdog (needs /dev/watchdog)
+  watchdog_sec: 20
+
+access:
+  tunnel:
+    enabled: false
+    domain: ""
+  tailscale:
+    enabled: false
+
+backup:
+  enabled: false
+  repository: ""
+  schedule: daily
+
+capabilities:
+  enabled:
+    - core
+  config: {}

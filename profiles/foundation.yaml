@@ -1,0 +1,4 @@
+profile: foundation
+description: Secured base node only. Add capabilities later.
+capabilities:
+  - core

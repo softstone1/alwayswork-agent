@@ -1,0 +1,6 @@
+id: obs.uptime
+name: Uptime monitoring
+description: Uptime Kuma bound to localhost; front it with access.tunnel.
+version: 1
+requires: [core]
+profiles: [worker, agent, assistant, full]

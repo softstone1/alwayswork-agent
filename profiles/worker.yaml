@@ -1,0 +1,7 @@
+profile: worker
+description: Foundation + container runtime, backups and monitoring.
+capabilities:
+  - core
+  - runtime.docker
+  - backup.restic
+  - obs.uptime

@@ -1,0 +1,6 @@
+id: backup.restic
+name: Encrypted offsite backups
+description: restic snapshots of config, state and agent workspaces on a timer.
+version: 1
+requires: [core]
+profiles: [worker, agent, assistant, full]

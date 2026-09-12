@@ -1,0 +1,12 @@
+profile: full
+description: Everything the catalog ships.
+capabilities:
+  - core
+  - runtime.docker
+  - access.tunnel
+  - access.tailscale
+  - backup.restic
+  - obs.uptime
+  - agents.core
+  - assistant.n8n
+  - dev.toolchain

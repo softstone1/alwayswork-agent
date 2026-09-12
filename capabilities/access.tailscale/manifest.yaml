@@ -1,0 +1,6 @@
+id: access.tailscale
+name: Tailscale admin plane
+description: Private encrypted network for administration and break-glass access.
+version: 1
+requires: [core]
+profiles: [full]

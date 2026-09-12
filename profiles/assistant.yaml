@@ -1,0 +1,8 @@
+profile: assistant
+description: Foundation + runtime + automation hub.
+capabilities:
+  - core
+  - runtime.docker
+  - backup.restic
+  - obs.uptime
+  - assistant.n8n
