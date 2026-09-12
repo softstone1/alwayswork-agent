@@ -1,4 +1,4 @@
-# anakut-worker capability: backup.restic
+# alwayswork capability: backup.restic
 
 log "backup.restic: installing restic"
 run pacman -S --needed --noconfirm restic
@@ -16,12 +16,12 @@ if [[ -z "$repo" ]]; then
   info "set one with: aw enable backup.restic --repository s3:https://.../bucket"
 fi
 
-aw_write /usr/local/bin/anakut-worker-backup <<'SCRIPT'
+aw_write /usr/local/bin/alwayswork-backup <<'SCRIPT'
 #!/usr/bin/env bash
-# Back up anakut-worker state with restic.
+# Back up alwayswork state with restic.
 set -euo pipefail
-AW=/usr/local/bin/anakut-worker
-CFG=/etc/anakut-worker/worker.yaml
+AW=/usr/local/bin/alwayswork
+CFG=/etc/alwayswork/worker.yaml
 repo="$(yq -r '.backup.repository' "$CFG")"
 if [[ -z "$repo" || "$repo" == "null" ]]; then
   echo "no backup.repository configured in $CFG" >&2
@@ -30,22 +30,22 @@ fi
 export RESTIC_REPOSITORY="$repo"
 export RESTIC_PASSWORD="$("$AW" secrets get RESTIC_PASSWORD)"
 if ! restic snapshots >/dev/null 2>&1; then restic init; fi
-exec restic backup /etc/anakut-worker /srv/anakut-worker /var/lib/anakut-worker "$@"
+exec restic backup /etc/alwayswork /srv/alwayswork /var/lib/alwayswork "$@"
 SCRIPT
-run chmod +x /usr/local/bin/anakut-worker-backup
+run chmod +x /usr/local/bin/alwayswork-backup
 
-aw_write /etc/systemd/system/anakut-worker-backup.service <<'UNIT'
+aw_write /etc/systemd/system/alwayswork-backup.service <<'UNIT'
 [Unit]
-Description=Anakut Worker backup
+Description=AlwaysWork backup
 After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/anakut-worker-backup
+ExecStart=/usr/local/bin/alwayswork-backup
 UNIT
-aw_write /etc/systemd/system/anakut-worker-backup.timer <<'UNIT'
+aw_write /etc/systemd/system/alwayswork-backup.timer <<'UNIT'
 [Unit]
-Description=Run Anakut Worker backup daily
+Description=Run AlwaysWork backup daily
 
 [Timer]
 OnCalendar=daily
@@ -59,7 +59,7 @@ run systemctl daemon-reload
 cfg_set_expr '.backup.enabled' true
 
 if [[ -n "$repo" ]]; then
-  run systemctl enable --now anakut-worker-backup.timer
+  run systemctl enable --now alwayswork-backup.timer
 else
   info "timer created but not started until a repository is configured"
 fi

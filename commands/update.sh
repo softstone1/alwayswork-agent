@@ -10,7 +10,7 @@ cmd_update() {
   local snap_id=""
   if cfg_bool '.hardening.auto_snapshots' true; then
     log "Creating pre-update snapshot"
-    snap_create "anakut-worker pre-update $(date -Iseconds)"
+    snap_create "alwayswork pre-update $(date -Iseconds)"
     snap_id="$(snap_latest_id 2>/dev/null || true)"
     [[ -n "$snap_id" ]] && info "snapshot: $snap_id"
   fi

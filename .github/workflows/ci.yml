@@ -23,7 +23,7 @@ jobs:
       - name: Shellcheck
         run: >-
           shellcheck -x
-          install.sh bin/anakut-worker
+          install.sh bin/alwayswork
           lib/*.sh commands/*.sh capabilities/*/*.sh
 
       - name: Tests

@@ -1,2 +1,2 @@
-# anakut-worker capability: access.tailscale (health)
+# alwayswork capability: access.tailscale (health)
 systemctl is-active --quiet tailscaled

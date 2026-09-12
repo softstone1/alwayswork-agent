@@ -3,13 +3,13 @@
 
 cmd_help() {
   cat <<EOF
-Anakut Worker ${AW_VERSION} — secure, capability-based worker node
+AlwaysWork ${AW_VERSION} — secure, capability-based worker node
 
 USAGE
   aw <command> [options]
 
 LIFECYCLE
-  init [--profile P]        Write /etc/anakut-worker/worker.yaml
+  init [--profile P]        Write /etc/alwayswork/worker.yaml
   bootstrap                 Secure the machine + install the foundation
   apply                     Reconcile installed capabilities to config
 

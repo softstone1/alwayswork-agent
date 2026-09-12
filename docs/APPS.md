@@ -18,7 +18,7 @@ Categories: `cli`, `dev`, `agents`, `containers`, `network`,
 `security`, `monitoring`, `media`, `storage`.
 
 The shipped catalog lives at `catalog/apps.yaml`. To add your own without
-forking, copy it to `/etc/anakut-worker/apps.yaml` — user entries are searched
+forking, copy it to `/etc/alwayswork/apps.yaml` — user entries are searched
 first and can override shipped ones.
 
 ## Adding an entry

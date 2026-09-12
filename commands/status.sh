@@ -13,7 +13,7 @@ cmd_status() {
     return 0
   fi
 
-  section "Anakut Worker"
+  section "AlwaysWork"
   kv "version" "$AW_VERSION"
   if cfg_exists; then
     kv "name"    "$(cfg_get '.name' "$(hostname)")"

@@ -1,4 +1,4 @@
-# anakut-worker capability: access.tunnel
+# alwayswork capability: access.tunnel
 
 log "access.tunnel: installing cloudflared"
 if pacman -Si cloudflared >/dev/null 2>&1; then

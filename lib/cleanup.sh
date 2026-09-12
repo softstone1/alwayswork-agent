@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · remove what is no longer used.
+# alwayswork · remove what is no longer used.
 #
 # Every step is a toggle under cleanup.* so a box can be as aggressive or
 # as conservative as it needs to be.

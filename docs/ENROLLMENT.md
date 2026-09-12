@@ -1,6 +1,6 @@
 # Onboarding and enrollment
 
-How a brand-new CachyOS mini PC becomes a managed Anakut Worker.
+How a brand-new CachyOS mini PC becomes a managed AlwaysWork.
 
 ## The constraint that shapes everything
 
@@ -25,7 +25,7 @@ operator                          console (Cloudflare)                 new worke
    |                                    |<---------------------------------|
    |                                    |   {device_id, poll_secret}       |
    |                                    |--------------------------------->|
-   |  see "pending: anakut-01"          |                                  |
+   |  see "pending: alwayswork-01"          |                                  |
    |  approve, assign profile           |                                  |
    |----------------------------------->|                                  |
    |                                    |   long-poll state -> approved    |
@@ -49,7 +49,7 @@ All three converge at the same place: after approval the worker runs the same
 
 ### Honest limitation
 
-A stock CachyOS ISO contains no `anakut-worker`. You cannot get from a bare
+A stock CachyOS ISO contains no `alwayswork`. You cannot get from a bare
 ISO to zero-touch without one of:
 
 - running **one command** on the box (mode A), or
@@ -72,13 +72,13 @@ is the minimum human step; modes B/C remove it by baking the agent in.
 **Mode A — join token (recommended default).** The console shows a command:
 
 ```bash
-curl -fsSL https://get.anakut.com/join | sudo bash -s -- --token wj_<token>
+curl -fsSL https://get.alwayswork.com/join | sudo bash -s -- --token wj_<token>
 ```
 
 The token is short-lived, single-use, and useless without the box's keypair.
 
-**Mode B — claim on first boot.** The `anakut-worker` package installs an
-`anakut-worker-enroll.service` (oneshot, runs once). On boot it announces
+**Mode B — claim on first boot.** The `alwayswork` package installs an
+`alwayswork-enroll.service` (oneshot, runs once). On boot it announces
 itself; there is no token.
 
 **Mode C — fleet image.** Same service, with a fleet identity (fleet token, or
@@ -88,14 +88,14 @@ time. Enrolls and is auto-approved into its group.
 ## Stage 2 — The worker announces itself
 
 The worker generates an **ed25519 keypair**; the private key never leaves the
-machine (`/etc/anakut-worker/identity/device.key`, mode 600).
+machine (`/etc/alwayswork/identity/device.key`, mode 600).
 
 ```http
-POST https://control.anakut.com/v1/workers/enroll
+POST https://control.alwayswork.com/v1/workers/enroll
 {
   "token":   "wj_...",           // mode A/C only
   "pubkey":  "age1.../ed25519...",
-  "hostname":"anakut-01",
+  "hostname":"alwayswork-01",
   "machine_id":"b4f2...",         // /etc/machine-id
   "macs":    ["aa:bb:cc:dd:ee:ff"],
   "serial":  "ABCD1234",          // DMI board serial if present
@@ -109,7 +109,7 @@ POST https://control.anakut.com/v1/workers/enroll
   "device_id": "w_7Qk...",
   "poll_secret":"ps_...",          // only this worker ever sees it
   "state": "pending",
-  "verification_uri": "https://workers.anakut.com/pair"   // optional
+  "verification_uri": "https://workers.alwayswork.com/pair"   // optional
 }
 ```
 
@@ -149,7 +149,7 @@ On approval the worker receives, in one sealed response:
 
 ## Stage 5 — Self-configuration
 
-The worker writes `/etc/anakut-worker/worker.yaml`, stores its identity, then
+The worker writes `/etc/alwayswork/worker.yaml`, stores its identity, then
 runs the existing machinery:
 
 ```
@@ -192,7 +192,7 @@ already does locally. The console becomes "the `worker.yaml` in the sky".
 | Device identity | ed25519 keypair, private key never leaves the box |
 | Secret delivery | sealed to the device public key; never logged in clear |
 | Abuse | rate-limit enrollment; alert on unexpected pending devices |
-| Transport | TLS to `control.anakut.com`; console behind Cloudflare Access |
+| Transport | TLS to `control.alwayswork.com`; console behind Cloudflare Access |
 | Optional | TPM-sealed identity (this hardware has no TPM) |
 
 Enrollment is **fail-closed**: an unapproved worker can do nothing but wait, and
@@ -202,11 +202,11 @@ a worker whose credential is revoked is refused on the next heartbeat.
 
 | Piece | Where |
 |-------|-------|
-| Enrollment API | Cloudflare Worker `control.anakut.com` |
+| Enrollment API | Cloudflare Worker `control.alwayswork.com` |
 | Per-worker state | Durable Object (one per device) |
 | Registry / search | D1 table `workers` |
 | Console + approval | existing web app, behind Cloudflare Access |
-| Worker side | new `aw enroll` command + `anakut-worker-enroll.service` |
+| Worker side | new `aw enroll` command + `alwayswork-enroll.service` |
 | After approval | reuse `aw init/bootstrap/apply` and the capability catalog |
 
 ## Build order

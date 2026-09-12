@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · hardware and platform detection.
+# alwayswork · hardware and platform detection.
 
 hw_cores()     { nproc 2>/dev/null || getconf _NPROCESSORS_ONLN; }
 hw_mem_mb()    { awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo; }

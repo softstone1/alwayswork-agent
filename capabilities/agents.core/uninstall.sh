@@ -1,5 +1,5 @@
-# anakut-worker capability: agents.core (remove)
-run rm -f /etc/systemd/system/anakut-worker-agent@.service
-run rm -f /usr/local/bin/anakut-worker-agent
+# alwayswork capability: agents.core (remove)
+run rm -f /etc/systemd/system/alwayswork-agent@.service
+run rm -f /usr/local/bin/alwayswork-agent
 run systemctl daemon-reload
-warn "workspaces under /srv/anakut-worker/agents were kept"
+warn "workspaces under /srv/alwayswork/agents were kept"

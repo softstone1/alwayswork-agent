@@ -2,7 +2,7 @@
 
 ## Goal
 
-Turn a bare CachyOS / Arch mini PC into a **secure Anakut worker node**, then let
+Turn a bare CachyOS / Arch mini PC into a **secure AlwaysWork node**, then let
 an operator grow it one capability at a time. The bootstrap must be idempotent,
 reversible, and portable across hardware.
 
@@ -10,12 +10,12 @@ reversible, and portable across hardware.
 
 ```
 L4  capabilities   runtime.docker  access.tunnel  agents.core  assistant.n8n ...
-L3  control        bin/anakut-worker + commands/ + lib/capability.sh
+L3  control        bin/alwayswork + commands/ + lib/capability.sh
 L2  platform       lib/{config,engine,firewall,secrets,snapshot,hardware}.sh
 L1  host           CachyOS: btrfs, snapper, pacman, systemd, ufw
 ```
 
-**L1 host** stays boring. anakut-worker does not replace the distro's package
+**L1 host** stays boring. alwayswork does not replace the distro's package
 management, firewall, or init system; it configures them.
 
 **L2 platform** is a set of small bash libraries, each with one job. They never
@@ -29,7 +29,7 @@ with a manifest and hooks. Nothing here is compiled into the CLI.
 
 ## Desired state
 
-`/etc/anakut-worker/worker.yaml` is the single source of truth. It holds
+`/etc/alwayswork/worker.yaml` is the single source of truth. It holds
 hardening policy, engine choice, limits, access config and the enabled
 capability list with per-capability config. `aw apply` reconciles the machine
 to it. `aw enable` / `disable` edit the file and reconcile.
@@ -89,5 +89,5 @@ timer that runs this same path.
 ## Extensibility
 
 `aw capability add <path>` copies an out-of-tree capability into
-`/etc/anakut-worker/capabilities.d`. Discovery walks both the shipped catalog
+`/etc/alwayswork/capabilities.d`. Discovery walks both the shipped catalog
 and the user directory, so third-party tooling never requires a fork.

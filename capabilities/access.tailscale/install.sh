@@ -1,4 +1,4 @@
-# anakut-worker capability: access.tailscale
+# alwayswork capability: access.tailscale
 
 log "access.tailscale: installing tailscale"
 run pacman -S --needed --noconfirm tailscale

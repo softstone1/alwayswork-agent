@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# anakut-worker test harness. Runs without root and without touching the host.
+# alwayswork test harness. Runs without root and without touching the host.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AW="$ROOT/bin/anakut-worker"
+AW="$ROOT/bin/alwayswork"
 PASS=0
 FAIL=0
 TMP="$(mktemp -d)"
@@ -21,10 +21,10 @@ has()    { grep -q "$1" "$TMP/out"; }
 echo "== syntax =="
 while IFS= read -r -d '' f; do
   if bash -n "$f" 2>/dev/null; then ok "syntax: ${f#"$ROOT"/}"; else bad "syntax: $f"; fi
-done < <(find "$ROOT" -type f \( -name '*.sh' -o -path '*/bin/anakut-worker' \) -print0)
+done < <(find "$ROOT" -type f \( -name '*.sh' -o -path '*/bin/alwayswork' \) -print0)
 
 echo "== cli =="
-check "version"           'run_aw --version && has "^anakut-worker "'
+check "version"           'run_aw --version && has "^alwayswork "'
 check "help"              'run_aw help && has USAGE'
 check "unknown cmd fails" '! run_aw bogus'
 check "power documented"  'run_aw help && has "power <status"'
@@ -55,7 +55,7 @@ if have yq; then
   check "list shows enabled core"  'run_aw list && has "^core "'
   check "available hides enabled"  'run_aw list --available && ! has "^core "'
   check "available has tunnel"     'run_aw list --available && has "access.tunnel"'
-  check "status renders"           'run_aw status && has "Anakut Worker"'
+  check "status renders"           'run_aw status && has "AlwaysWork"'
   check "power status renders"     'run_aw power status && has "sleep.target"'
   check "app list runs"            'run_aw app list && has "ripgrep"'
   check "app search works"         'run_aw app search backup && has "restic"'

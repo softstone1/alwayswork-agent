@@ -5,12 +5,12 @@ test:
 	bash tests/run.sh
 
 syntax:
-	@find . -type f \( -name '*.sh' -o -path './bin/anakut-worker' \) -print0 \
+	@find . -type f \( -name '*.sh' -o -path './bin/alwayswork' \) -print0 \
 		| xargs -0 -n1 bash -n && echo "syntax ok"
 
 lint:
-	shellcheck -x install.sh bin/anakut-worker lib/*.sh commands/*.sh capabilities/*/*.sh
+	shellcheck -x install.sh bin/alwayswork lib/*.sh commands/*.sh capabilities/*/*.sh
 
 dry-run:
 	@AW_ROOT="${PWD}" AW_TEST=1 AW_ETC=./tmp/etc AW_STATE=./tmp/state \
-		AW_CONFIG=./tmp/etc/worker.yaml ./bin/anakut-worker --dry-run bootstrap || true
+		AW_CONFIG=./tmp/etc/worker.yaml ./bin/alwayswork --dry-run bootstrap || true

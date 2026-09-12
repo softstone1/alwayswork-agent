@@ -1,9 +1,9 @@
 # shellcheck shell=bash
-# anakut-worker · control-plane client.
+# alwayswork · control-plane client.
 
 control_config_file() { echo "$AW_ETC/control.json"; }
 control_key_file()    { echo "$AW_ETC/identity/device.key"; }
-control_url()         { cfg_get '.control.url' "${ANAKUT_CONTROL_URL:-}"; }
+control_url()         { cfg_get '.control.url' "${ALWAYSWORK_CONTROL_URL:-}"; }
 control_device_id()   { jq -r '.deviceId // ""' "$(control_config_file)" 2>/dev/null || true; }
 control_poll_secret() { jq -r '.pollSecret // ""' "$(control_config_file)" 2>/dev/null || true; }
 control_enrolled()    { [[ -n "$(control_device_id)" ]]; }
@@ -169,7 +169,7 @@ control_apply_delivery() {
   ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
   cfg_set_expr '.control.appliedVersion' "$ver"
   log "control: applying desired state"
-  run "$AW_ROOT/bin/anakut-worker" apply
+  run "$AW_ROOT/bin/alwayswork" apply
 }
 control_agent() {
   local interval="30" once=0

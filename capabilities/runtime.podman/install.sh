@@ -1,4 +1,4 @@
-# anakut-worker capability: runtime.podman
+# alwayswork capability: runtime.podman
 
 log "runtime.podman: installing podman"
 run pacman -S --needed --noconfirm podman podman-compose

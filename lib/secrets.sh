@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · encrypted secret store (sops + age).
+# alwayswork · encrypted secret store (sops + age).
 #
 # Plaintext never lands in git or on disk. Secrets live in an age-encrypted
 # YAML file; capabilities receive them through a runtime-only env file.

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · desired-state config (worker.yaml) read/write via yq.
+# alwayswork · desired-state config (worker.yaml) read/write via yq.
 
 cfg_require() { [[ "$DRY_RUN" == "1" ]] && return 0; require_cmd yq; }
 cfg_file()    { printf '%s\n' "$AW_CONFIG"; }

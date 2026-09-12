@@ -20,7 +20,7 @@ The agent is the reconciliation engine.
 
 ## Zero-touch flow
 
-1. **Seed.** One line installs `anakut-worker` and the agent harness
+1. **Seed.** One line installs `alwayswork` and the agent harness
    (DSH, opencode, or any harness). On a fleet this is baked into the image.
 2. **Enroll.** The agent runs the bootstrap objective: `aw enroll --control URL`
    (with a join token, or claim-and-approve). The box announces itself.
@@ -37,7 +37,7 @@ The agent is the reconciliation engine.
 Steps 2-5 are already implemented on the machine side:
 
 ```bash
-sudo aw enroll --control https://control.anakut.com --token aj_...
+sudo aw enroll --control https://control.alwayswork.com --token aj_...
 sudo aw enable control.join          # systemd unit running: aw agent 60
 sudo aw agent 60                     # or run it in the foreground
 ```
@@ -47,16 +47,16 @@ sudo aw agent 60                     # or run it in the foreground
 The agent drives the box through `aw` (shell tool) and, when it needs
 control-plane operations, through a plugin that exposes them as first-class
 tools. For DSH that is a Cordis tool plugin
-(`dsh-plugin-anakut`) registering:
+(`dsh-plugin-alwayswork`) registering:
 
 | Tool | Purpose |
 |------|---------|
-| `anakut_enroll` | announce this worker and wait for approval |
-| `anakut_status` | control-plane + local status |
-| `anakut_doctor` | scored audit; the agent fixes what it finds |
-| `anakut_apply` | reconcile to the assigned desired state |
-| `anakut_install_app` | install from the curated catalog |
-| `anakut_report` | push a one-line status back to the console |
+| `alwayswork_enroll` | announce this worker and wait for approval |
+| `alwayswork_status` | control-plane + local status |
+| `alwayswork_doctor` | scored audit; the agent fixes what it finds |
+| `alwayswork_apply` | reconcile to the assigned desired state |
+| `alwayswork_install_app` | install from the curated catalog |
+| `alwayswork_report` | push a one-line status back to the console |
 
 With those tools the agent can complete onboarding end to end, then keep the
 box healthy.
@@ -73,6 +73,6 @@ box healthy.
 
 ## Fleet
 
-For many boxes, bake `anakut-worker` + the harness + a fleet enrollment
+For many boxes, bake `alwayswork` + the harness + a fleet enrollment
 token into the image. First boot: the agent enrolls, the group auto-approves,
 and the box configures itself. Nobody touches it.

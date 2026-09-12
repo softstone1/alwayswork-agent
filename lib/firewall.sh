@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · firewall helpers.
+# alwayswork · firewall helpers.
 #
 # Secure by default: inbound denied, outbound allowed. Capabilities may open
 # specific ports; every opening is tracked so "disable" can close it again.
@@ -60,7 +60,7 @@ fw_ensure() {
 fw_allow_port() {
   local cap="$1" port="$2" proto="${3:-tcp}"
   case "$(fw_backend)" in
-    ufw)       run ufw allow "${port}/${proto}" comment "anakut-worker:${cap}" ;;
+    ufw)       run ufw allow "${port}/${proto}" comment "alwayswork:${cap}" ;;
     firewalld) run firewall-cmd --permanent --add-port="${port}/${proto}"; run firewall-cmd --reload ;;
     *)         warn "cannot open ${port}/${proto}: no firewall backend"; return 1 ;;
   esac
@@ -80,7 +80,7 @@ fw_close_port() {
 fw_allow_iface() {
   local cap="$1" iface="$2"
   case "$(fw_backend)" in
-    ufw) run ufw allow in on "$iface" comment "anakut-worker:${cap}" ;;
+    ufw) run ufw allow in on "$iface" comment "alwayswork:${cap}" ;;
     *)   warn "cannot allow interface ${iface}: no firewall backend"; return 1 ;;
   esac
   fw_rule_track "$cap" "iface:$iface" "-"

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · btrfs/snapper snapshots for safe, reversible updates.
+# alwayswork · btrfs/snapper snapshots for safe, reversible updates.
 
 snap_config() { cfg_get '.hardening.snapper_config' root; }
 snap_available() { hw_is_btrfs && have snapper; }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Anakut Worker installer.
+# AlwaysWork installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/softstone1/anakut-worker/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork/main/install.sh | sudo bash
 #   sudo ./install.sh --dry-run
 #
 # Idempotent: safe to re-run. Installs dependencies, places the runtime in
@@ -9,10 +9,10 @@
 set -euo pipefail
 
 VERSION="0.1.0"
-REPO_SLUG="${REPO_SLUG:-softstone1/anakut-worker}"
+REPO_SLUG="${REPO_SLUG:-softstone1/alwayswork}"
 REPO_REF="${REPO_REF:-main}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/anakut-worker}"
-BIN_LINK="${BIN_LINK:-/usr/local/bin/anakut-worker}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/alwayswork}"
+BIN_LINK="${BIN_LINK:-/usr/local/bin/alwayswork}"
 ALIAS="${ALIAS:-aw}"
 DRY_RUN=0
 ASSUME_YES=0
@@ -33,7 +33,7 @@ run()  { if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] %s\n' "$*"; else
 
 usage() {
   cat <<EOF
-Anakut Worker installer ${VERSION}
+AlwaysWork installer ${VERSION}
 
 Usage: install.sh [options]
 
@@ -70,22 +70,22 @@ detect_platform() {
   # shellcheck disable=SC1091
   . /etc/os-release
   if [[ "${ID:-}" != "arch" && "${ID:-}" != "cachyos" && "${ID_LIKE:-}" != *arch* ]]; then
-    warn "anakut-worker targets Arch-based systems; detected ${PRETTY_NAME:-unknown}"
+    warn "alwayswork targets Arch-based systems; detected ${PRETTY_NAME:-unknown}"
     [[ "$FORCE" == "1" ]] || die "refusing to continue without --force"
   fi
 }
 
 resolve_source() {
   if [[ -n "$SRC_DIR" ]]; then
-    [[ -f "$SRC_DIR/bin/anakut-worker" ]] || die "--from ${SRC_DIR} is not an anakut-worker checkout"
+    [[ -f "$SRC_DIR/bin/alwayswork" ]] || die "--from ${SRC_DIR} is not an alwayswork checkout"
     printf '%s\n' "$SRC_DIR"; return
   fi
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -f "$here/bin/anakut-worker" ]]; then
+  if [[ -f "$here/bin/alwayswork" ]]; then
     printf '%s\n' "$here"; return
   fi
-  have curl || die "curl is required to download anakut-worker"
+  have curl || die "curl is required to download alwayswork"
   local tmp
   tmp="$(mktemp -d)"
   log "Downloading ${REPO_SLUG}${REPO_REF}"
@@ -111,8 +111,8 @@ install_alias() {
     warn "alias ${ALIAS} already exists and is not a symlink; skipping"
     return 0
   fi
-  run ln -sf "$INSTALL_DIR/bin/anakut-worker" "$alias_path"
-  ok "Alias ${ALIAS} -> anakut-worker"
+  run ln -sf "$INSTALL_DIR/bin/alwayswork" "$alias_path"
+  ok "Alias ${ALIAS} -> alwayswork"
 }
 
 install_files() {
@@ -120,16 +120,16 @@ install_files() {
   log "Installing runtime to ${INSTALL_DIR}"
   run mkdir -p "$INSTALL_DIR"
   run cp -a "$src/." "$INSTALL_DIR/"
-  run chmod +x "$INSTALL_DIR/bin/anakut-worker" "$INSTALL_DIR/install.sh"
+  run chmod +x "$INSTALL_DIR/bin/alwayswork" "$INSTALL_DIR/install.sh"
   run find "$INSTALL_DIR" -name '*.sh' -exec chmod +x {} +
-  run mkdir -p /etc/anakut-worker
-  run ln -sf "$INSTALL_DIR/bin/anakut-worker" "$BIN_LINK"
+  run mkdir -p /etc/alwayswork
+  run ln -sf "$INSTALL_DIR/bin/alwayswork" "$BIN_LINK"
   ok "CLI linked at ${BIN_LINK}"
   install_alias
 }
 
 main() {
-  log "Anakut Worker ${VERSION} installer"
+  log "AlwaysWork ${VERSION} installer"
   detect_platform
   local src
   src="$(resolve_source)"

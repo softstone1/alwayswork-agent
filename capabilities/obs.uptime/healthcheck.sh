@@ -1,2 +1,2 @@
-# anakut-worker capability: obs.uptime (health)
-engine_exists "anakut-worker-uptime"
+# alwayswork capability: obs.uptime (health)
+engine_exists "alwayswork-uptime"

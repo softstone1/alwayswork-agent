@@ -1,14 +1,14 @@
 # shellcheck shell=bash
-# anakut-worker · core runtime: logging, guards, dry-run, small helpers.
-# Sourced by bin/anakut-worker; never executed directly.
+# alwayswork · core runtime: logging, guards, dry-run, small helpers.
+# Sourced by bin/alwayswork; never executed directly.
 
 : "${AW_CORE_SOURCED:=1}"
 
 AW_VERSION="${AW_VERSION:-0.1.0}"
-AW_ROOT="${AW_ROOT:-/opt/anakut-worker}"
-AW_ETC="${AW_ETC:-/etc/anakut-worker}"
-AW_STATE="${AW_STATE:-/var/lib/anakut-worker}"
-AW_LOG_DIR="${AW_LOG_DIR:-/var/log/anakut-worker}"
+AW_ROOT="${AW_ROOT:-/opt/alwayswork}"
+AW_ETC="${AW_ETC:-/etc/alwayswork}"
+AW_STATE="${AW_STATE:-/var/lib/alwayswork}"
+AW_LOG_DIR="${AW_LOG_DIR:-/var/log/alwayswork}"
 AW_CONFIG="${AW_CONFIG:-$AW_ETC/worker.yaml}"
 AW_CAP_USER_DIR="${AW_CAP_USER_DIR:-$AW_ETC/capabilities.d}"
 DRY_RUN="${DRY_RUN:-0}"

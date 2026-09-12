@@ -36,7 +36,7 @@ cmd_bootstrap() {
   cfg_need
   aw_state_init
 
-  section "Anakut Worker bootstrap"
+  section "AlwaysWork bootstrap"
   hw_report
 
   if ! hw_is_arch; then

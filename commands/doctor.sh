@@ -10,7 +10,7 @@ _container_socket_exposure() {
   local b; b="$(engine_bin)"
   [[ -n "$b" ]] || return 0
   local names
-  names="$("$b" ps --filter "label=anakut-worker=true" --format '{{.Names}}' 2>/dev/null || true)"
+  names="$("$b" ps --filter "label=alwayswork=true" --format '{{.Names}}' 2>/dev/null || true)"
   [[ -n "$names" ]] || return 0
   local n
   while IFS= read -r n; do
@@ -23,7 +23,7 @@ _container_socket_exposure() {
 
 cmd_doctor() {
   cfg_require
-  section "Anakut Worker doctor"
+  section "AlwaysWork doctor"
 
   # --- firewall -------------------------------------------------------------
   if fw_active; then _dpass "firewall active (default deny inbound)"

@@ -1,6 +1,6 @@
 id: control.join
 name: Control-plane agent
-description: Runs the worker agent so the Anakut console can manage this box.
+description: Runs the worker agent so the AlwaysWork console can manage this box.
 version: 1
 requires: [core]
 profiles: [worker, agent, assistant, full]

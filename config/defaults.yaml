@@ -1,7 +1,7 @@
-# anakut-worker desired state.
+# alwayswork desired state.
 # Edit this, then run: aw apply
 version: 1
-name: anakut-worker
+name: alwayswork
 profile: foundation
 timezone: UTC
 

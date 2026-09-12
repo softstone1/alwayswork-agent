@@ -1,8 +1,8 @@
-# Anakut Worker
+# AlwaysWork
 
 **Install a secured foundation on any CachyOS / Arch mini PC, then grow it one capability at a time.**
 
-Anakut Worker turns a mini PC into a self-hosted Anakut worker node. The installer
+AlwaysWork turns a mini PC into a self-hosted AlwaysWork node. The installer
 lays down a *complete, locked-down foundation* — firewall, snapshots, encrypted
 secrets, safe updates, and a status/audit CLI. Everything beyond that (container
 runtime, tunnel, agents, automations, backups) is an opt-in **capability** you
@@ -17,10 +17,10 @@ enable when you need it, and cleanly disable when you do not.
 
 ```bash
 # On a fresh CachyOS install:
-curl -fsSL https://raw.githubusercontent.com/softstone1/anakut-worker/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork/main/install.sh | sudo bash
 
 # or from a checkout:
-git clone https://github.com/softstone1/anakut-worker && cd anakut-worker
+git clone https://github.com/softstone1/alwayswork && cd alwayswork
 sudo ./install.sh --dry-run     # print every action first
 sudo ./install.sh
 ```
@@ -28,7 +28,7 @@ sudo ./install.sh
 Then lay the foundation and pick a starting point:
 
 ```bash
-sudo aw init --profile foundation   # writes /etc/anakut-worker/worker.yaml
+sudo aw init --profile foundation   # writes /etc/alwayswork/worker.yaml
 sudo aw bootstrap                   # secure the box + install the foundation
 sudo aw doctor                      # scored security + health audit
 ```
@@ -83,7 +83,7 @@ sudo aw clean                   # orphans, caches, journal, stale images
 ```
 
 Add your own entries without forking by copying `catalog/apps.yaml` to
-`/etc/anakut-worker/apps.yaml`. See `docs/APPS.md`.
+`/etc/alwayswork/apps.yaml`. See `docs/APPS.md`.
 
 ## Onboarding a new worker
 
@@ -107,7 +107,7 @@ Full protocol, API sketch and security model: `docs/ENROLLMENT.md`.
 
 | Principle | Meaning |
 |-----------|---------|
-| **Declarative** | `/etc/anakut-worker/worker.yaml` is desired state; `apply` reconciles to it. |
+| **Declarative** | `/etc/alwayswork/worker.yaml` is desired state; `apply` reconciles to it. |
 | **Foundation first** | Always boot a secure, working node before adding surface area. |
 | **Opt-in surface** | Nothing opens a port or installs a service until you enable it. |
 | **Flexible runtime** | Docker, Podman, or none. Limits are tunable defaults, not walls. |

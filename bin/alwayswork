@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# anakut-worker — secure, capability-based bootstrapper for Arch/CachyOS mini PCs.
+# alwayswork — secure, capability-based bootstrapper for Arch/CachyOS mini PCs.
 set -euo pipefail
 
 SELF="${BASH_SOURCE[0]}"
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --yes|-y)  ASSUME_YES=1; shift ;;
     --json)    JSON_OUT=1; shift ;;
-    --version|-V) printf 'anakut-worker %s\n' "$AW_VERSION"; exit 0 ;;
+    --version|-V) printf 'alwayswork %s\n' "$AW_VERSION"; exit 0 ;;
     --help|-h) source "$AW_ROOT/commands/help.sh"; cmd_help; exit 0 ;;
     --) shift; break ;;
     -*) die "unknown global flag: ${1} (try: aw help)" ;;
@@ -59,6 +59,6 @@ case "$cmd" in
     source "$AW_ROOT/commands/$cmd.sh"
     "cmd_$cmd" "$@"
     ;;
-  version) printf 'anakut-worker %s\n' "$AW_VERSION" ;;
+  version) printf 'alwayswork %s\n' "$AW_VERSION" ;;
   *) die "unknown command: $cmd (try: aw help)" ;;
 esac

@@ -1,4 +1,4 @@
-# anakut-worker capability: runtime.docker
+# alwayswork capability: runtime.docker
 
 log "runtime.docker: installing docker"
 run pacman -S --needed --noconfirm docker docker-compose

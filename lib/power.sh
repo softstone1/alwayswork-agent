@@ -1,12 +1,12 @@
 # shellcheck shell=bash
-# anakut-worker · headless / always-on power policy.
+# alwayswork · headless / always-on power policy.
 #
 # A worker node should never sleep. Every behaviour here is configurable
 # under always_on.* and defaults to safe, reversible settings.
 
-power_logind_conf()   { printf '%s\n' /etc/systemd/logind.conf.d/99-anakut-worker.conf; }
-power_nm_conf()       { printf '%s\n' /etc/NetworkManager/conf.d/99-anakut-worker.conf; }
-power_watchdog_conf() { printf '%s\n' /etc/systemd/system.conf.d/99-anakut-worker.conf; }
+power_logind_conf()   { printf '%s\n' /etc/systemd/logind.conf.d/99-alwayswork.conf; }
+power_nm_conf()       { printf '%s\n' /etc/NetworkManager/conf.d/99-alwayswork.conf; }
+power_watchdog_conf() { printf '%s\n' /etc/systemd/system.conf.d/99-alwayswork.conf; }
 
 power_apply() {
   if ! cfg_bool '.always_on.enabled' true; then

@@ -1,4 +1,4 @@
-# anakut-worker capability: dev.toolchain
+# alwayswork capability: dev.toolchain
 
 log "dev.toolchain: installing language runtimes"
 run pacman -S --needed --noconfirm nodejs npm python python-pip git

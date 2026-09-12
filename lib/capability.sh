@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · capability discovery, resolution and lifecycle.
+# alwayswork · capability discovery, resolution and lifecycle.
 #
 # A capability is a directory with a manifest.yaml, an optional install.sh
 # and uninstall.sh, and optional preflight.sh / healthcheck.sh hooks. Hooks

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# anakut-worker · container engine abstraction.
+# alwayswork · container engine abstraction.
 #
 # Keeps the worker flexible: docker, podman, or nothing at all. Resource
 # limits are tunable defaults (limits.mode: auto|fixed|off) and hardening
@@ -44,8 +44,8 @@ engine_hardening_enabled() { cfg_bool '.hardening.container_hardening' true; }
 # Populate the global AW_ENGINE_ARGS array with limits + hardening flags.
 engine_build_args() {
   AW_ENGINE_ARGS=()
-  AW_ENGINE_ARGS+=(--label "anakut-worker=true")
-  [[ -n "${CAP_ID:-}" ]] && AW_ENGINE_ARGS+=(--label "anakut-worker.capability=${CAP_ID}")
+  AW_ENGINE_ARGS+=(--label "alwayswork=true")
+  [[ -n "${CAP_ID:-}" ]] && AW_ENGINE_ARGS+=(--label "alwayswork.capability=${CAP_ID}")
 
   local mode; mode="$(cfg_get '.limits.mode' auto)"
   if [[ "$mode" != "off" ]]; then
@@ -85,4 +85,4 @@ engine_exists() { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" inspect "$1"
 engine_rm()     { local b; b="$(engine_bin)"; [[ -n "$b" ]] && run "$b" rm -f "$1"; }
 engine_logs()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" logs --tail 100 "$1"; }
 engine_pull()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && run "$b" pull "$@"; }
-engine_list()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" ps --filter "label=anakut-worker=true" --format '{{.Names}}\t{{.Image}}\t{{.Status}}'; }
+engine_list()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" ps --filter "label=alwayswork=true" --format '{{.Names}}\t{{.Image}}\t{{.Status}}'; }

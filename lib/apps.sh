@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# anakut-worker · curated app/tool catalog.
+# alwayswork · curated app/tool catalog.
 #
 # Ships catalog/apps.yaml; an operator can extend or override it with
-# /etc/anakut-worker/apps.yaml. User entries are searched first.
+# /etc/alwayswork/apps.yaml. User entries are searched first.
 
 apps_file_shipped() { printf '%s\n' "$AW_ROOT/catalog/apps.yaml"; }
 apps_file_user()    { printf '%s\n' "$AW_ETC/apps.yaml"; }
