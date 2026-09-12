@@ -1,0 +1,196 @@
+# shellcheck shell=bash
+# anakut-worker · control-plane client.
+
+control_config_file() { echo "$AW_ETC/control.json"; }
+control_key_file()    { echo "$AW_ETC/identity/device.key"; }
+control_url()         { cfg_get '.control.url' "${ANAKUT_CONTROL_URL:-}"; }
+control_device_id()   { jq -r '.deviceId // ""' "$(control_config_file)" 2>/dev/null || true; }
+control_poll_secret() { jq -r '.pollSecret // ""' "$(control_config_file)" 2>/dev/null || true; }
+control_enrolled()    { [[ -n "$(control_device_id)" ]]; }
+
+control_require() {
+  require_cmd curl jq openssl
+  [[ -n "$(control_url)" ]] || die "no control URL; run: aw enroll --control https://control.example.com --token aj_..."
+}
+
+control_ensure_key() {
+  local key; key="$(control_key_file)"
+  if [[ ! -f "$key" ]]; then
+    log "control: generating device identity"
+    ensure_dir "$AW_ETC/identity"
+    run openssl genpkey -algorithm ED25519 -out "$key"
+    run chmod 600 "$key"
+  fi
+}
+
+control_pubkey_b64() {
+  openssl pkey -in "$(control_key_file)" -pubout -outform DER 2>/dev/null | base64 -w0
+}
+
+control_machine_id() { cat /etc/machine-id 2>/dev/null || hostname; }
+
+control_macs_json() {
+  local f mac; local -a macs=()
+  for f in /sys/class/net/*/address; do
+    [[ -r "$f" ]] || continue
+    mac="$(cat "$f" 2>/dev/null || true)"
+    [[ -n "$mac" && "$mac" != "00:00:00:00:00:00" ]] && macs+=("$mac")
+  done
+  if (( "${#macs[@]}" > 0 )); then printf '%s\n' "${macs[@]}" | jq -R . | jq -s .; else echo '[]'; fi
+}
+
+control_dmi() { cat "/sys/class/dmi/id/$1" 2>/dev/null || true; }
+control_sign() {
+  printf '%s' "$1" | openssl pkeyutl -sign -inkey "$(control_key_file)" -rawin 2>/dev/null | base64 -w0
+}
+
+# control_call METHOD PATH [BODY] — signed device request.
+control_call() {
+  local method="${1^^}" path="$2" body="${3:-}"
+  local url ts nonce bodyhash canonical sig
+  url="$(control_url)"
+  ts="$(date +%s)"
+  nonce="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
+  bodyhash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
+  canonical="$method
+$path
+$ts
+$nonce
+$bodyhash"
+  sig="$(control_sign "$canonical")"
+  local -a args=(-sS -X "$method" "$url$path"
+    -H "x-device-id: $(control_device_id)"
+    -H "x-timestamp: $ts"
+    -H "x-nonce: $nonce"
+    -H "x-signature: $sig")
+  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data "$body")
+  curl "${args[@]}"
+}
+control_enroll() {
+  local token="" url=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --token)         token="$2"; shift ;;
+      --control|--url) url="$2"; shift ;;
+      -h|--help)       info "usage: aw enroll --control URL [--token TOKEN]"; return 0 ;;
+      *) die "unknown option: $1" ;;
+    esac
+    shift
+  done
+  require_root enroll
+  cfg_require
+  cfg_need
+  [[ -n "$url" ]] && cfg_set_str '.control.url' "$url"
+  control_require
+  control_ensure_key
+  if [[ "$(sec_backend)" == "sops" ]]; then sec_init; fi
+  local recipient; recipient="$(sec_public_key)"
+  [[ -n "$recipient" ]] || die "no age recipient; run: aw secrets init first"
+
+  local payload
+  payload="$(jq -n \
+    --arg token "$token" \
+    --arg pk "$(control_pubkey_b64)" \
+    --arg age "$recipient" \
+    --arg host "$(hostname)" \
+    --arg mid "$(control_machine_id)" \
+    --argjson macs "$(control_macs_json)" \
+    --arg serial "$(control_dmi board_serial)" \
+    --arg board "$(control_dmi board_name)" \
+    --arg arch "$(uname -m)" \
+    --arg os "$(hw_os_pretty)" \
+    --arg ver "$AW_VERSION" \
+    '{publicKey:$pk, ageRecipient:$age, hostname:$host, machineId:$mid, macs:$macs,
+      serial:$serial, board:$board, arch:$arch, os:$os, agentVersion:$ver}
+     + (if $token == "" then {} else {joinToken:$token} end)')"
+
+  log "control: announcing this worker"
+  local resp id secret
+  resp="$(curl -sS -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")"
+  id="$(jq -r '.deviceId // ""' <<<"$resp")"
+  secret="$(jq -r '.pollSecret // ""' <<<"$resp")"
+  if [[ -z "$id" ]]; then
+    die "enrollment failed: $(jq -r '.error.message // empty' <<<"$resp" 2>/dev/null || echo "$resp")"
+  fi
+  ensure_dir "$AW_ETC"
+  jq -n --arg id "$id" --arg secret "$secret" --arg url "$(control_url)" \
+    '{deviceId:$id, pollSecret:$secret, controlUrl:$url}' > "$(control_config_file)"
+  run chmod 600 "$(control_config_file)"
+  ok "announced as $id"
+
+  control_wait_approval "$id" "$secret"
+}
+control_wait_approval() {
+  local id="$1" secret="$2" resp state
+  info "waiting for approval in the console (Ctrl-C to stop)"
+  while :; do
+    resp="$(curl -sS "$(control_url)/v1/enroll/$id" -H "x-poll-secret: $secret")"
+    state="$(jq -r '.state // "unknown"' <<<"$resp")"
+    case "$state" in
+      approved) ok "approved"; control_apply_delivery "$resp"; return 0 ;;
+      pending)  sleep 3 ;;
+      *)        die "enrollment was $state" ;;
+    esac
+  done
+}
+
+# Apply a delivered { config, sealedSecrets } document to this box.
+control_apply_delivery() {
+  local json="$1" profile sealed ver
+  profile="$(jq -r '.config.profile // "foundation"' <<<"$json")"
+  cfg_set_str '.profile' "$profile"
+  cfg_set_expr '.capabilities.enabled' "$(jq -c '.config.capabilities // ["core"]' <<<"$json")"
+  cfg_set_expr '.capabilities.apps' "$(jq -c '.config.apps // []' <<<"$json")" 2>/dev/null || true
+
+  sealed="$(jq -r '.sealedSecrets // empty' <<<"$json")"
+  if [[ -n "$sealed" && "$(sec_backend)" == "sops" ]]; then
+    local enc dec
+    enc="$(mktemp)"; dec="$(mktemp)"
+    chmod 600 "$enc" "$dec"
+    printf '%s' "$sealed" > "$enc"
+    if age -d -i "$(sec_key_file)" "$enc" > "$dec" 2>/dev/null; then
+      while IFS='=' read -r k v; do
+        [[ -n "$k" ]] || continue
+        sec_set "$k" "$(printf '%s' "$v" | jq -r . 2>/dev/null || printf '%s' "$v")"
+      done < "$dec"
+      ok "imported secret(s)"
+    else
+      warn "could not decrypt sealed secrets"
+    fi
+    rm -f "$enc" "$dec"
+  fi
+
+  ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
+  cfg_set_expr '.control.appliedVersion' "$ver"
+  log "control: applying desired state"
+  run "$AW_ROOT/bin/anakut-worker" apply
+}
+control_agent() {
+  local interval="${1:-30}"
+  require_root agent
+  cfg_require
+  cfg_need
+  control_require
+  control_enrolled || die "this worker is not enrolled; run: aw enroll"
+  log "control agent: reporting every ${interval}s"
+  while :; do
+    control_agent_tick || warn "control: tick failed"
+    sleep "$interval"
+  done
+}
+
+control_agent_tick() {
+  local applied body resp desired delivery ver
+  applied="$(cfg_get '.control.appliedVersion' 0)"
+  body="$(jq -n --argjson v "$applied" '{appliedVersion:$v, health:{}}')"
+  resp="$(control_call POST /v1/device/heartbeat "$body")"
+  desired="$(jq -r '.configVersion // 0' <<<"$resp")"
+  if [[ "$desired" != "$applied" ]]; then
+    log "control: desired version $desired (applied $applied)"
+    delivery="$(control_call GET "/v1/device/desired?since=$applied")"
+    control_apply_delivery "$delivery"
+    ver="$(jq -r '.config.configVersion // 0' <<<"$delivery")"
+    control_call POST /v1/device/ack "$(jq -n --argjson v "$ver" '{configVersion:$v}')" >/dev/null
+    cfg_set_expr '.control.appliedVersion' "$ver"
+  fi
+}

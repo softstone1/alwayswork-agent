@@ -53,6 +53,11 @@ cleanup:
   tmp: true                    # clear stale /tmp entries
   max_age_days: 2
 
+# Control plane. Populated by 'aw enroll'; see docs/ENROLLMENT.md.
+control:
+  url: ""
+  appliedVersion: 0
+
 access:
   tunnel:
     enabled: false

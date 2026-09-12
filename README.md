@@ -115,7 +115,7 @@ Full protocol, API sketch and security model: `docs/ENROLLMENT.md`.
 | **Portable** | Bash + a handful of packages. x86_64 or aarch64 Arch-based systems. |
 
 See `docs/DESIGN.md`, `docs/CAPABILITIES.md`, `docs/SECURITY.md`,
-`docs/ROLLOUT.md` and `docs/ENROLLMENT.md`.
+`docs/ROLLOUT.md`, `docs/ENROLLMENT.md` and `docs/AGENT_BOOTSTRAP.md`.
 
 ## Commands
 
@@ -134,6 +134,8 @@ aw secrets <init|set|get|list|env>
 aw capability add <path>              Register an out-of-tree capability
 aw app list | search | install | remove
 aw clean                              Remove orphans, caches and junk
+aw enroll --control URL [--token T]   Announce this worker to a control plane
+aw agent [interval]                   Report + reconcile with the control plane
 aw help
 ```
 

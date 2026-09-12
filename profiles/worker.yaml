@@ -5,3 +5,4 @@ capabilities:
   - runtime.docker
   - backup.restic
   - obs.uptime
+  - control.join

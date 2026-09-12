@@ -28,6 +28,8 @@ check "version"           'run_aw --version && has "^anakut-worker "'
 check "help"              'run_aw help && has USAGE'
 check "unknown cmd fails" '! run_aw bogus'
 check "power documented"  'run_aw help && has "power <status"'
+check "enroll documented" 'run_aw help && has "enroll --control"'
+check "agent documented"  'run_aw help && has "agent \[interval\]"'
 
 echo "== catalog =="
 for m in "$ROOT"/capabilities/*/manifest.yaml; do

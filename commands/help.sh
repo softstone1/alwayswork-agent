@@ -23,6 +23,8 @@ OPERATIONS
   status                    Node, runtime and capability status
   power <status|apply|off>  Headless / always-on power policy
   clean                     Remove orphans, caches and junk
+  enroll --control URL      Announce this worker; wait for console approval
+  agent [interval]          Report state and reconcile (run as a service)
 
 APPS
   app list [category]       Browse the curated tool catalog

@@ -33,6 +33,8 @@ source "$AW_ROOT/lib/power.sh"
 source "$AW_ROOT/lib/apps.sh"
 # shellcheck source=../lib/cleanup.sh
 source "$AW_ROOT/lib/cleanup.sh"
+# shellcheck source=../lib/control.sh
+source "$AW_ROOT/lib/control.sh"
 
 # --- global flags -----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -52,7 +54,7 @@ cmd="${1:-help}"
 [[ $# -gt 0 ]] && shift
 
 case "$cmd" in
-  init|bootstrap|apply|enable|disable|list|status|doctor|update|snapshot|secrets|capability|power|app|clean|help)
+  init|bootstrap|apply|enable|disable|list|status|doctor|update|snapshot|secrets|capability|power|app|clean|enroll|agent|help)
     # shellcheck source=/dev/null
     source "$AW_ROOT/commands/$cmd.sh"
     "cmd_$cmd" "$@"
