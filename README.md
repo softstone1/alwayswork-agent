@@ -17,10 +17,10 @@ enable when you need it, and cleanly disable when you do not.
 
 ```bash
 # On a fresh CachyOS install:
-curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork-agent/main/install.sh | sudo bash
 
 # or from a checkout:
-git clone https://github.com/softstone1/alwayswork && cd alwayswork
+git clone https://github.com/softstone1/alwayswork-agent && cd alwayswork-agent
 sudo ./install.sh --dry-run     # print every action first
 sudo ./install.sh
 ```

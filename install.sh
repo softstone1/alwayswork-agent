@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # AlwaysWork installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork-agent/main/install.sh | sudo bash
 #   sudo ./install.sh --dry-run
 #
 # Idempotent: safe to re-run. Installs dependencies, places the runtime in
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 VERSION="0.1.0"
-REPO_SLUG="${REPO_SLUG:-softstone1/alwayswork}"
+REPO_SLUG="${REPO_SLUG:-softstone1/alwayswork-agent}"
 REPO_REF="${REPO_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/alwayswork}"
 BIN_LINK="${BIN_LINK:-/usr/local/bin/alwayswork}"

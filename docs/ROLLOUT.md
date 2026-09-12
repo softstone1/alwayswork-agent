@@ -6,7 +6,7 @@ The bootstrap is designed to be identical on every machine; only
 ## One machine
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/softstone1/alwayswork-agent/main/install.sh | sudo bash
 sudo aw init --profile foundation
 sudo aw bootstrap
 sudo aw doctor
