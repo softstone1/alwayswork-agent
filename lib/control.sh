@@ -41,7 +41,13 @@ control_macs_json() {
 
 control_dmi() { cat "/sys/class/dmi/id/$1" 2>/dev/null || true; }
 control_sign() {
-  printf '%s' "$1" | openssl pkeyutl -sign -inkey "$(control_key_file)" -rawin 2>/dev/null | base64 -w0
+  local msg sig
+  msg="$(mktemp)"
+  printf '%s' "$1" > "$msg"
+  sig="$(openssl pkeyutl -sign -inkey "$(control_key_file)" -rawin -in "$msg" 2>/dev/null | base64 -w0)"
+  rm -f "$msg"
+  [[ -n "$sig" ]] || die "control: could not sign request (openssl)"
+  printf '%s' "$sig"
 }
 
 # control_call METHOD PATH [BODY] — signed device request.
@@ -166,12 +172,24 @@ control_apply_delivery() {
   run "$AW_ROOT/bin/anakut-worker" apply
 }
 control_agent() {
-  local interval="${1:-30}"
+  local interval="30" once=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --once)    once=1 ;;
+      -h|--help) info "usage: aw agent [interval] [--once]"; return 0 ;;
+      *)         interval="$1" ;;
+    esac
+    shift
+  done
   require_root agent
   cfg_require
   cfg_need
   control_require
   control_enrolled || die "this worker is not enrolled; run: aw enroll"
+  if (( once )); then
+    control_agent_tick
+    return 0
+  fi
   log "control agent: reporting every ${interval}s"
   while :; do
     control_agent_tick || warn "control: tick failed"
