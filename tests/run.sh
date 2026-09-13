@@ -24,6 +24,8 @@ while IFS= read -r -d '' f; do
 done < <(find "$ROOT" -type f \( -name '*.sh' -o -path '*/bin/alwayswork' \) -print0)
 
 echo "== cli =="
+check "install.sh executable"     '[[ -x "$ROOT/install.sh" ]]'
+check "bin/alwayswork executable" '[[ -x "$ROOT/bin/alwayswork" ]]'
 check "version"           'run_aw --version && has "^alwayswork "'
 check "help"              'run_aw help && has USAGE'
 check "unknown cmd fails" '! run_aw bogus'
