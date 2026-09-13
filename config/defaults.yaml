@@ -58,6 +58,20 @@ control:
   url: ""
   appliedVersion: 0
 
+# The unprivileged account that runs agent work on this node. 'aw enroll'
+# records it; agents.dsh serves that account's web UI.
+agent:
+  user: ""
+
+# How this node is reached from outside. The node derives
+# <hostname>.<baseDomain> unless the control plane pins an explicit host.
+expose:
+  webUi:
+    enabled: false
+    host: ""
+    baseDomain: alwayswork.space
+    port: 3080
+
 access:
   tunnel:
     enabled: false

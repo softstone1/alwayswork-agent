@@ -8,5 +8,6 @@ capabilities:
   - backup.restic
   - obs.uptime
   - agents.core
+  - agents.dsh
   - assistant.n8n
   - dev.toolchain

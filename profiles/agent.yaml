@@ -6,4 +6,5 @@ capabilities:
   - backup.restic
   - obs.uptime
   - agents.core
+  - agents.dsh
   - control.join

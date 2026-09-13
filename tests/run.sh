@@ -31,6 +31,8 @@ check "help"              'run_aw help && has USAGE'
 check "unknown cmd fails" '! run_aw bogus'
 check "power documented"  'run_aw help && has "power <status"'
 check "enroll documented" 'run_aw help && has "enroll --control"'
+check "reset documented"  'run_aw help && has "reset \[--purge\]"'
+check "web ui docs in help" 'run_aw help && has "node web UI"'
 check "agent documented"  'run_aw help && has "agent \[interval\]"'
 
 echo "== catalog =="
@@ -65,6 +67,14 @@ if have yq; then
   check "clean dry-run"            'run_aw --dry-run clean'
   check "dry-run enable resolves"  'run_aw --dry-run enable access.tunnel && has "access.tunnel"'
   check "dry-run enable pulls dep" 'run_aw --dry-run enable access.tunnel && has "core"'
+
+  # agents.dsh preflights the harness CLI and the account agent work runs as.
+  printf '#!/bin/sh\nexit 0\n' > "$TMP/dsh"; chmod +x "$TMP/dsh"
+  export PATH="$TMP:$PATH"
+  yq -i ".agent.user = \"$(id -un)\"" "$AW_CONFIG" 2>/dev/null || true
+  check "agent profile has node ui" 'grep -q "agents.dsh" "$ROOT/profiles/agent.yaml"'
+  check "dry-run enable node ui"    'run_aw --dry-run enable agents.dsh && has "agents.dsh"'
+  check "node ui reports host"      'grep -q "webui.json" "$ROOT/lib/control.sh"'
 else
   echo "  skip  yq not installed (render/resolve tests)"
 fi

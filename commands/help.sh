@@ -24,6 +24,7 @@ OPERATIONS
   power <status|apply|off>  Headless / always-on power policy
   clean                     Remove orphans, caches and junk
   enroll --control URL      Announce this worker; wait for console approval
+  reset [--purge]           Forget this identity so the node can re-join
   agent [interval]          Report state and reconcile (run as a service)
 
 APPS
@@ -46,7 +47,7 @@ GLOBAL FLAGS
 PROFILES
   foundation                Secured base node only
   worker                    Foundation + runtime + backups + monitoring
-  agent                     Foundation + runtime + agent control plane
+  agent                     Foundation + runtime + agent control plane + node web UI
   assistant                 Foundation + runtime + automation hub
   full                      Everything the catalog ships
 

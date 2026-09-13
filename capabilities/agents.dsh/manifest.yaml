@@ -1,0 +1,6 @@
+id: agents.dsh
+name: Node web UI
+description: The node's own DeepSeek Harness web UI, served on loopback and published through its tunnel.
+version: 1
+requires: [core]
+profiles: [agent, full]

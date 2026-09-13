@@ -98,6 +98,11 @@ control_enroll() {
   cfg_require
   cfg_need
   [[ -n "$url" ]] && cfg_set_str '.control.url' "$url"
+  # Record the account agent work runs as while we still know who invoked us;
+  # capabilities like agents.dsh need it to serve that account's sessions.
+  if [[ -z "$(cfg_get '.agent.user' '')" ]]; then
+    cfg_set_str '.agent.user' "${SUDO_USER:-$(id -un)}"
+  fi
   control_require
   control_ensure_key
   if [[ "$(sec_backend)" == "sops" ]]; then sec_init; fi
@@ -191,6 +196,16 @@ control_apply_delivery() {
   # apply stays unacked and is retried on the next tick.
   cfg_set_expr '.control.appliedVersion' "$ver"
 }
+# The node's own web UI, as the agent should report it: host + port only.
+# The console needs a link target, not a credential - Access gates the hostname
+# and the edge Worker injects the session.
+control_webui_json() {
+  local f="$AW_STATE/webui.json"
+  [[ -s "$f" ]] || { printf 'null'; return 0; }
+  jq -c 'if type == "object" and (.host | type == "string") and (.port | type == "number")
+         then {host: .host, port: .port} else null end' "$f" 2>/dev/null || printf 'null'
+}
+
 control_agent() {
   local interval="30" once=0
   while [[ $# -gt 0 ]]; do
@@ -218,9 +233,11 @@ control_agent() {
 }
 
 control_agent_tick() {
-  local applied body resp desired delivery ver
+  local applied body resp desired delivery ver webui
   applied="$(cfg_get '.control.appliedVersion' 0)"
-  body="$(jq -n --argjson v "$applied" '{appliedVersion:$v, health:{}}')"
+  webui="$(control_webui_json)"
+  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" \
+    '{appliedVersion:$v, health:{}} + (if $ui == null then {} else {webUi:$ui} end)')"
   resp="$(control_call POST /v1/device/heartbeat "$body")"
   desired="$(jq -r '.configVersion // 0' <<<"$resp")"
   if [[ "$desired" != "$applied" ]]; then
