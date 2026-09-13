@@ -1,7 +1,13 @@
 # shellcheck shell=bash
 # alwayswork · desired-state config (worker.yaml) read/write via yq.
 
-cfg_require() { [[ "$DRY_RUN" == "1" ]] && return 0; require_cmd yq; }
+cfg_require() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  require_cmd yq
+  if ! yq --version 2>/dev/null | grep -qi mikefarah; then
+    die "the 'yq' on PATH is not mikefarah's Go yq (Arch ships the Python build). Re-run install.sh to bundle it, or install the AUR 'go-yq'."
+  fi
+}
 cfg_file()    { printf '%s\n' "$AW_CONFIG"; }
 cfg_exists()  { [[ -f "$(cfg_file)" ]]; }
 cfg_defaults(){ printf '%s\n' "$AW_ROOT/config/defaults.yaml"; }

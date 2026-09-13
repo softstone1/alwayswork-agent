@@ -1,7 +1,9 @@
 # alwayswork capability: core
 # Sourced with CAP_ID and CAP_DIR exported.
 
-BASE_PKGS=(git curl jq yq sops age ufw snapper snap-pac)
+# yq is deliberately absent: Arch packages the Python build, so install.sh
+# bundles mikefarah's Go yq beside the CLI instead.
+BASE_PKGS=(git curl jq sops age ufw snapper snap-pac)
 if cfg_bool '.hardening.cve_scan' true; then
   BASE_PKGS+=(arch-audit)
 fi

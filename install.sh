@@ -95,7 +95,7 @@ resolve_source() {
 }
 
 install_deps() {
-  local -a pkgs=(git curl jq yq sops age restic ufw)
+  local -a pkgs=(git curl jq sops age restic ufw)
   log "Installing base dependencies: ${pkgs[*]}"
   if have pacman; then
     run pacman -Syu --needed --noconfirm "${pkgs[@]}"
@@ -126,6 +126,38 @@ install_files() {
   run ln -sf "$INSTALL_DIR/bin/alwayswork" "$BIN_LINK"
   ok "CLI linked at ${BIN_LINK}"
   install_alias
+  bundle_yq
+}
+
+# Arch's `yq` package is the Python build, which is not command-compatible
+# with the mikefarah Go yq this project uses. Bundle the Go build beside the
+# CLI; bin/alwayswork puts that directory first on PATH.
+bundle_yq() {
+  local arch asset target
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)  asset="yq_linux_amd64" ;;
+    aarch64) asset="yq_linux_arm64" ;;
+    *) warn "no bundled yq for ${arch}; install the AUR 'go-yq'"; return 0 ;;
+  esac
+  target="${INSTALL_DIR}/bin/yq"
+  if [[ -x "$target" ]] && "$target" --version 2>/dev/null | grep -qi mikefarah; then
+    ok "bundled yq present"
+    return 0
+  fi
+  if have yq && yq --version 2>/dev/null | grep -qi mikefarah; then
+    run cp "$(command -v yq)" "$target"
+    run chmod 755 "$target"
+    ok "bundled system yq"
+    return 0
+  fi
+  log "Fetching mikefarah yq (${asset})"
+  if run curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/${asset}" -o "$target"; then
+    run chmod 755 "$target"
+    ok "bundled yq"
+  else
+    warn "could not fetch yq; install the AUR 'go-yq' or place mikefarah yq at ${target}"
+  fi
 }
 
 main() {

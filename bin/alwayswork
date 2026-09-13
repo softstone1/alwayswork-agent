@@ -10,6 +10,9 @@ done
 BIN_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 AW_ROOT="${AW_ROOT:-$(cd "$BIN_DIR/.." && pwd)}"
 export AW_ROOT
+# Prefer tools bundled beside the CLI: Arch packages the Python `yq`, which is
+# not compatible with this project, so install.sh drops mikefarah's build here.
+export PATH="$AW_ROOT/bin:$PATH"
 
 # shellcheck source=../lib/core.sh
 source "$AW_ROOT/lib/core.sh"
