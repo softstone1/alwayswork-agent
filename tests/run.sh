@@ -95,6 +95,32 @@ check "url keeps the query string"   'grep -q "desired?since=7" "$TMP/signed.out
 check "canonical path has no query"  'grep -qx "/v1/device/desired" "$TMP/canonical"'
 check "canonical omits since"        '! grep -q "since" "$TMP/canonical"'
 
+echo "== secret store =="
+if have sops && have age && yq --version 2>/dev/null | grep -qi mikefarah; then
+  cat > "$TMP/store.sh" <<'EOS'
+set -euo pipefail
+ROOT="$1"
+export AW_ROOT="$ROOT"
+export AW_ETC="$2/etc" AW_STATE="$2/state" AW_LOG_DIR="$2/log" AW_CONFIG="$2/etc/worker.yaml"
+export PATH="$ROOT/bin:$PATH"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/secrets.sh"
+sec_init >/dev/null
+sec_set DEMO 'a=b=c/d+e' >/dev/null
+[[ "$(sec_get DEMO)" == 'a=b=c/d+e' ]] || exit 1
+sec_set OTHER 'tok==' >/dev/null
+[[ "$(sec_get DEMO)" == 'a=b=c/d+e' ]] || exit 1
+[[ "$(sec_get OTHER)" == 'tok==' ]] || exit 1
+# A store truncated by a failed write must be rebuilt, not left unusable.
+: > "$(sec_file)"
+sec_set THIRD 'rebuilt' >/dev/null
+[[ "$(sec_get THIRD)" == 'rebuilt' ]] || exit 1
+EOS
+  check "secret store round-trip" 'bash "$TMP/store.sh" "$ROOT" "$TMP/store"'
+else
+  echo "  skip  secret store (sops/age/mikefarah yq missing)"
+fi
+
 echo
 printf 'passed: %s   failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
