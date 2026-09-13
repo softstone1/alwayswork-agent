@@ -91,7 +91,7 @@ The worker generates an **ed25519 keypair**; the private key never leaves the
 machine (`/etc/alwayswork/identity/device.key`, mode 600).
 
 ```http
-POST https://control.alwayswork.com/v1/workers/enroll
+POST https://alwayswork.space/v1/workers/enroll
 {
   "token":   "wj_...",           // mode A/C only
   "pubkey":  "age1.../ed25519...",
@@ -192,7 +192,7 @@ already does locally. The console becomes "the `worker.yaml` in the sky".
 | Device identity | ed25519 keypair, private key never leaves the box |
 | Secret delivery | sealed to the device public key; never logged in clear |
 | Abuse | rate-limit enrollment; alert on unexpected pending devices |
-| Transport | TLS to `control.alwayswork.com`; console behind Cloudflare Access |
+| Transport | TLS to `alwayswork.space`; console behind Cloudflare Access |
 | Optional | TPM-sealed identity (this hardware has no TPM) |
 
 Enrollment is **fail-closed**: an unapproved worker can do nothing but wait, and
@@ -202,7 +202,7 @@ a worker whose credential is revoked is refused on the next heartbeat.
 
 | Piece | Where |
 |-------|-------|
-| Enrollment API | Cloudflare Worker `control.alwayswork.com` |
+| Enrollment API | Cloudflare Worker `alwayswork.space` |
 | Per-worker state | Durable Object (one per device) |
 | Registry / search | D1 table `workers` |
 | Console + approval | existing web app, behind Cloudflare Access |

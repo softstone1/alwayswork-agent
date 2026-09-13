@@ -37,7 +37,7 @@ The agent is the reconciliation engine.
 Steps 2-5 are already implemented on the machine side:
 
 ```bash
-sudo aw enroll --control https://control.alwayswork.com --token aj_...
+sudo aw enroll --control https://alwayswork.space --token aj_...
 sudo aw enable control.join          # systemd unit running: aw agent 60
 sudo aw agent 60                     # or run it in the foreground
 ```
