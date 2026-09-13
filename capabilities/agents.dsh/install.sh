@@ -67,8 +67,21 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 
+# A UI may already be running on this port - an operator's own session, or a
+# previous install. Adopt it: enable the unit so it comes up on boot, but never
+# start a second listener that would fight for the port.
+adopt=0
+if have curl && curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$port/"; then
+  adopt=1
+  warn "127.0.0.1:$port already answers; keeping the running UI and starting the unit on boot"
+fi
 run systemctl daemon-reload
-run systemctl enable --now alwayswork-webui.service
+run systemctl enable alwayswork-webui.service
+if (( adopt )); then
+  ok "node web ui adopted on 127.0.0.1:$port"
+else
+  run systemctl restart alwayswork-webui.service
+fi
 
 # Reported on heartbeat so the console can link straight to it.
 aw_write "$AW_STATE/webui.json" <<JSON
