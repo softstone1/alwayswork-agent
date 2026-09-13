@@ -69,6 +69,32 @@ else
   echo "  skip  yq not installed (render/resolve tests)"
 fi
 
+echo "== control client =="
+check "call signs path without query"    'grep -q "signed_path=" "$ROOT/lib/control.sh"'
+check "delivery refuses malformed data"  'grep -q "refusing a malformed delivery" "$ROOT/lib/control.sh"'
+check "apply installs delivered apps"    'grep -q "unknown app in desired state" "$ROOT/commands/apply.sh"'
+
+# The device signature must cover the request path only. The control plane
+# verifies "new URL(req.url).pathname", so a query string that leaks into the
+# canonical string makes every signed GET fail with 401.
+cat > "$TMP/canonical.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; export AW_TEST_CANONICAL="$2"
+AW_ROOT="$ROOT"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/control.sh"
+control_url()       { printf '%s\n' "https://control.test"; }
+control_device_id() { printf '%s\n' "w_test"; }
+control_sign()      { printf '%s' "$1" > "$AW_TEST_CANONICAL"; printf 'sig'; }
+curl()              { printf '%s\n' "$*"; }
+control_call GET '/v1/device/desired?since=7'
+EOS
+run_signed() { bash "$TMP/canonical.sh" "$ROOT" "$TMP/canonical" > "$TMP/signed.out" 2>&1; }
+check "signed call exits 0"          'run_signed'
+check "url keeps the query string"   'grep -q "desired?since=7" "$TMP/signed.out"'
+check "canonical path has no query"  'grep -qx "/v1/device/desired" "$TMP/canonical"'
+check "canonical omits since"        '! grep -q "since" "$TMP/canonical"'
+
 echo
 printf 'passed: %s   failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

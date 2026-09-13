@@ -51,15 +51,22 @@ control_sign() {
 }
 
 # control_call METHOD PATH [BODY] — signed device request.
+#
+# The signature covers the request path only: a query string travels in the URL
+# but never enters the canonical string, because the control plane verifies
+# `new URL(req.url).pathname`. Letting "?since=N" leak into the canonical text
+# made every signed GET fail verification (401), which the client then mistook
+# for an empty delivery and re-applied defaults on every tick.
 control_call() {
   local method="${1^^}" path="$2" body="${3:-}"
-  local url ts nonce bodyhash canonical sig
+  local url ts nonce bodyhash canonical sig signed_path resp
   url="$(control_url)"
+  signed_path="${path%%\?*}"
   ts="$(date +%s)"
   nonce="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
   bodyhash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
   canonical="$method
-$path
+$signed_path
 $ts
 $nonce
 $bodyhash"
@@ -70,7 +77,11 @@ $bodyhash"
     -H "x-nonce: $nonce"
     -H "x-signature: $sig")
   [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data "$body")
-  curl "${args[@]}"
+  resp="$(curl "${args[@]}")" || die "control: $method $signed_path failed (network)"
+  if jq -e '.error' >/dev/null 2>&1 <<<"$resp"; then
+    warn "control: $method $signed_path rejected -> $(jq -c '.error' <<<"$resp")"
+  fi
+  printf '%s' "$resp"
 }
 control_enroll() {
   local token="" url=""
@@ -140,9 +151,16 @@ control_wait_approval() {
   done
 }
 
-# Apply a delivered { config, sealedSecrets } document to this box.
+# Apply a delivered { state, config, sealedSecrets } document to this box.
+# A delivery that is not an approved config (an error body, a truncated
+# response, a 401) is refused: falling back to defaults here would silently
+# strip capabilities from the node and re-apply them on every tick.
 control_apply_delivery() {
   local json="$1" profile sealed ver
+  if [[ "$(jq -r '.state // ""' <<<"$json" 2>/dev/null)" != "approved" ]] ||
+     [[ "$(jq -r '.config // empty' <<<"$json" 2>/dev/null)" == "" ]]; then
+    die "control: refusing a malformed delivery: $(printf '%s' "$json" | head -c 200)"
+  fi
   profile="$(jq -r '.config.profile // "foundation"' <<<"$json")"
   cfg_set_str '.profile' "$profile"
   cfg_set_expr '.capabilities.enabled' "$(jq -c '.config.capabilities // ["core"]' <<<"$json")"
@@ -167,9 +185,11 @@ control_apply_delivery() {
   fi
 
   ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
-  cfg_set_expr '.control.appliedVersion' "$ver"
   log "control: applying desired state"
   run "$AW_ROOT/bin/alwayswork" apply
+  # Record the applied version only after the reconcile succeeded, so a failed
+  # apply stays unacked and is retried on the next tick.
+  cfg_set_expr '.control.appliedVersion' "$ver"
 }
 control_agent() {
   local interval="30" once=0
