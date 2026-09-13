@@ -98,7 +98,7 @@ install_deps() {
   local -a pkgs=(git curl jq yq sops age restic ufw)
   log "Installing base dependencies: ${pkgs[*]}"
   if have pacman; then
-    run pacman -Sy --needed --noconfirm "${pkgs[@]}"
+    run pacman -Syu --needed --noconfirm "${pkgs[@]}"
   else
     warn "pacman not found; install manually: ${pkgs[*]}"
   fi
