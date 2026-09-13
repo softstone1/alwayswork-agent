@@ -71,7 +71,8 @@ $ts
 $nonce
 $bodyhash"
   sig="$(control_sign "$canonical")"
-  local -a args=(-sS -X "$method" "$url$path"
+  # Bounded: an agent tick must never hang forever on one stalled connection.
+  local -a args=(-sS --connect-timeout 5 --max-time 30 -X "$method" "$url$path"
     -H "x-device-id: $(control_device_id)"
     -H "x-timestamp: $ts"
     -H "x-nonce: $nonce"
@@ -128,7 +129,7 @@ control_enroll() {
 
   log "control: announcing this worker"
   local resp id secret
-  resp="$(curl -sS -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")"
+  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")"
   id="$(jq -r '.deviceId // ""' <<<"$resp")"
   secret="$(jq -r '.pollSecret // ""' <<<"$resp")"
   if [[ -z "$id" ]]; then
@@ -146,7 +147,7 @@ control_wait_approval() {
   local id="$1" secret="$2" resp state
   info "waiting for approval in the console (Ctrl-C to stop)"
   while :; do
-    resp="$(curl -sS "$(control_url)/v1/enroll/$id" -H "x-poll-secret: $secret")"
+    resp="$(curl -sS --connect-timeout 5 --max-time 30 "$(control_url)/v1/enroll/$id" -H "x-poll-secret: $secret")"
     state="$(jq -r '.state // "unknown"' <<<"$resp")"
     case "$state" in
       approved) ok "approved"; control_apply_delivery "$resp"; return 0 ;;
