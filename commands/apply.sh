@@ -2,7 +2,7 @@
 # aw apply — reconcile installed capabilities with the config.
 
 cmd_apply() {
-  require_root apply
+  require_root apply "the control agent reconciles desired state on its own; run this by hand only to converge right now"
   cfg_require
   cfg_need
   aw_state_init

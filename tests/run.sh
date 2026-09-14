@@ -33,6 +33,7 @@ check "power documented"  'run_aw help && has "power <status"'
 check "enroll documented" 'run_aw help && has "enroll --control"'
 check "reset documented"  'run_aw help && has "reset \[--purge\]"'
 check "web ui docs in help" 'run_aw help && has "node web UI"'
+check "apply explains the agent" 'grep -q "control agent reconciles desired state" "$ROOT/commands/apply.sh"'
 check "agent documented"  'run_aw help && has "agent \[interval\]"'
 
 echo "== catalog =="

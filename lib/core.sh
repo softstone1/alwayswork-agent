@@ -41,7 +41,12 @@ require_cmd() {
 
 require_root() {
   [[ "${AW_TEST:-0}" == "1" ]] && return 0
-  [[ "$(id -u)" == "0" ]] || die "this command needs root: sudo aw $*"
+  [[ "$(id -u)" == "0" ]] && return 0
+  # An optional second argument explains why the operator may not need this at
+  # all, so the common case reads as guidance rather than a wall.
+  local what="${1:-}" hint="${2:-}"
+  [[ -n "$hint" ]] && info "$hint"
+  die "this command needs root: sudo aw $what"
 }
 
 run() {
