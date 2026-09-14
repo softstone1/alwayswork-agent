@@ -37,4 +37,8 @@ cmd_apply() {
   fi
 
   ok "applied"
+
+  # Last, and deliberately: everything above is finished, so reloading an agent
+  # that is running older code cannot interrupt a half-applied reconcile.
+  aw_agent_reload_if_stale
 }

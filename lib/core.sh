@@ -97,6 +97,33 @@ state_set() {
 }
 
 # Write a file from stdin, honouring --dry-run and creating parents.
+# --- code freshness ---------------------------------------------------------
+# The control agent is a long-running process: it holds whatever code it started
+# with. Reconciling is the moment the on-disk tree is known to be current, so it
+# is also the moment to reload an agent that is still running older code. Without
+# this, every change to 'aw' itself would need a human to restart the service.
+aw_code_hash() {
+  find "$AW_ROOT/lib" "$AW_ROOT/commands" "$AW_ROOT/bin" "$AW_ROOT/capabilities" -type f 2>/dev/null \
+    | sort | xargs -r sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+aw_agent_reload_if_stale() {
+  local f now
+  f="$AW_STATE/agent-code-hash"
+  now="$(aw_code_hash)"
+  [[ -n "$now" ]] || return 0
+  if [[ -f "$f" && "$(cat "$f" 2>/dev/null)" == "$now" ]]; then return 0; fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    [dry-run] record the code hash and reload the control agent\n' >&2
+    return 0
+  fi
+  printf '%s' "$now" > "$f"
+  if systemctl is-active --quiet alwayswork-agent.service 2>/dev/null; then
+    info "alwayswork code changed; reloading the control agent"
+    run systemctl restart --no-block alwayswork-agent.service || true
+  fi
+}
+
 aw_write() {
   local path="$1"
   ensure_dir "$(dirname "$path")"
