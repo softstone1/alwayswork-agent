@@ -17,11 +17,21 @@ if sec_has CLOUDFLARE_TUNNEL_TOKEN; then
   # Idempotent: 'cloudflared service install' refuses to run twice, and apply
   # runs the install hook on every reconcile. Adopt an existing service and
   # only touch it when the token actually changed.
-  if systemctl list-unit-files cloudflared.service >/dev/null 2>&1 && [[ -f /etc/cloudflared/token ]]; then
-    info "cloudflared service already installed"
-    if [[ "$(cat /etc/cloudflared/token 2>/dev/null || true)" != "$token" ]]; then
-      log "access.tunnel: tunnel token changed; updating the service"
+  # Decide by whether the unit exists, never by the token file: a tunnel that
+  # was deleted and recreated leaves the unit behind with no token, and that
+  # path must heal itself rather than abort the whole reconcile.
+  if systemctl list-unit-files cloudflared.service >/dev/null 2>&1; then
+    current="$(cat /etc/cloudflared/token 2>/dev/null || true)"
+    if [[ "$current" == "$token" ]]; then
+      info "cloudflared service already installed with the current token"
+    else
+      if [[ -z "$current" ]]; then
+        log "access.tunnel: restoring the tunnel token file"
+      else
+        log "access.tunnel: tunnel token changed; updating the service"
+      fi
       if [[ "$DRY_RUN" != "1" ]]; then
+        ensure_dir /etc/cloudflared
         printf '%s' "$token" > /etc/cloudflared/token
         chmod 600 /etc/cloudflared/token
       fi
