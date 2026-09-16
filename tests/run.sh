@@ -106,6 +106,57 @@ check "url keeps the query string"   'grep -q "desired?since=7" "$TMP/signed.out
 check "canonical path has no query"  'grep -qx "/v1/device/desired" "$TMP/canonical"'
 check "canonical omits since"        '! grep -q "since" "$TMP/canonical"'
 
+echo "== node lifecycle =="
+check "decommission --help"            'run_aw decommission --help && has "tombstone"'
+check "provision --help"               'run_aw provision --help && has "First-boot"'
+check "enroll --help documents claim" 'run_aw enroll --help && has "pending claim"'
+check "enroll --status is honest"      'run_aw enroll --status && has "not enrolled"'
+check "provision unit Before agent"    'grep -q "Before=alwayswork-agent.service" "$ROOT/capabilities/control.join/install.sh"'
+check "provision timer shipped"        'grep -q "alwayswork-provision.timer" "$ROOT/capabilities/control.join/install.sh"'
+check "agent stops on draining"        'grep -q "device_state" "$ROOT/lib/control.sh"'
+check "claims endpoint wired"          'grep -q "/v1/claims" "$ROOT/lib/control.sh"'
+check "decommission endpoint wired"    'grep -q "/v1/device/" "$ROOT/lib/control.sh"'
+check "tombstone is terminal"          'grep -q "tombstone" "$ROOT/lib/control.sh"'
+
+# The USB TOML parser must be strict: only the four known fields, and shell
+# metacharacters in the file must never be executed or leak through.
+cat > "$TMP/usb-parse.sh" <<'EOS'
+set -u
+ROOT="$1"
+export AW_ROOT="$ROOT"
+export AW_ETC="$2/etc" AW_STATE="$2/state" AW_LOG_DIR="$2/log" AW_CONFIG="$2/etc/worker.yaml"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/control.sh"
+TOML="$2/prov.toml"
+[[ "$(usb_toml_get "$TOML" hostname)" == "node-01" ]] || exit 1
+[[ "$(usb_toml_get "$TOML" profile)" == "worker" ]] || exit 1
+[[ "$(usb_toml_get "$TOML" control_url)" == "https://control.example.com" ]] || exit 1
+[[ "$(usb_toml_get "$TOML" join_token)" == "aj_test123" ]] || exit 1
+# unknown fields are inert data — returned verbatim, never executed or used.
+[[ "$(usb_toml_get "$TOML" evil)" == '$(touch /tmp/aw-pwned)' ]] || exit 1
+[[ -z "$(usb_toml_get "$TOML" x)" ]] || exit 1
+[[ -z "$(usb_toml_get "$TOML" nonexistent)" ]] || exit 1
+exit 0
+EOS
+mkdir -p "$TMP/usb"
+cat > "$TMP/usb/prov.toml" <<'EOF'
+# AlwaysWork provisioning
+hostname    = "node-01"
+profile     = "worker"
+control_url = "https://control.example.com"
+join_token  = "aj_test123"
+evil = "$(touch /tmp/aw-pwned)"
+x=$(touch /tmp/aw-pwned2)
+EOF
+rm -f /tmp/aw-pwned /tmp/aw-pwned2
+check "usb toml parser strict" 'bash "$TMP/usb-parse.sh" "$ROOT" "$TMP/usb" && [[ ! -e /tmp/aw-pwned && ! -e /tmp/aw-pwned2 ]]'
+
+if have yq; then
+  check "decommission dry-run writes nothing" 'run_aw --dry-run --yes decommission >/dev/null && [[ ! -e "$AW_STATE/decommission.json" ]]'
+  check "decommission dry-run summarizes"     'run_aw --dry-run --yes decommission && has "decommissioned"'
+  check "provision dry-run is a no-op"        'run_aw --dry-run provision >/dev/null && [[ ! -e "$AW_STATE/decommission.json" ]]'
+fi
+
 echo "== secret store =="
 if have sops && have age && yq --version 2>/dev/null | grep -qi mikefarah; then
   cat > "$TMP/store.sh" <<'EOS'
