@@ -57,7 +57,7 @@ cmd="${1:-help}"
 [[ $# -gt 0 ]] && shift
 
 case "$cmd" in
-  init|bootstrap|apply|enable|disable|list|status|doctor|update|snapshot|secrets|capability|power|app|clean|enroll|reset|agent|help)
+  init|bootstrap|apply|enable|disable|list|status|doctor|update|snapshot|secrets|capability|power|app|clean|enroll|reset|agent|decommission|provision|help)
     # shellcheck source=/dev/null
     source "$AW_ROOT/commands/$cmd.sh"
     "cmd_$cmd" "$@"
