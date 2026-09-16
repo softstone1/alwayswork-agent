@@ -92,7 +92,7 @@ A fresh box has no inbound access and no agent, so enrollment is always
 
 | Mode | How it starts | Best for |
 |------|---------------|----------|
-| Join token | `curl ... | sudo bash -s -- --token <t>` | one box, first install |
+| Join token | install, then `sudo aw enroll --control <url> --token <t>` | one box, first install |
 | Claim & approve | first-boot service announces itself | headless boxes, small fleets |
 | Fleet image | golden image with a fleet identity | many identical boxes |
 
