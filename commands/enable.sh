@@ -17,12 +17,21 @@ cmd_enable() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h|--help)
-        info "usage: aw enable <capability>... [--key value]..."
+        info "usage: aw enable <capability>... [--key value]... [--key=value]..."
         return 0
         ;;
+      --*=*)
+        # --key=value form: unambiguous, always a value.
+        opts+=("${1%%=*}"); opts+=("${1#*=}") ;;
       --*)
         opts+=("$1")
-        if [[ -n "${2:-}" && "${2:0:2}" != "--" ]]; then
+        if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+          # Never silently swallow a capability name as an option value:
+          # `aw enable access.tunnel --domain runtime.docker` used to store
+          # "runtime.docker" as the domain and drop the capability.
+          if cap_valid_id "$2" && cap_exists "$2"; then
+            die "'$2' looks like a capability name, not a value for $1 (use $1=$2, or put capabilities before options)"
+          fi
           opts+=("$2"); shift
         fi
         ;;
