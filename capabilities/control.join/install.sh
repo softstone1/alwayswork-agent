@@ -27,3 +27,39 @@ UNIT
 run systemctl daemon-reload
 run systemctl enable --now alwayswork-agent.service
 ok "control agent installed"
+
+# First-boot / headless provisioning: on every boot, `aw provision` resumes an
+# interrupted decommission, enrolls from a USB provisioning stick when one is
+# present, or registers/checks a pending claim for console approval. The timer
+# disables itself once the node is enrolled.
+aw_write /etc/systemd/system/alwayswork-provision.service <<'UNIT'
+[Unit]
+Description=AlwaysWork first-boot provisioning (USB / pending claim)
+After=network-online.target
+Wants=network-online.target
+Before=alwayswork-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/alwayswork provision
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+aw_write /etc/systemd/system/alwayswork-provision.timer <<'UNIT'
+[Unit]
+Description=Retry AlwaysWork provisioning until the node is enrolled
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+run systemctl daemon-reload
+run systemctl enable --now alwayswork-provision.timer
+ok "provisioning timer installed"
