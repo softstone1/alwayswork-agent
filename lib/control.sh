@@ -18,7 +18,9 @@ control_ensure_key() {
   if [[ ! -f "$key" ]]; then
     log "control: generating device identity"
     ensure_dir "$AW_ETC/identity"
-    run openssl genpkey -algorithm ED25519 -out "$key"
+    # umask 077: openssl inherits the umask, so without this the fresh private
+    # key would be briefly world-readable before the chmod below.
+    ( umask 077; run openssl genpkey -algorithm ED25519 -out "$key" )
     run chmod 600 "$key"
   fi
 }
@@ -50,7 +52,24 @@ control_sign() {
   printf '%s' "$sig"
 }
 
+# True when a response body carries an explicit revocation signal.
+_control_is_revoked() {
+  local json="$1" code msg state
+  code="$(jq -r '.error.code // ""' <<<"$json" 2>/dev/null)"
+  msg="$(jq -r '.error.message // ""' <<<"$json" 2>/dev/null)"
+  state="$(jq -r '.state // ""' <<<"$json" 2>/dev/null)"
+  [[ "$state" == "revoked" ]] && return 0
+  [[ "${code,,}" == *revok* ]] && return 0
+  [[ "${msg,,}" == *revok* ]] && return 0
+  return 1
+}
+
 # control_call METHOD PATH [BODY] — signed device request.
+#
+# Prints the response body on stdout. Returns 0 on success, 1 on transient
+# failure (network error, 5xx, empty body), 2 when the control plane reports
+# this device revoked. It never dies: the polling daemon must survive
+# transient outages, and revocation is handled by the caller, not by a crash.
 #
 # The signature covers the request path only: a query string travels in the URL
 # but never enters the canonical string, because the control plane verifies
@@ -59,7 +78,7 @@ control_sign() {
 # for an empty delivery and re-applied defaults on every tick.
 control_call() {
   local method="${1^^}" path="$2" body="${3:-}"
-  local url ts nonce bodyhash canonical sig signed_path resp
+  local url ts nonce bodyhash canonical sig signed_path resp http
   url="$(control_url)"
   signed_path="${path%%\?*}"
   ts="$(date +%s)"
@@ -72,13 +91,34 @@ $nonce
 $bodyhash"
   sig="$(control_sign "$canonical")"
   # Bounded: an agent tick must never hang forever on one stalled connection.
+  # -w appends the HTTP status on its own last line so we can tell a refused
+  # credential (revocation) apart from a transient failure.
   local -a args=(-sS --connect-timeout 5 --max-time 30 -X "$method" "$url$path"
     -H "x-device-id: $(control_device_id)"
     -H "x-timestamp: $ts"
     -H "x-nonce: $nonce"
-    -H "x-signature: $sig")
+    -H "x-signature: $sig"
+    -w '\n%{http_code}')
   [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data "$body")
-  resp="$(curl "${args[@]}")" || die "control: $method $signed_path failed (network)"
+  if ! resp="$(curl "${args[@]}" 2>/dev/null)"; then
+    warn "control: $method $signed_path failed (network)"
+    return 1
+  fi
+  http="${resp##*$'\n'}"; resp="${resp%$'\n'*}"
+  if _control_is_revoked "$resp"; then
+    printf '%s' "$resp"
+    return 2
+  fi
+  if [[ -z "$resp" ]]; then
+    warn "control: $method $signed_path -> empty response (transient)"
+    return 1
+  fi
+  # Numeric guard first: a non-numeric status in [[ ... -ge ... ]] is a fatal
+  # arithmetic error that aborts the whole shell, not just a false test.
+  if [[ "$http" =~ ^[0-9]+$ ]] && (( http >= 500 )); then
+    warn "control: $method $signed_path -> HTTP $http (transient)"
+    return 1
+  fi
   if jq -e '.error' >/dev/null 2>&1 <<<"$resp"; then
     warn "control: $method $signed_path rejected -> $(jq -c '.error' <<<"$resp")"
   fi
@@ -88,8 +128,10 @@ control_enroll() {
   local token="" url=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --token)         token="$2"; shift ;;
-      --control|--url) url="$2"; shift ;;
+      --token)         [[ -n "${2-}" ]] || die "missing value for --token (usage: aw enroll --control URL [--token TOKEN])"
+                       token="$2"; shift ;;
+      --control|--url) [[ -n "${2-}" ]] || die "missing value for $1 (usage: aw enroll --control URL [--token TOKEN])"
+                       url="$2"; shift ;;
       -h|--help)       info "usage: aw enroll --control URL [--token TOKEN]"; return 0 ;;
       *) die "unknown option: $1" ;;
     esac
@@ -129,16 +171,23 @@ control_enroll() {
 
   log "control: announcing this worker"
   local resp id secret
-  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")"
+  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")" \
+    || die "control: POST /v1/enroll failed (network)"
   id="$(jq -r '.deviceId // ""' <<<"$resp")"
   secret="$(jq -r '.pollSecret // ""' <<<"$resp")"
   if [[ -z "$id" ]]; then
     die "enrollment failed: $(jq -r '.error.message // empty' <<<"$resp" 2>/dev/null || echo "$resp")"
   fi
   ensure_dir "$AW_ETC"
-  jq -n --arg id "$id" --arg secret "$secret" --arg url "$(control_url)" \
-    '{deviceId:$id, pollSecret:$secret, controlUrl:$url}' > "$(control_config_file)"
-  run chmod 600 "$(control_config_file)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    [dry-run] write %s\n' "$(control_config_file)" >&2
+  else
+    # umask 077: the poll secret must never be world-readable, even briefly.
+    ( umask 077
+      jq -n --arg id "$id" --arg secret "$secret" --arg url "$(control_url)" \
+        '{deviceId:$id, pollSecret:$secret, controlUrl:$url}' > "$(control_config_file)" )
+    chmod 600 "$(control_config_file)"
+  fi
   ok "announced as $id"
 
   control_wait_approval "$id" "$secret"
@@ -147,10 +196,16 @@ control_wait_approval() {
   local id="$1" secret="$2" resp state
   info "waiting for approval in the console (Ctrl-C to stop)"
   while :; do
-    resp="$(curl -sS --connect-timeout 5 --max-time 30 "$(control_url)/v1/enroll/$id" -H "x-poll-secret: $secret")"
+    if ! resp="$(curl -sS --connect-timeout 5 --max-time 30 "$(control_url)/v1/enroll/$id" -H "x-poll-secret: $secret")"; then
+      warn "control: approval poll failed (network); retrying"
+      sleep 3
+      continue
+    fi
     state="$(jq -r '.state // "unknown"' <<<"$resp")"
     case "$state" in
-      approved) ok "approved"; control_apply_delivery "$resp"; return 0 ;;
+      approved) ok "approved"
+               control_apply_delivery "$resp" || die "control: initial apply failed"
+               return 0 ;;
       pending)  sleep 3 ;;
       *)        die "enrollment was $state" ;;
     esac
@@ -176,6 +231,9 @@ control_apply_delivery() {
   if [[ -n "$sealed" && "$(sec_backend)" == "sops" ]]; then
     local enc dec
     enc="$(mktemp)"; dec="$(mktemp)"
+    # mktemp files are 0600, but without this trap a dying step below would
+    # leave the decrypted secrets file lingering in /tmp forever.
+    trap 'rm -f "$enc" "$dec"' EXIT
     chmod 600 "$enc" "$dec"
     printf '%s' "$sealed" > "$enc"
     if age -d -i "$(sec_key_file)" "$enc" > "$dec" 2>/dev/null; then
@@ -188,11 +246,18 @@ control_apply_delivery() {
       warn "could not decrypt sealed secrets"
     fi
     rm -f "$enc" "$dec"
+    trap - EXIT
   fi
 
   ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
-  log "control: applying desired state"
-  run "$AW_ROOT/bin/alwayswork" apply
+  log "control: applying desired state (version $ver)"
+  # A failed apply must never be recorded or acked as successful: the version
+  # stays unacked so the next tick retries the delivery instead of the node
+  # drifting from the control plane in silence.
+  if ! run "$AW_ROOT/bin/alwayswork" apply; then
+    err "control: apply of version $ver failed"
+    return 1
+  fi
   # Record the applied version only after the reconcile succeeded, so a failed
   # apply stays unacked and is retried on the next tick.
   cfg_set_expr '.control.appliedVersion' "$ver"
@@ -205,6 +270,15 @@ control_webui_json() {
   [[ -s "$f" ]] || { printf 'null'; return 0; }
   jq -c 'if type == "object" and (.host | type == "string") and (.port | type == "number")
          then {host: .host, port: .port} else null end' "$f" 2>/dev/null || printf 'null'
+}
+
+# A revoked device must stop cleanly — not crash-loop behind Restart=always.
+# The unit is disabled so systemd does not restart the agent into a revoke
+# loop; re-enrolling mints a new keypair and re-enables it.
+control_handle_revoked() {
+  err "control: this worker was revoked by the operator; stopping the control agent"
+  run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
+  exit 0
 }
 
 control_agent() {
@@ -224,29 +298,63 @@ control_agent() {
   control_enrolled || die "this worker is not enrolled; run: aw enroll"
   if (( once )); then
     control_agent_tick
-    return 0
+    return $?
   fi
   log "control agent: reporting every ${interval}s"
+  local fails=0 pause i
   while :; do
-    control_agent_tick || warn "control: tick failed"
-    sleep "$interval"
+    if control_agent_tick; then
+      fails=0
+    else
+      fails=$(( fails + 1 ))
+      warn "control: tick failed (${fails} consecutive); backing off"
+    fi
+    # Exponential backoff on consecutive failures, capped at 10 minutes, so a
+    # transient outage neither kills the daemon nor hammers the server.
+    pause="$interval"; i=1
+    while (( i < fails && pause < 600 )); do pause=$(( pause * 2 )); i=$(( i + 1 )); done
+    sleep "$pause"
   done
 }
 
 control_agent_tick() {
-  local applied body resp desired delivery ver webui
+  local applied body resp desired delivery ver rc webui
   applied="$(cfg_get '.control.appliedVersion' 0)"
   webui="$(control_webui_json)"
   body="$(jq -n --argjson v "$applied" --argjson ui "$webui" \
     '{appliedVersion:$v, health:{}} + (if $ui == null then {} else {webUi:$ui} end)')"
-  resp="$(control_call POST /v1/device/heartbeat "$body")"
-  desired="$(jq -r '.configVersion // 0' <<<"$resp")"
+  resp=""; rc=1
+  if resp="$(control_call POST /v1/device/heartbeat "$body")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  (( rc == 2 )) && control_handle_revoked
+  (( rc == 0 )) || return 1
+  desired="0"
+  if ! desired="$(jq -r '.configVersion // 0' <<<"$resp")"; then
+    warn "control: heartbeat response was not JSON; skipping delivery check"
+    return 1
+  fi
   if [[ "$desired" != "$applied" ]]; then
     log "control: desired version $desired (applied $applied)"
-    delivery="$(control_call GET "/v1/device/desired?since=$applied")"
-    control_apply_delivery "$delivery"
+    delivery=""; rc=1
+    if delivery="$(control_call GET "/v1/device/desired?since=$applied")"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    (( rc == 2 )) && control_handle_revoked
+    (( rc == 0 )) || return 1
+    if ! control_apply_delivery "$delivery"; then
+      warn "control: apply of version $desired failed; it stays unacked and will be retried"
+      return 1
+    fi
     ver="$(jq -r '.config.configVersion // 0' <<<"$delivery")"
-    control_call POST /v1/device/ack "$(jq -n --argjson v "$ver" '{configVersion:$v}')" >/dev/null
-    cfg_set_expr '.control.appliedVersion' "$ver"
+    # Ack only after a verified successful apply. appliedVersion is already
+    # recorded above, so even if this ack is lost the next heartbeat reports it.
+    control_call POST /v1/device/ack "$(jq -n --argjson v "$ver" '{configVersion:$v}')" >/dev/null \
+      || warn "control: ack of version $ver failed (transient); the heartbeat will report it"
   fi
+  return 0
 }
