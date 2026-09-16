@@ -83,6 +83,7 @@ engine_run_once() {
 
 engine_exists() { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" inspect "$1" >/dev/null 2>&1; }
 engine_rm()     { local b; b="$(engine_bin)"; [[ -n "$b" ]] && run "$b" rm -f "$1"; }
+engine_start()  { local b; b="$(engine_bin)"; [[ -n "$b" ]] && run "$b" start "$1"; }
 engine_logs()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" logs --tail 100 "$1"; }
 engine_pull()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && run "$b" pull "$@"; }
 engine_list()   { local b; b="$(engine_bin)"; [[ -n "$b" ]] && "$b" ps --filter "label=alwayswork=true" --format '{{.Names}}\t{{.Image}}\t{{.Status}}'; }

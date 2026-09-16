@@ -15,10 +15,34 @@ cmd_disable() {
   require_root disable
   cfg_require
   cfg_need
-  [[ $# -gt 0 ]] || die "usage: aw disable <capability>..."
+
+  local with_deps=0
+  local -a targets=()
+  local t
+  for t in "$@"; do
+    case "$t" in
+      --with-deps) with_deps=1 ;;
+      -h|--help)   info "usage: aw disable <capability>... [--with-deps]"; return 0 ;;
+      --*)         die "unknown option: $t" ;;
+      *)           targets+=("$t") ;;
+    esac
+  done
+  (( "${#targets[@]}" > 0 )) || die "usage: aw disable <capability>... [--with-deps]"
 
   local -a ordered=()
-  mapfile -t ordered < <(cap_resolve "$@")
+  mapfile -t ordered < <(cap_resolve "${targets[@]}")
+  if (( with_deps == 0 )); then
+    # Disable only what was named. cap_resolve pulls in dependencies for
+    # ordering, but uninstalling them too would cascade: disabling one
+    # capability used to uninstall shared deps like core.
+    local -a named=() o
+    for o in "${ordered[@]}"; do
+      for t in "${targets[@]}"; do
+        [[ "$o" == "$t" ]] && { named+=("$o"); break; }
+      done
+    done
+    ordered=("${named[@]}")
+  fi
 
   local i cap deps
   for (( i = "${#ordered[@]}" - 1; i >= 0; i-- )); do

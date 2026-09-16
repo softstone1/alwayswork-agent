@@ -57,6 +57,46 @@ run() {
   "$@"
 }
 
+# run_masked <display> <cmd...> — like run(), but the dry-run/log line shows
+# <display> instead of the real argv, so secret-bearing values never appear in
+# dry-run output, logs, or (via display) anywhere else. The real argv is still
+# only passed to the command itself; prefer file/env passing over argv.
+run_masked() {
+  local display="$1"; shift
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    %s[dry-run]%s %s\n' "$C_DIM" "$C_RESET" "$display" >&2
+    return 0
+  fi
+  "$@"
+}
+
+# run_paru <paru-args...> — paru refuses to run as root. When we are root via
+# sudo, drop to the invoking unprivileged user (SUDO_USER); otherwise run
+# directly as the current user. Dies loudly only when root with no unprivileged
+# user to drop to, rather than failing obscurely inside paru. Never dies in
+# dry-run: a would-be install is printed, not executed.
+run_paru() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    %s[dry-run]%s paru %s\n' "$C_DIM" "$C_RESET" "$*" >&2
+    return 0
+  fi
+  if [[ "$EUID" != "0" ]]; then
+    run paru "$@"
+    return
+  fi
+  local user="${SUDO_USER:-}"
+  [[ -n "$user" && "$user" != "root" ]] \
+    || die "paru cannot run as root; re-run via sudo from your unprivileged user"
+  local home; home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+  [[ -n "$home" ]] || home="/home/$user"
+  if have runuser; then
+    run env -u SUDO_USER HOME="$home" runuser -u "$user" -- paru "$@"
+  else
+    # shellcheck disable=SC2086
+    run su -s /bin/bash "$user" -c "$(printf '%q ' paru "$@")"
+  fi
+}
+
 confirm() {
   [[ "$ASSUME_YES" == "1" ]] && return 0
   [[ -t 0 ]] || die "no TTY for confirmation; re-run with --yes"

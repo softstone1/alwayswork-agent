@@ -56,9 +56,9 @@ while [[ $# -gt 0 ]]; do
     --skip-deps) SKIP_DEPS=1 ;;
     --no-alias)  NO_ALIAS=1 ;;
     --force)     FORCE=1 ;;
-    --dir)       INSTALL_DIR="$2"; shift ;;
-    --ref)       REPO_REF="$2"; shift ;;
-    --from)      SRC_DIR="$2"; shift ;;
+    --dir)       [[ -n "${2-}" ]] || die "missing value for --dir";  INSTALL_DIR="$2"; shift ;;
+    --ref)       [[ -n "${2-}" ]] || die "missing value for --ref";  REPO_REF="$2"; shift ;;
+    --from)      [[ -n "${2-}" ]] || die "missing value for --from"; SRC_DIR="$2"; shift ;;
     -h|--help)   usage; exit 0 ;;
     *)           die "unknown option: $1" ;;
   esac
@@ -132,12 +132,19 @@ install_files() {
 # Arch's `yq` package is the Python build, which is not command-compatible
 # with the mikefarah Go yq this project uses. Bundle the Go build beside the
 # CLI; bin/alwayswork puts that directory first on PATH.
+#
+# The version is pinned and the download is sha256-verified against the
+# release's published checksums: fetching `latest` unverified lets a
+# compromised release or mirror ship arbitrary code as root.
+YQ_VERSION="v4.47.2"
+YQ_SHA256_AMD64="1bb99e1019e23de33c7e6afc23e93dad72aad6cf2cb03c797f068ea79814ddb0"
+YQ_SHA256_ARM64="05df1f6aed334f223bb3e6a967db259f7185e33650c3b6447625e16fea0ed31f"
 bundle_yq() {
-  local arch asset target
+  local arch asset target want
   arch="$(uname -m)"
   case "$arch" in
-    x86_64)  asset="yq_linux_amd64" ;;
-    aarch64) asset="yq_linux_arm64" ;;
+    x86_64)  asset="yq_linux_amd64"; want="$YQ_SHA256_AMD64" ;;
+    aarch64) asset="yq_linux_arm64"; want="$YQ_SHA256_ARM64" ;;
     *) warn "no bundled yq for ${arch}; install the AUR 'go-yq'"; return 0 ;;
   esac
   target="${INSTALL_DIR}/bin/yq"
@@ -151,10 +158,19 @@ bundle_yq() {
     ok "bundled system yq"
     return 0
   fi
-  log "Fetching mikefarah yq (${asset})"
-  if run curl -fsSL "https://github.com/mikefarah/yq/releases/latest/download/${asset}" -o "$target"; then
-    run chmod 755 "$target"
-    ok "bundled yq"
+  log "Fetching mikefarah yq ${YQ_VERSION} (${asset})"
+  if run curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${asset}" -o "$target"; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      ok "bundled yq (checksum check runs on a real install)"
+      return 0
+    fi
+    if [[ "$(sha256sum "$target" | cut -d' ' -f1)" == "$want" ]]; then
+      run chmod 755 "$target"
+      ok "bundled yq ${YQ_VERSION} (sha256 verified)"
+    else
+      rm -f "$target"
+      die "yq checksum mismatch for ${YQ_VERSION}/${asset}; refusing to install"
+    fi
   else
     warn "could not fetch yq; install the AUR 'go-yq' or place mikefarah yq at ${target}"
   fi

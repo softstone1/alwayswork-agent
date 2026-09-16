@@ -16,6 +16,9 @@ aw_write /usr/local/bin/alwayswork-agent <<'SCRIPT'
 # Run one agent task in an isolated, hardened, ephemeral container.
 set -euo pipefail
 task_id="${1:?usage: alwayswork-agent <task-id> [cmd...]}"
+# The task id becomes a host bind-mount path and a container name: reject
+# anything outside a strict charset so it cannot escape the workspaces dir.
+[[ "$task_id" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "invalid task id: $task_id" >&2; exit 1; }
 shift
 CFG=/etc/alwayswork/worker.yaml
 image="$(yq -r '.capabilities.config["agents.core"].image // "ghcr.io/softstone1/alwayswork-agent:latest"' "$CFG")"

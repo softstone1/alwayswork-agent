@@ -15,7 +15,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/alwayswork agent 60
-Restart=always
+# on-failure (not always): a clean exit — e.g. after the operator revokes this
+# worker — must stop the agent instead of restarting it into a revoke loop.
+Restart=on-failure
 RestartSec=10
 
 [Install]

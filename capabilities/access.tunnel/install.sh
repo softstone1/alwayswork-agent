@@ -4,7 +4,7 @@ log "access.tunnel: installing cloudflared"
 if pacman -Si cloudflared >/dev/null 2>&1; then
   run pacman -S --needed --noconfirm cloudflared
 else
-  run paru -S --needed --noconfirm cloudflared-bin
+  run_paru -S --needed --noconfirm cloudflared-bin
 fi
 
 domain="$(cap_config domain)"
@@ -14,34 +14,58 @@ fi
 
 if sec_has CLOUDFLARE_TUNNEL_TOKEN; then
   token="$(sec_get CLOUDFLARE_TUNNEL_TOKEN)"
-  # Idempotent: 'cloudflared service install' refuses to run twice, and apply
-  # runs the install hook on every reconcile. Adopt an existing service and
-  # only touch it when the token actually changed.
-  # Decide by whether the unit exists, never by the token file: a tunnel that
-  # was deleted and recreated leaves the unit behind with no token, and that
-  # path must heal itself rather than abort the whole reconcile.
-  if systemctl list-unit-files cloudflared.service >/dev/null 2>&1; then
-    current="$(cat /etc/cloudflared/token 2>/dev/null || true)"
-    if [[ "$current" == "$token" ]]; then
-      info "cloudflared service already installed with the current token"
+  bin="$(command -v cloudflared)"
+  unit=/etc/systemd/system/cloudflared.service
+  token_file=/etc/cloudflared/token
+  # The token is never passed on a command line (visible in ps) or echoed by
+  # --dry-run: it lives in a 0600 file from the moment of creation, and the
+  # systemd unit references it via --token-file.
+  write_token() {
+    if [[ "$DRY_RUN" == "1" ]]; then
+      printf '    [dry-run] write %s (0600)\n' "$token_file" >&2
     else
-      if [[ -z "$current" ]]; then
-        log "access.tunnel: restoring the tunnel token file"
-      else
-        log "access.tunnel: tunnel token changed; updating the service"
-      fi
-      if [[ "$DRY_RUN" != "1" ]]; then
-        ensure_dir /etc/cloudflared
-        printf '%s' "$token" > /etc/cloudflared/token
-        chmod 600 /etc/cloudflared/token
-      fi
-      run systemctl restart cloudflared
+      ensure_dir /etc/cloudflared
+      ( umask 077; printf '%s' "$token" > "$token_file" )
+      chmod 600 "$token_file"
     fi
+  }
+  write_unit() {
+    aw_write "$unit" <<UNIT
+[Unit]
+Description=AlwaysWork Cloudflare tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$bin tunnel --no-autoupdate --token-file $token_file run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  }
+  current="$(cat "$token_file" 2>/dev/null || true)"
+  if [[ ! -f "$unit" ]]; then
+    # Idempotent adoption: a unit left behind by an older install (or deleted
+    # and recreated tunnel) heals itself instead of aborting the reconcile.
+    if [[ -z "$current" ]]; then
+      log "access.tunnel: installing service from stored token"
+    else
+      log "access.tunnel: adopting existing token file"
+    fi
+    write_token
+    write_unit
+    run systemctl daemon-reload
+    run systemctl enable --now cloudflared
+  elif [[ "$current" != "$token" ]]; then
+    log "access.tunnel: tunnel token changed; updating the service"
+    write_token
+    run systemctl restart cloudflared
   else
-    log "access.tunnel: installing service from stored token"
-    run cloudflared service install "$token"
+    info "cloudflared service already installed with the current token"
+    run systemctl enable --now cloudflared 2>/dev/null || true
   fi
-  run systemctl enable --now cloudflared
 else
   warn "no CLOUDFLARE_TUNNEL_TOKEN in the secret store"
   info "in Cloudflare Zero Trust: Networks > Tunnels > Create tunnel"
