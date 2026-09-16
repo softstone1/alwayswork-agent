@@ -18,7 +18,7 @@ cmd_update() {
   log "Upgrading packages"
   local rc=0
   if have paru; then
-    run paru -Syu --noconfirm || rc=$?
+    run_paru -Syu --noconfirm || rc=$?
   else
     run pacman -Syu --noconfirm || rc=$?
   fi
