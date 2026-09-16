@@ -59,8 +59,13 @@ _control_is_revoked() {
   msg="$(jq -r '.error.message // ""' <<<"$json" 2>/dev/null)"
   state="$(jq -r '.state // ""' <<<"$json" 2>/dev/null)"
   [[ "$state" == "revoked" ]] && return 0
+  [[ "$state" == "decommissioned" ]] && return 0
   [[ "${code,,}" == *revok* ]] && return 0
   [[ "${msg,,}" == *revok* ]] && return 0
+  # A tombstoned device is rejected the same way: its identity is dead and the
+  # agent must stop cleanly, never crash-loop.
+  [[ "${code,,}" == *tombstone* ]] && return 0
+  [[ "${msg,,}" == *tombstone* ]] && return 0
   return 1
 }
 
@@ -125,18 +130,25 @@ $bodyhash"
   printf '%s' "$resp"
 }
 control_enroll() {
-  local token="" url=""
+  local token="" url="" usb=0 status_only=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --token)         [[ -n "${2-}" ]] || die "missing value for --token (usage: aw enroll --control URL [--token TOKEN])"
                        token="$2"; shift ;;
       --control|--url) [[ -n "${2-}" ]] || die "missing value for $1 (usage: aw enroll --control URL [--token TOKEN])"
                        url="$2"; shift ;;
-      -h|--help)       info "usage: aw enroll --control URL [--token TOKEN]"; return 0 ;;
+      --usb)           usb=1 ;;
+      --status)        status_only=1 ;;
+      -h|--help)       info "usage: aw enroll --control URL [--token TOKEN] [--usb] [--status]"
+                       info "  no --token: register a pending claim and wait for console approval (headless-friendly)"
+                       info "  --usb:      provision from a USB stick carrying alwayswork.toml"
+                       info "  --status:   show enrollment / claim / decommission state"
+                       return 0 ;;
       *) die "unknown option: $1" ;;
     esac
     shift
   done
+  if (( status_only )); then control_enroll_status; return 0; fi
   require_root enroll
   cfg_require
   cfg_need
@@ -146,6 +158,28 @@ control_enroll() {
   if [[ -z "$(cfg_get '.agent.user' '')" ]]; then
     cfg_set_str '.agent.user' "${SUDO_USER:-$(id -un)}"
   fi
+  if (( usb )); then
+    local toml
+    toml="$(control_usb_find_provision)" || die "no alwayswork.toml found on any USB device"
+    control_usb_apply "$toml" || die "USB provisioning failed"
+    control_usb_consume "$toml"
+    return 0
+  fi
+  control_require
+  if [[ -z "$token" ]]; then
+    # Headless-friendly default: the node registers a pending claim and the
+    # operator approves it once in the web console. No monitor needed.
+    control_claim_flow
+    return 0
+  fi
+  control_enroll_with_token "$token"
+  rm -f "$(decommission_marker)"
+}
+
+# control_enroll_with_token <token> — the join-token enrollment path, shared by
+# `aw enroll --token`, USB provisioning, and approved pending claims.
+control_enroll_with_token() {
+  local token="$1"
   control_require
   control_ensure_key
   if [[ "$(sec_backend)" == "sops" ]]; then sec_init; fi
@@ -331,6 +365,22 @@ control_agent_tick() {
   fi
   (( rc == 2 )) && control_handle_revoked
   (( rc == 0 )) || return 1
+  # A draining device decommissions itself: the operator removed this node in
+  # the web console (or ran aw decommission elsewhere). Decommission is never
+  # automatic — draining is always the result of an explicit operator decision.
+  local device_state
+  device_state="$(jq -r '.device_state // "active"' <<<"$resp" 2>/dev/null || printf 'active')"
+  if [[ "$device_state" == "draining" ]]; then
+    log "control: this node is draining; decommissioning"
+    if decommission_run 0; then
+      ok "control: decommission complete"
+    else
+      warn "control: decommission incomplete; will retry on the next tick"
+      return 1
+    fi
+    run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
+    exit 0
+  fi
   desired="0"
   if ! desired="$(jq -r '.configVersion // 0' <<<"$resp")"; then
     warn "control: heartbeat response was not JSON; skipping delivery check"
@@ -357,4 +407,431 @@ control_agent_tick() {
       || warn "control: ack of version $ver failed (transient); the heartbeat will report it"
   fi
   return 0
+}
+
+# --- pending claims (headless enrollment) -------------------------------------
+# A node with no join token registers a pending claim: it posts its public key
+# and a machine fingerprint, then waits for one console approval. The claim id
+# and fingerprint are what the operator sees in the web console. No monitor on
+# the node is ever needed.
+
+control_claim_file() { echo "$AW_STATE/claim.json"; }
+
+# Hex sha256 of the machine id: a stable fingerprint that never exposes the
+# raw machine id on the wire.
+control_machine_id_hash() {
+  printf '%s' "$(control_machine_id)" | sha256sum | cut -d' ' -f1
+}
+
+control_claim_create() {
+  control_ensure_key
+  local payload resp claim_id expires
+  payload="$(jq -n \
+    --arg pk "$(control_pubkey_b64)" \
+    --arg host "$(hostname)" \
+    --arg mid "$(control_machine_id_hash)" \
+    '{device_pubkey:$pk, hostname:$host, machine_id_hash:$mid}')"
+  resp="$(curl -sS --connect-timeout 5 --max-time 30 -X POST "$(control_url)/v1/claims" \
+    -H 'content-type: application/json' --data "$payload")" \
+    || die "control: POST /v1/claims failed (network)"
+  claim_id="$(jq -r '.claim_id // ""' <<<"$resp")"
+  expires="$(jq -r '.expires_at // ""' <<<"$resp")"
+  if [[ -z "$claim_id" ]]; then
+    die "claim failed: $(jq -r '.error.message // empty' <<<"$resp" 2>/dev/null | head -c 200)"
+  fi
+  ensure_dir "$AW_STATE"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    [dry-run] write %s\n' "$(control_claim_file)" >&2
+  else
+    # umask 077: claim state is node identity material, never world-readable.
+    ( umask 077
+      jq -n --arg id "$claim_id" --arg exp "$expires" \
+        '{claim_id:$id, expires_at:$exp}' > "$(control_claim_file)" )
+    chmod 600 "$(control_claim_file)"
+  fi
+  printf '%s' "$claim_id"
+}
+
+control_claim_resume_id() {
+  local f id
+  f="$(control_claim_file)"
+  [[ -f "$f" ]] || return 1
+  id="$(jq -r '.claim_id // ""' "$f" 2>/dev/null)"
+  [[ -n "$id" ]] || return 1
+  printf '%s' "$id"
+}
+
+control_claim_status() {
+  curl -sS --connect-timeout 5 --max-time 30 "$(control_url)/v1/claims/$1/status"
+}
+
+# Interactive poll until the claim is approved or expires (for `aw enroll`).
+control_claim_poll_wait() {
+  local claim_id="$1" resp status api_token
+  while :; do
+    if ! resp="$(control_claim_status "$claim_id")"; then
+      warn "control: claim poll failed (network); retrying"
+      sleep 5
+      continue
+    fi
+    status="$(jq -r '.status // "unknown"' <<<"$resp")"
+    case "$status" in
+      approved)
+        api_token="$(jq -r '.api_token // ""' <<<"$resp")"
+        [[ -n "$api_token" ]] || die "claim approved but the server sent no api_token"
+        control_claim_complete "$api_token"
+        return 0 ;;
+      expired) die "claim expired; run 'aw enroll' again for a fresh one" ;;
+      pending) sleep 5 ;;
+      *) die "claim was $status" ;;
+    esac
+  done
+}
+
+# Single status check, for the first-boot provision timer: never blocks.
+control_claim_poll_once() {
+  local claim_id resp status api_token
+  if ! claim_id="$(control_claim_resume_id)"; then
+    [[ -n "$(control_url)" ]] || { warn "provision: no control URL; set it with: aw enroll --control URL"; return 1; }
+    require_cmd curl jq openssl
+    claim_id="$(control_claim_create)" || return 1
+    info "provision: pending claim $claim_id registered; approve it in the web console"
+    return 0
+  fi
+  resp="$(control_claim_status "$claim_id")" || { warn "provision: claim check failed (network); will retry"; return 1; }
+  status="$(jq -r '.status // "unknown"' <<<"$resp")"
+  case "$status" in
+    approved)
+      api_token="$(jq -r '.api_token // ""' <<<"$resp")"
+      [[ -n "$api_token" ]] || { warn "provision: claim approved but no api_token came back"; return 1; }
+      control_claim_complete "$api_token" ;;
+    expired)
+      warn "provision: claim expired; a fresh one will be registered next run"
+      run rm -f "$(control_claim_file)" ;;
+    pending) info "provision: claim $claim_id still pending approval" ;;
+    *) warn "provision: unexpected claim status: $status" ;;
+  esac
+}
+
+# Finish a claim the operator approved: exchange the single-use api_token
+# through the normal join-token enrollment, then start the agent.
+control_claim_complete() {
+  local api_token="$1"
+  log "control: claim approved; completing enrollment"
+  control_enroll_with_token "$api_token"
+  run rm -f "$(control_claim_file)" "$(decommission_marker)"
+  run systemctl enable --now alwayswork-agent.service 2>/dev/null || true
+  run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
+  ok "enrolled via approved claim"
+}
+
+control_claim_flow() {
+  control_require
+  local claim_id
+  if claim_id="$(control_claim_resume_id)"; then
+    info "resuming pending claim $claim_id"
+  else
+    log "control: registering a pending claim for this node"
+    claim_id="$(control_claim_create)"
+  fi
+  section "Approve this node in the web console"
+  kv "claim id" "$claim_id"
+  kv "hostname" "$(hostname)"
+  kv "machine fingerprint" "$(control_machine_id_hash)"
+  info "waiting for approval (Ctrl-C to stop)"
+  control_claim_poll_wait "$claim_id"
+}
+
+# --- USB provisioning ----------------------------------------------------------
+# A stick carrying alwayswork.toml provisions the node with zero typing:
+#
+#   hostname    = "node-01"
+#   profile     = "worker"
+#   control_url = "https://control.example.com"
+#   join_token  = "aj_..."        # single-use, created in the web console
+
+usb_toml_get() {
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$1" 2>/dev/null | head -n1
+}
+
+# Echo the path of a provisioning file, or return 1. Checks already-mounted
+# media first, then read-only mounts removable partitions that aren't mounted.
+control_usb_find_provision() {
+  local d
+  for d in /run/media/*/*/alwayswork.toml /media/*/alwayswork.toml; do
+    [[ -f "$d" ]] && { printf '%s\n' "$d"; return 0; }
+  done
+  # The block-device scan mounts things: never do that in a dry run.
+  [[ "$DRY_RUN" == "1" ]] && return 1
+  have lsblk || return 1
+  local dev mnt tmp
+  while read -r dev; do
+    [[ -b "$dev" ]] || continue
+    findmnt -n "$dev" >/dev/null 2>&1 && continue
+    mnt="$(mktemp -d)" || continue
+    if mount -o ro "$dev" "$mnt" 2>/dev/null; then
+      if [[ -f "$mnt/alwayswork.toml" ]]; then
+        tmp="$(mktemp)"
+        cp "$mnt/alwayswork.toml" "$tmp"
+        umount "$mnt" 2>/dev/null || true
+        rmdir "$mnt" 2>/dev/null || true
+        printf '%s\n' "$tmp"
+        return 0
+      fi
+      umount "$mnt" 2>/dev/null || true
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+  done < <(lsblk -rno NAME,RM,TYPE 2>/dev/null | awk '$2==1 && $3=="part" {print "/dev/"$1}')
+  return 1
+}
+
+control_usb_apply() {
+  local toml="$1" token url host prof
+  token="$(usb_toml_get "$toml" join_token)"
+  [[ -n "$token" ]] || { warn "provision: no join_token in $toml"; return 1; }
+  cfg_require
+  cfg_need
+  url="$(usb_toml_get "$toml" control_url)"
+  host="$(usb_toml_get "$toml" hostname)"
+  prof="$(usb_toml_get "$toml" profile)"
+  [[ -n "$url" ]] && cfg_set_str '.control.url' "$url"
+  [[ -n "$host" ]] && run hostnamectl set-hostname "$host"
+  [[ -n "$prof" ]] && cfg_set_str '.profile' "$prof"
+  if [[ -z "$(cfg_get '.agent.user' '')" ]]; then
+    cfg_set_str '.agent.user' "${SUDO_USER:-$(id -un)}"
+  fi
+  log "provision: enrolling from USB provisioning file"
+  control_enroll_with_token "$token"
+  run rm -f "$(decommission_marker)"
+  run systemctl enable --now alwayswork-agent.service 2>/dev/null || true
+  run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
+  ok "provisioned from USB as $(control_device_id)"
+}
+
+# A consumed provisioning file must not linger: the token in it is single-use
+# and now burned. Temp copies are shredded; the operator's stick just gets the
+# file renamed so the next boot does not retry a dead token.
+control_usb_consume() {
+  local toml="$1"
+  if [[ "$toml" == /tmp/* ]]; then
+    if have shred; then run shred -u "$toml" 2>/dev/null || run rm -f "$toml"
+    else run rm -f "$toml"; fi
+  else
+    run mv "$toml" "$toml.consumed" 2>/dev/null || true
+  fi
+}
+
+# --- decommission ----------------------------------------------------------------
+# Node lifecycle, Kubernetes-style: draining -> tombstoned -> wiped. Every
+# phase is idempotent and recorded in $AW_STATE/decommission.json, so a reboot
+# or a failed run resumes instead of redoing or skipping work. Nothing here is
+# ever automatic: it always starts from an explicit operator decision, either
+# `aw decommission` on the box or Decommission in the web console (which the
+# agent observes as device_state=draining on its next tick).
+
+decommission_marker() { echo "$AW_STATE/decommission.json"; }
+
+decommission_phase_done() {
+  [[ "$DRY_RUN" == "1" ]] && return 1
+  jq -e --arg p "$1" '.phases // [] | index($p) != null' "$(decommission_marker)" >/dev/null 2>&1
+}
+
+decommission_mark_phase() {
+  local phase="$1" m t
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  m="$(decommission_marker)"
+  ensure_dir "$AW_STATE"
+  if [[ -f "$m" ]]; then
+    jq --arg p "$phase" '.phases += [$p] | .phases |= unique' "$m" > "$m.tmp" \
+      && mv "$m.tmp" "$m"
+  else
+    t="$(date +%s)"
+    jq -n --arg p "$phase" --argjson t "$t" \
+      '{started_at:$t, phases:[$p], plane:"unknown", complete:false}' > "$m"
+  fi
+  chmod 600 "$m" 2>/dev/null || true
+}
+
+decommission_set_plane() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local m; m="$(decommission_marker)"
+  [[ -f "$m" ]] || return 0
+  jq --arg v "$1" '.plane = $v' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+}
+
+decommission_in_progress() {
+  [[ "$DRY_RUN" == "1" ]] && return 1
+  [[ -f "$(decommission_marker)" ]] || return 1
+  ! decommission_completed
+}
+
+decommission_completed() {
+  [[ "$DRY_RUN" == "1" ]] && return 1
+  jq -e '.complete == true' "$(decommission_marker)" >/dev/null 2>&1
+}
+
+# decommission_run <local_only> — all phases, non-interactive. Safe to call
+# from `aw decommission`, the agent tick, or first-boot provisioning.
+decommission_run() {
+  local local_only="${1:-0}"
+  _DECOM_DEVICE_ID="$(control_device_id)"
+  _DECOM_HOSTNAME="$(hostname)"
+  decommission_phase_drain || return 1
+  decommission_phase_revoke "$local_only" || return 1
+  decommission_phase_wipe || return 1
+  decommission_phase_report
+}
+
+decommission_phase_drain() {
+  decommission_phase_done drain && { info "decommission: drain already done"; return 0; }
+  log "decommission: draining workloads (keeping core, network and the agent)"
+  local -a keep=(core control.join access.tunnel access.tailscale)
+  local -a targets=() known=() ordered=()
+  local c k skip
+  while IFS= read -r c; do
+    [[ -z "$c" ]] && continue
+    skip=0
+    for k in "${keep[@]}"; do [[ "$c" == "$k" ]] && { skip=1; break; }; done
+    (( skip )) && continue
+    targets+=("$c")
+  done < <(cfg_list '.capabilities.enabled')
+  if (( "${#targets[@]}" > 0 )); then
+    # Reverse dependency order: dependents come down before their deps.
+    for c in "${targets[@]}"; do
+      cap_valid_id "$c" && cap_exists "$c" 2>/dev/null && known+=("$c")
+    done
+    if (( "${#known[@]}" > 0 )); then
+      mapfile -t ordered < <(cap_resolve "${known[@]}" 2>/dev/null) || ordered=("${targets[@]}")
+    else
+      ordered=("${targets[@]}")
+    fi
+    local i cap
+    for (( i = "${#ordered[@]}" - 1; i >= 0; i-- )); do
+      cap="${ordered[i]}"
+      cap_is_enabled "$cap" || continue
+      log "decommission: removing $cap"
+      cap_uninstall "$cap" || warn "decommission: uninstall of $cap reported an error; continuing"
+      cfg_list_remove '.capabilities.enabled' "$cap"
+    done
+    # Anything resolve didn't know about still gets uninstalled.
+    for c in "${targets[@]}"; do
+      cap_is_enabled "$c" || continue
+      log "decommission: removing $c"
+      cap_uninstall "$c" || warn "decommission: uninstall of $c reported an error; continuing"
+      cfg_list_remove '.capabilities.enabled' "$c"
+    done
+  fi
+  decommission_mark_phase drain
+}
+
+decommission_phase_revoke() {
+  local local_only="${1:-0}"
+  decommission_phase_done revoke && { info "decommission: revoke already done"; return 0; }
+  if ! control_enrolled; then
+    info "decommission: node was never enrolled; nothing to revoke"
+    decommission_set_plane "none"
+    decommission_mark_phase revoke
+    return 0
+  fi
+  local id; id="$(control_device_id)"
+  log "decommission: asking the control plane to tombstone $id"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] POST /v1/device/$id/decommission"
+    decommission_mark_phase revoke
+    return 0
+  fi
+  local resp rc=1 attempt=0 delay=5
+  while (( attempt < 5 )); do
+    if resp="$(control_call POST "/v1/device/$id/decommission")"; then rc=0; break; fi
+    rc=$?
+    if (( rc == 2 )); then
+      info "decommission: control plane already considers this node gone"
+      rc=0; break
+    fi
+    attempt=$(( attempt + 1 ))
+    warn "decommission: plane revocation failed (attempt $attempt/5); retrying in ${delay}s"
+    sleep "$delay"; delay=$(( delay * 2 ))
+  done
+  if (( rc != 0 )); then
+    if (( local_only )); then
+      warn "decommission: plane unreachable; continuing locally (--local). Remove the node in the web console too."
+      decommission_set_plane "queued"
+      decommission_mark_phase revoke
+      return 0
+    fi
+    err "decommission: control plane unreachable after 5 attempts; re-run with --local to wipe anyway"
+    return 1
+  fi
+  decommission_set_plane "confirmed"
+  decommission_mark_phase revoke
+  return 0
+}
+
+decommission_phase_wipe() {
+  decommission_phase_done wipe && { info "decommission: wipe already done"; return 0; }
+  log "decommission: wiping device identity and secrets"
+  local f
+  # Key material: best-effort shred, then delete. (SSD wear-levelling means
+  # shred is not a guarantee; the tombstone is the real revocation.)
+  for f in "$(control_key_file)" "$(sec_key_file)"; do
+    if [[ -f "$f" ]]; then
+      if have shred; then run shred -u "$f" 2>/dev/null || run rm -f "$f"
+      else run rm -f "$f"; fi
+    fi
+  done
+  run rm -f "$(sec_file)"                 # sops-encrypted secret store
+  run rm -f /etc/cloudflared/token        # tunnel token (0600)
+  run rm -f "$(control_config_file)"      # control.json: deviceId + pollSecret
+  run rm -f "$(control_claim_file)"       # pending claim, if any
+  run rm -f "$AW_STATE/webui.json"
+  # The restic password lives in the secret store (wiped above) and only ever
+  # hits disk as a trapped temp file during a backup run: nothing persists.
+  decommission_mark_phase wipe
+}
+
+decommission_phase_report() {
+  local m plane="unknown"
+  m="$(decommission_marker)"
+  [[ -f "$m" ]] && plane="$(jq -r '.plane // "unknown"' "$m" 2>/dev/null)"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    local t; t="$(date +%s)"
+    jq --argjson t "$t" '.complete = true | .completed_at = $t' "$m" > "$m.tmp" \
+      && mv "$m.tmp" "$m"
+  fi
+  section "node decommissioned"
+  kv "node" "${_DECOM_HOSTNAME:-$(hostname)}"
+  kv "device" "${_DECOM_DEVICE_ID:-never enrolled}"
+  case "$plane" in
+    confirmed) kv "control plane" "tombstoned" ;;
+    queued)    kv "control plane" "NOT notified (--local); remove the node in the web console too" ;;
+    none)      kv "control plane" "was never enrolled; nothing revoked" ;;
+    *)         kv "control plane" "$plane" ;;
+  esac
+  kv "wiped" "device key, age key, secret store, tunnel token, control.json"
+  info "rejoin with: aw enroll --control <url> [--token TOKEN] [--usb]"
+}
+
+# --- enrollment status -----------------------------------------------------------
+
+control_enroll_status() {
+  section "node enrollment"
+  if control_enrolled; then
+    kv "state" "active"
+    kv "device id" "$(control_device_id)"
+    kv "control plane" "$(control_url)"
+  elif [[ -f "$(control_claim_file)" ]]; then
+    kv "state" "pending approval"
+    kv "claim id" "$(jq -r '.claim_id // "?"' "$(control_claim_file)" 2>/dev/null)"
+    info "approve it in the web console; 'aw enroll' resumes the wait"
+  else
+    kv "state" "not enrolled"
+    info "join with: aw enroll --control URL [--token TOKEN] [--usb]"
+  fi
+  if [[ -f "$(decommission_marker)" ]]; then
+    if decommission_completed; then kv "decommission" "complete"
+    else kv "decommission" "in progress (resumes automatically)"; fi
+  fi
+  if [[ -z "${AW_TEST:-}" ]] && systemctl list-unit-files alwayswork-agent.service >/dev/null 2>&1; then
+    kv "agent" "$(systemctl is-active alwayswork-agent.service 2>/dev/null || echo unknown)"
+  fi
 }

@@ -23,7 +23,9 @@ OPERATIONS
   status                    Node, runtime and capability status
   power <status|apply|off>  Headless / always-on power policy
   clean                     Remove orphans, caches and junk
-  enroll --control URL      Announce this worker; wait for console approval
+  enroll --control URL [--token T|--usb]  Announce this worker; USB or console approval
+  enroll --status           Show enrollment / claim / decommission state
+  decommission [--local]    Remove this node from the fleet (drain, tombstone, wipe)
   reset [--purge]           Forget this identity so the node can re-join
   agent [interval]          Report state and reconcile (run as a service)
 
