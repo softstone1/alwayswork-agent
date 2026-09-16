@@ -71,7 +71,7 @@ app_install() {
   log "app: installing $id via $manager"
   case "$manager" in
     pacman) run pacman -S --needed --noconfirm "${pkgs[@]}" ;;
-    paru)   run paru -S --needed --noconfirm "${pkgs[@]}" ;;
+    paru)   run_paru -S --needed --noconfirm "${pkgs[@]}" ;;
     npm)
       have npm || run pacman -S --needed --noconfirm nodejs npm
       run npm install -g "${pkgs[@]}"
