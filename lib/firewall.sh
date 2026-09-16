@@ -86,6 +86,66 @@ fw_allow_iface() {
   fw_rule_track "$cap" "iface:$iface" "-"
 }
 
+fw_close_iface() {
+  local cap="$1" iface="$2"
+  case "$(fw_backend)" in
+    ufw) run ufw delete allow in on "$iface" ;;
+    *)   warn "cannot close interface ${iface}: no firewall backend"; return 1 ;;
+  esac
+  fw_rule_untrack "$cap" "iface:$iface" "-"
+}
+
+# fw_allow_subnet_port CAP SUBNET PORT [PROTO] — open PORT only to sources
+# inside SUBNET (CIDR notation). Narrower than fw_allow_port: for LAN-scoped
+# services like SSH so a default-deny firewall does not leave them reachable
+# from everywhere or reachable nowhere.
+fw_allow_subnet_port() {
+  local cap="$1" subnet="$2" port="$3" proto="${4:-tcp}"
+  case "$(fw_backend)" in
+    ufw) run ufw allow from "$subnet" to any port "$port" proto "$proto" comment "alwayswork:${cap}" ;;
+    firewalld)
+      run firewall-cmd --permanent \
+        --add-rich-rule="rule family=ipv4 source address=$subnet port port=$port protocol=$proto accept"
+      run firewall-cmd --reload ;;
+    *) warn "cannot open ${port}/${proto} for ${subnet}: no firewall backend"; return 1 ;;
+  esac
+  fw_rule_track "$cap" "from:${subnet}:${port}" "$proto"
+}
+
+fw_close_subnet_port() {
+  local cap="$1" subnet="$2" port="$3" proto="${4:-tcp}"
+  case "$(fw_backend)" in
+    ufw) run ufw delete allow from "$subnet" to any port "$port" proto "$proto" ;;
+    firewalld)
+      run firewall-cmd --permanent \
+        --remove-rich-rule="rule family=ipv4 source address=$subnet port port=$port protocol=$proto accept"
+      run firewall-cmd --reload ;;
+    *) warn "cannot close ${port}/${proto} for ${subnet}: no firewall backend"; return 1 ;;
+  esac
+  fw_rule_untrack "$cap" "from:${subnet}:${port}" "$proto"
+}
+
+# fw_close_cap_subnet_ports CAP — close every subnet-scoped port rule tracked
+# under CAP. Used when a LAN-scoped policy (e.g. hardening.ssh=lan) is
+# replaced, so its narrow firewall opening does not linger.
+fw_close_cap_subnet_ports() {
+  local cap="$1" f _cap spec proto rest subnet port
+  local -a pending=()
+  f="$(fw_rules_file)"
+  [[ -f "$f" ]] || return 0
+  while read -r _cap spec proto; do
+    [[ "$_cap" == "$cap" && "$spec" == from:* ]] || continue
+    pending+=("$spec $proto")
+  done <"$f"
+  for spec in "${pending[@]:-}"; do
+    [[ -n "$spec" ]] || continue
+    proto="${spec##* }"; rest="${spec% *}"
+    rest="${rest#from:}"            # <subnet>:<port>
+    port="${rest##*:}"; subnet="${rest%:*}"
+    fw_close_subnet_port "$cap" "$subnet" "$port" "$proto"
+  done
+}
+
 fw_status() {
   local backend; backend="$(fw_backend)"
   kv "firewall" "$backend"
