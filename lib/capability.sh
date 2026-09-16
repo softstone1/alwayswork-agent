@@ -11,8 +11,20 @@ cap_search_dirs() {
   [[ -d "$AW_CAP_USER_DIR" ]] && printf '%s\n' "$AW_CAP_USER_DIR"
 }
 
+# Capability ids become directory names and are sourced as root: anything
+# outside [A-Za-z0-9_.-] (or a ".." traversal) is rejected at every entry
+# point that resolves an id.
+cap_valid_id() {
+  local id="$1"
+  [[ "$id" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  [[ "$id" != *".."* ]] || return 1
+  [[ "$id" != .* && "$id" != *. ]] || return 1
+  return 0
+}
+
 cap_dir() {
   local id="$1" d
+  cap_valid_id "$id" || die "invalid capability id: '$id'"
   while IFS= read -r d; do
     if [[ -f "$d/$id/manifest.yaml" ]]; then printf '%s\n' "$d/$id"; return 0; fi
   done < <(cap_search_dirs)
@@ -115,6 +127,7 @@ cap_add() {
   [[ -f "$src/manifest.yaml" ]] || die "$src is not a capability (missing manifest.yaml)"
   local id; id="$(yq -r '.id' "$src/manifest.yaml")"
   [[ -n "$id" && "$id" != "null" ]] || die "manifest has no id"
+  cap_valid_id "$id" || die "invalid capability id in manifest: '$id'"
   ensure_dir "$AW_CAP_USER_DIR"
   run cp -a "$src" "$AW_CAP_USER_DIR/$id"
   ok "registered capability '$id' from $src"
