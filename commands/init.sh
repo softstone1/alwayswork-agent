@@ -5,9 +5,9 @@ cmd_init() {
   local profile="foundation" name="" tz="" force=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --profile) profile="$2"; shift ;;
-      --name)    name="$2"; shift ;;
-      --timezone|--tz) tz="$2"; shift ;;
+      --profile) [[ -n "${2-}" ]] || die "missing value for --profile"; profile="$2"; shift ;;
+      --name)    [[ -n "${2-}" ]] || die "missing value for --name";    name="$2"; shift ;;
+      --timezone|--tz) [[ -n "${2-}" ]] || die "missing value for $1"; tz="$2"; shift ;;
       --force)   force=1 ;;
       -h|--help) info "usage: aw init [--profile P] [--name N] [--timezone TZ] [--force]"; return 0 ;;
       *) die "unknown option: $1" ;;
