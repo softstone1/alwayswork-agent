@@ -22,15 +22,25 @@ aw_write /usr/local/bin/alwayswork-backup <<'SCRIPT'
 set -euo pipefail
 AW=/usr/local/bin/alwayswork
 CFG=/etc/alwayswork/worker.yaml
-repo="$(yq -r '.backup.repository' "$CFG")"
+# Same key the capability stores via `aw enable backup.restic --repository`
+# (.capabilities.config.backup.restic.repository): reading a different key
+# here meant scheduled backups silently never ran.
+repo="$(yq -r '.capabilities.config["backup.restic"].repository // ""' "$CFG")"
 if [[ -z "$repo" || "$repo" == "null" ]]; then
-  echo "no backup.repository configured in $CFG" >&2
+  echo "no repository configured in $CFG (aw enable backup.restic --repository ...)" >&2
   exit 1
 fi
 export RESTIC_REPOSITORY="$repo"
-export RESTIC_PASSWORD="$("$AW" secrets get RESTIC_PASSWORD)"
+# Never export the password into the process environment (readable via
+# /proc/<pid>/environ): hand restic a 0600 temp file instead, and remove it
+# on EXIT even if the backup fails. No `exec` below — exec would replace this
+# shell before the EXIT trap could run.
+password_file="$(umask 077; mktemp /tmp/alwayswork-restic-pw.XXXXXX)"
+trap 'rm -f "$password_file"' EXIT
+"$AW" secrets get RESTIC_PASSWORD >"$password_file"
+export RESTIC_PASSWORD_FILE="$password_file"
 if ! restic snapshots >/dev/null 2>&1; then restic init; fi
-exec restic backup /etc/alwayswork /srv/alwayswork /var/lib/alwayswork "$@"
+restic backup /etc/alwayswork /srv/alwayswork /var/lib/alwayswork "$@"
 SCRIPT
 run chmod +x /usr/local/bin/alwayswork-backup
 
