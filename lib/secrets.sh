@@ -41,9 +41,11 @@ sec_init() {
   if [[ ! -s "$(sec_file)" ]]; then
     # Encrypt to a scratch file first: a failing sops must never leave a
     # zero-byte store behind, which is unreadable and unrecoverable in place.
+    # umask 077: the store must never be world-readable, even briefly.
     local d; d="$(sec_workdir)"
     printf '{}\n' > "$d/store.yaml"
-    if SOPS_AGE_KEY_FILE="$key" sops -e --age "$pub" "$d/store.yaml" > "$d/out.yaml" 2>/dev/null && [[ -s "$d/out.yaml" ]]; then
+    if ( umask 077; SOPS_AGE_KEY_FILE="$key" sops -e --age "$pub" "$d/store.yaml" > "$d/out.yaml" 2>/dev/null ) \
+        && [[ -s "$d/out.yaml" ]]; then
       mv "$d/out.yaml" "$(sec_file)"
     else
       rm -rf "$d"
@@ -90,7 +92,8 @@ sec_set() {
     printf '{}\n' > "$d/store.yaml"
   fi
   AW_K="$k" AW_V="$v" yq -i '.[strenv(AW_K)] = strenv(AW_V)' "$d/store.yaml"
-  if ! SOPS_AGE_KEY_FILE="$key" sops -e --age "$pub" "$d/store.yaml" > "$d/out.yaml" 2>/dev/null || [[ ! -s "$d/out.yaml" ]]; then
+  if ! ( umask 077; SOPS_AGE_KEY_FILE="$key" sops -e --age "$pub" "$d/store.yaml" > "$d/out.yaml" 2>/dev/null ) \
+      || [[ ! -s "$d/out.yaml" ]]; then
     rm -rf "$d"
     die "could not encrypt the secret store for $pub"
   fi
@@ -106,6 +109,8 @@ sec_env() {
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '    [dry-run] decrypt secrets to %s\n' "$dest" >&2; return 0
   fi
-  SOPS_AGE_KEY_FILE="$(sec_key_file)" sops -d "$(sec_file)" > "$dest"
+  # umask 077: the plaintext secrets file must never be world-readable, even
+  # briefly between creation and the chmod below.
+  ( umask 077; SOPS_AGE_KEY_FILE="$(sec_key_file)" sops -d "$(sec_file)" > "$dest" )
   chmod 600 "$dest"
 }
