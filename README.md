@@ -137,6 +137,12 @@ section leaves any existing tunnel state alone. The token is consumed **only**
 from this verified channel — if signature verification fails, nothing is
 applied.
 
+One-time control-plane setup, on the operator's own machine:
+`npx wrangler secret put CLOUDFLARE_API_TOKEN`. Its plaintext lives in authd
+as a use-only credential — no agent can retrieve or set it, and the deploy
+pipeline does not set it. Everything after that step, per node, is just the
+two human actions above.
+
 **Deferred lockdown.** The installer never hardens SSH: cutting it at install
 time would strand the box before the tunnel is verified. The lockdown (public
 SSH off, firewall default-deny, per the `hardening.ssh` policy) happens later,
