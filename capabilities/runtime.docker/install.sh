@@ -1,7 +1,7 @@
 # alwayswork capability: runtime.docker
 
 log "runtime.docker: installing docker"
-run pacman -S --needed --noconfirm docker docker-compose
+pkg_install docker docker-compose
 
 if [[ -f /etc/docker/daemon.json ]]; then
   warn "runtime.docker: /etc/docker/daemon.json exists; leaving it untouched"
