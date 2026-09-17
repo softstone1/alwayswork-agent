@@ -53,7 +53,7 @@ app_is_installed() {
   pkg="$(app_packages "$id" | head -1)"
   [[ -n "$pkg" ]] || return 1
   case "$manager" in
-    pacman|paru) pacman -Q "$pkg" >/dev/null 2>&1 ;;
+    pacman|paru) pkg_is_installed "$pkg" ;;
     npm)         have npm && npm ls -g --depth=0 2>/dev/null | grep -q -- "$(printf '%s' "$pkg" | sed 's#^@[^/]*/##')" ;;
     pipx)        have pipx && pipx list --short 2>/dev/null | grep -qi -- "$pkg" ;;
     *)           return 1 ;;
@@ -70,14 +70,18 @@ app_install() {
 
   log "app: installing $id via $manager"
   case "$manager" in
-    pacman) run pacman -S --needed --noconfirm "${pkgs[@]}" ;;
-    paru)   run_paru -S --needed --noconfirm "${pkgs[@]}" ;;
+    pacman) pkg_install "${pkgs[@]}" ;;
+    paru)
+      # No AUR off Arch: refuse loudly instead of feeding AUR package names
+      # (e.g. cloudflared-bin) to apt, which would fail obscurely.
+      distro_is_arch || die "app '$id' is AUR-only (paru); the AUR exists only on Arch-based systems"
+      run_paru -S --needed --noconfirm "${pkgs[@]}" ;;
     npm)
-      have npm || run pacman -S --needed --noconfirm nodejs npm
+      have npm || pkg_install nodejs npm
       run npm install -g "${pkgs[@]}"
       ;;
     pipx)
-      have pipx || run pacman -S --needed --noconfirm python-pipx
+      have pipx || pkg_install python-pipx
       run pipx install "${pkgs[@]}"
       ;;
     *) die "unknown manager '$manager' for app '$id'" ;;
@@ -95,7 +99,12 @@ app_remove() {
 
   log "app: removing $id via $manager"
   case "$manager" in
-    pacman|paru) run pacman -Rns --noconfirm "${pkgs[@]}" 2>/dev/null || run pacman -Rdd --noconfirm "${pkgs[@]}" ;;
+    pacman|paru)
+      if distro_is_arch; then
+        run pacman -Rns --noconfirm "${pkgs[@]}" 2>/dev/null || run pacman -Rdd --noconfirm "${pkgs[@]}"
+      else
+        pkg_remove "${pkgs[@]}"
+      fi ;;
     npm)         run npm uninstall -g "${pkgs[@]}" ;;
     pipx)        run pipx uninstall "${pkgs[@]}" ;;
     *) die "unknown manager '$manager' for app '$id'" ;;
