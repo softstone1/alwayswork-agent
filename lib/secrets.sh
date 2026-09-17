@@ -103,6 +103,17 @@ sec_set() {
   ok "secret '$k' stored"
 }
 
+# sec_set_stdin <key> — like sec_set, but the value is read from stdin so it
+# never appears on a command line (visible to every local user via /proc).
+# Use this for secrets that arrive programmatically — e.g. the tunnel token
+# from signed desired-state — instead of `aw secrets set KEY <value>`.
+sec_set_stdin() {
+  local k="$1" v
+  v="$(cat)" || die "could not read the secret value from stdin"
+  [[ -n "$v" ]] || die "refusing to store an empty secret for '$k'"
+  sec_set "$k" "$v"
+}
+
 sec_env() {
   local dest="$1"
   sec_exists || die "no secret store yet; run: aw secrets init"
