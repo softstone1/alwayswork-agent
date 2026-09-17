@@ -393,6 +393,21 @@ if have yq; then
   check "app install picks apt on debian" 'AW_OS_RELEASE="$TMP/os/fam-debian" run_aw --dry-run app install ripgrep && has "apt-get install"'
 fi
 
+echo "== pinned hashes =="
+# Regression: a corrupted pinned hash (not exactly 64 hex chars) can never
+# match a real sha256, so the verified download always fails. The Contabo
+# zero-touch acceptance caught SOPS_SHA256_AMD64 with a duplicated tail
+# segment: the installer aborted before enrollment and no pending claim ever
+# appeared. Every pinned hash must be exactly 64 lowercase hex chars.
+hash_bad=0
+while IFS= read -r hv; do
+  if [[ ! "$hv" =~ ^[0-9a-f]{64}$ ]]; then
+    hash_bad=1; printf '  bad pinned hash: %s\n' "$hv"
+  fi
+done < <(grep -oE '_SHA256_[A-Z0-9_]+="[0-9a-fA-F]*"' "$ROOT/install.sh" | grep -oE '"[^"]*"' | tr -d '"')
+check "pinned sha256 values are 64 hex chars" '[[ "$hash_bad" == "0" ]]'
+check "pinned hashes exist" '[[ "$(grep -oE "_SHA256_[A-Z0-9_]+=" "$ROOT/install.sh" | wc -l)" -ge 1 ]]'
+
 echo "== install.sh sops =="
 
 # Exercise install.sh's dependency logic without touching the host: source the
@@ -468,17 +483,17 @@ shas() { grep -q "$1" "$TMP/sops.out"; }
 check "sops present skips download" \
   'printf "#!/bin/sh\n" > "$TMP/sopsbin/sops"; chmod +x "$TMP/sopsbin/sops"; sops_probe "$ROOT" present && shas "sops present" && [[ ! -e "$TMP/curl-marker" ]]'
 check "debian installs verified sops deb" \
-  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b" sops_probe "$ROOT" install && shas "sha256 verified" && grep -q "dpkg -i .*/sops_3.13.3_amd64.deb" "$PKGLOG" && shas "sops installed"'
-check "debian refuses sops on checksum mismatch" \
-  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="deadbeef" sops_probe "$ROOT" install; rc=$?; [[ $rc -ne 0 ]] && shas "checksum mismatch"'
-check "debian fails clearly when sops download fails" \
-  'rm -f "$TMP/sopsbin/sops"; CURL_FAIL=1 sops_probe "$ROOT" install; rc=$?; [[ $rc -ne 0 ]] && shas "could not download sops"'
-check "debian refuses sops on unknown arch" \
-  'rm -f "$TMP/sopsbin/sops"; UNAME_M="riscv64" sops_probe "$ROOT" install; rc=$?; [[ $rc -ne 0 ]] && shas "no sops .deb for riscv64"'
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f3b" sops_probe "$ROOT" install && shas "sha256 verified" && grep -q "dpkg -i .*/sops_3.13.3_amd64.deb" "$PKGLOG" && shas "sops installed"'
+check "debian skips sops on checksum mismatch (non-fatal)" \
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="deadbeef" sops_probe "$ROOT" install && shas "checksum mismatch" && shas "refusing to install"'
+check "debian continues without sops when download fails" \
+  'rm -f "$TMP/sopsbin/sops"; CURL_FAIL=1 sops_probe "$ROOT" install && shas "could not download sops"'
+check "debian continues without sops on unknown arch" \
+  'rm -f "$TMP/sopsbin/sops"; UNAME_M="riscv64" sops_probe "$ROOT" install && shas "no sops .deb for riscv64"'
 check "debian retries sops install after fixing deps" \
-  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b" DPKG_FAIL_ONCE=1 sops_probe "$ROOT" install && grep -qx "apt-get install -f -y" "$PKGLOG" && [[ "$(grep -c "^dpkg -i" "$PKGLOG")" == "2" ]] && shas "sops installed"'
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f3b" DPKG_FAIL_ONCE=1 sops_probe "$ROOT" install && grep -qx "apt-get install -f -y" "$PKGLOG" && [[ "$(grep -c "^dpkg -i" "$PKGLOG")" == "2" ]] && shas "sops installed"'
 check "debian apt list excludes sops" \
-  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b" sops_probe "$ROOT" deps && grep -qx "apt-get install -y git curl jq openssl age restic ufw" "$PKGLOG" && ! grep -q "^apt-get.*sops" "$PKGLOG"'
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f3b" sops_probe "$ROOT" deps && grep -qx "apt-get install -y git curl jq openssl age restic ufw" "$PKGLOG" && ! grep -q "^apt-get.*sops" "$PKGLOG"'
 check "arch pacman still installs sops from repos" \
   'sops_probe "$ROOT" archdeps && grep -qx "pacman -Syu --needed --noconfirm git curl jq openssl age restic ufw sops" "$PKGLOG"'
 
