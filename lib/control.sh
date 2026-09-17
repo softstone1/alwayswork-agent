@@ -69,6 +69,32 @@ _control_is_revoked() {
   return 1
 }
 
+# --- secret hygiene for curl -----------------------------------------------------
+# Request bodies and secret headers must never appear on a process argument
+# vector: any local user can read argv via ps(1). _secret_file writes its first
+# argument to a 0600 temp file and stores the path in the variable named by
+# its second argument; callers then pass the path to curl as --data @file
+# (bodies) or --config file (secret headers). The file is removed explicitly
+# on the normal path; the EXIT trap covers abnormal exits (die).
+# Callers must clear the trap (trap - EXIT) after removing the file, matching
+# the existing mktemp/trap idiom used in control_apply_delivery.
+# _secret_file <content> <varname> — write $1 to a 0600 temp file and store the
+# path in $2. Call it directly, never in a command substitution: a trap set
+# inside $(...) fires when the substitution ends, deleting the file before the
+# caller can use it.
+_secret_file() {
+  local f
+  f="$(mktemp "${TMPDIR:-/tmp}/aw-secret.XXXXXX")" || return 1
+  chmod 600 "$f"
+  printf '%s' "$1" > "$f"
+  # Expanded now, not when the trap fires: the path comes from our own mktemp
+  # template (no quotes or spaces possible), so baking it in is safe and the
+  # cleanup works no matter when the shell exits.
+  # shellcheck disable=SC2064
+  trap "rm -f '$f'" EXIT
+  printf -v "$2" '%s' "$f"
+}
+
 # control_call METHOD PATH [BODY] — signed device request.
 #
 # Prints the response body on stdout. Returns 0 on success, 1 on transient
@@ -104,11 +130,19 @@ $bodyhash"
     -H "x-nonce: $nonce"
     -H "x-signature: $sig"
     -w '\n%{http_code}')
-  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data "$body")
+  # The body travels via a 0600 temp file, never on curl's argv: a future
+  # caller must be able to put secret material here without a ps(1) leak.
+  local bodyfile=""
+  if [[ -n "$body" ]]; then
+    _secret_file "$body" bodyfile || { warn "control: cannot stage request body"; return 1; }
+    args+=(-H 'content-type: application/json' --data @"$bodyfile")
+  fi
   if ! resp="$(curl "${args[@]}" 2>/dev/null)"; then
+    if [[ -n "$bodyfile" ]]; then rm -f "$bodyfile"; trap - EXIT; fi
     warn "control: $method $signed_path failed (network)"
     return 1
   fi
+  if [[ -n "$bodyfile" ]]; then rm -f "$bodyfile"; trap - EXIT; fi
   http="${resp##*$'\n'}"; resp="${resp%$'\n'*}"
   if _control_is_revoked "$resp"; then
     printf '%s' "$resp"
@@ -204,9 +238,14 @@ control_enroll_with_token() {
      + (if $token == "" then {} else {joinToken:$token} end)')"
 
   log "control: announcing this worker"
-  local resp id secret
-  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")" \
+  local resp id secret bodyfile
+  # The payload carries the join token: it must never appear on curl's argv
+  # (visible via ps), so it travels through a 0600 temp file instead. On the
+  # die path the EXIT trap installed by _secret_file removes the file.
+  _secret_file "$payload" bodyfile || die "control: cannot stage enrollment request"
+  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data @"$bodyfile")" \
     || die "control: POST /v1/enroll failed (network)"
+  rm -f "$bodyfile"; trap - EXIT
   id="$(jq -r '.deviceId // ""' <<<"$resp")"
   secret="$(jq -r '.pollSecret // ""' <<<"$resp")"
   if [[ -z "$id" ]]; then
@@ -227,10 +266,17 @@ control_enroll_with_token() {
   control_wait_approval "$id" "$secret"
 }
 control_wait_approval() {
-  local id="$1" secret="$2" resp state
+  local id="$1" secret="$2" resp state cfg esc_secret
+  # The poll secret is a credential: curl has no -H @file, so it travels in a
+  # 0600 --config file instead of on the argv header (visible via ps). Escape
+  # for curl's config parser, where only \" and \\ are special inside quotes.
+  esc_secret="${secret//\\/\\\\}"
+  esc_secret="${esc_secret//\"/\\\"}"
+  _secret_file "header = \"x-poll-secret: $esc_secret\"" cfg \
+    || die "control: cannot stage approval poll"
   info "waiting for approval in the console (Ctrl-C to stop)"
   while :; do
-    if ! resp="$(curl -sS --connect-timeout 5 --max-time 30 "$(control_url)/v1/enroll/$id" -H "x-poll-secret: $secret")"; then
+    if ! resp="$(curl -sS --connect-timeout 5 --max-time 30 --config "$cfg" "$(control_url)/v1/enroll/$id")"; then
       warn "control: approval poll failed (network); retrying"
       sleep 3
       continue
@@ -238,6 +284,7 @@ control_wait_approval() {
     state="$(jq -r '.state // "unknown"' <<<"$resp")"
     case "$state" in
       approved) ok "approved"
+               rm -f "$cfg"; trap - EXIT
                control_apply_delivery "$resp" || die "control: initial apply failed"
                return 0 ;;
       pending)  sleep 3 ;;
@@ -425,15 +472,19 @@ control_machine_id_hash() {
 
 control_claim_create() {
   control_ensure_key
-  local payload resp claim_id expires
+  local payload resp claim_id expires bodyfile
   payload="$(jq -n \
     --arg pk "$(control_pubkey_b64)" \
     --arg host "$(hostname)" \
     --arg mid "$(control_machine_id_hash)" \
     '{device_pubkey:$pk, hostname:$host, machine_id_hash:$mid}')"
+  # Device identity travels via a 0600 temp file, never on curl's argv. On the
+  # die path the EXIT trap installed by _secret_file removes the file.
+  _secret_file "$payload" bodyfile || die "control: cannot stage claim request"
   resp="$(curl -sS --connect-timeout 5 --max-time 30 -X POST "$(control_url)/v1/claims" \
-    -H 'content-type: application/json' --data "$payload")" \
+    -H 'content-type: application/json' --data @"$bodyfile")" \
     || die "control: POST /v1/claims failed (network)"
+  rm -f "$bodyfile"; trap - EXIT
   claim_id="$(jq -r '.claim_id // ""' <<<"$resp")"
   expires="$(jq -r '.expires_at // ""' <<<"$resp")"
   if [[ -z "$claim_id" ]]; then
