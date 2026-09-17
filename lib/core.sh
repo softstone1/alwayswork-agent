@@ -75,7 +75,12 @@ run_masked() {
 # directly as the current user. Dies loudly only when root with no unprivileged
 # user to drop to, rather than failing obscurely inside paru. Never dies in
 # dry-run: a would-be install is printed, not executed.
+# Paru is an AUR helper: Arch-family only. The `have` guard keeps core.sh
+# usable when lib/distro.sh was not sourced (e.g. standalone test scripts).
 run_paru() {
+  if have distro_is_arch && ! distro_is_arch; then
+    die "paru/AUR is only available on Arch-based systems (this is $(distro_pretty))"
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '    %s[dry-run]%s paru %s\n' "$C_DIM" "$C_RESET" "$*" >&2
     return 0
