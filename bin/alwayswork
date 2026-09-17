@@ -26,12 +26,16 @@ source "$AW_ROOT/lib/hardware.sh"
 source "$AW_ROOT/lib/engine.sh"
 # shellcheck source=../lib/firewall.sh
 source "$AW_ROOT/lib/firewall.sh"
+# shellcheck source=../lib/hardening.sh
+source "$AW_ROOT/lib/hardening.sh"
 # shellcheck source=../lib/secrets.sh
 source "$AW_ROOT/lib/secrets.sh"
 # shellcheck source=../lib/snapshot.sh
 source "$AW_ROOT/lib/snapshot.sh"
 # shellcheck source=../lib/capability.sh
 source "$AW_ROOT/lib/capability.sh"
+# shellcheck source=../lib/tunnel.sh
+source "$AW_ROOT/lib/tunnel.sh"
 # shellcheck source=../lib/power.sh
 source "$AW_ROOT/lib/power.sh"
 # shellcheck source=../lib/apps.sh
