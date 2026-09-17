@@ -24,7 +24,10 @@
 # tunnel section (start on first receipt, restart on rotation) instead of
 # going through the node's capability list, so a later delivery WITHOUT a
 # tunnel section can never tear the tunnel down: absence of the section
-# leaves existing tunnel state untouched.
+# leaves existing tunnel state untouched. An explicit `"tunnel": null`
+# (no tunnel provisioned, or the node opted out) is treated exactly like
+# absence — a no-op. Teardown is only ever driven by explicit local operator
+# action, never by a delivery.
 
 tunnel_secret_key() { printf 'CLOUDFLARE_TUNNEL_TOKEN\n'; }
 tunnel_state_file() { printf '%s\n' "$AW_STATE/tunnel.json"; }
