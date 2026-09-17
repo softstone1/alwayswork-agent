@@ -1,7 +1,7 @@
 # alwayswork capability: backup.restic
 
 log "backup.restic: installing restic"
-run pacman -S --needed --noconfirm restic
+pkg_install restic
 sec_init
 
 if ! sec_has RESTIC_PASSWORD; then
