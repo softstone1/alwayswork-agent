@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# alwayswork — secure, capability-based bootstrapper for Arch/CachyOS mini PCs.
+# alwayswork — secure, capability-based bootstrapper for Linux mini PCs.
 set -euo pipefail
 
 SELF="${BASH_SOURCE[0]}"
@@ -16,6 +16,8 @@ export PATH="$AW_ROOT/bin:$PATH"
 
 # shellcheck source=../lib/core.sh
 source "$AW_ROOT/lib/core.sh"
+# shellcheck source=../lib/distro.sh
+source "$AW_ROOT/lib/distro.sh"
 # shellcheck source=../lib/config.sh
 source "$AW_ROOT/lib/config.sh"
 # shellcheck source=../lib/hardware.sh
