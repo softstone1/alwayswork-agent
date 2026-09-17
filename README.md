@@ -1,6 +1,6 @@
 # AlwaysWork
 
-**Install a secured foundation on any CachyOS / Arch mini PC, then grow it one capability at a time.**
+**Install a secured foundation on any Arch- or Debian-family Linux mini PC, then grow it one capability at a time.**
 
 AlwaysWork turns a mini PC into a self-hosted AlwaysWork node. The installer
 lays down a *complete, locked-down foundation* — firewall, snapshots, encrypted
@@ -112,7 +112,7 @@ Full protocol, API sketch and security model: `docs/ENROLLMENT.md`.
 | **Opt-in surface** | Nothing opens a port or installs a service until you enable it. |
 | **Flexible runtime** | Docker, Podman, or none. Limits are tunable defaults, not walls. |
 | **Reversible** | Snapshots before updates; every capability can be cleanly removed. |
-| **Portable** | Bash + a handful of packages. x86_64 or aarch64 Arch-based systems. |
+| **Portable** | Bash + a handful of packages. x86_64 or aarch64, Arch- or Debian-family systems. |
 
 See `docs/DESIGN.md`, `docs/CAPABILITIES.md`, `docs/SECURITY.md`,
 `docs/ROLLOUT.md`, `docs/ENROLLMENT.md` and `docs/AGENT_BOOTSTRAP.md`.
