@@ -17,11 +17,7 @@ cmd_update() {
 
   log "Upgrading packages"
   local rc=0
-  if have paru; then
-    run_paru -Syu --noconfirm || rc=$?
-  else
-    run pacman -Syu --noconfirm || rc=$?
-  fi
+  pkg_upgrade || rc=$?
 
   if (( rc != 0 )); then
     err "package upgrade failed (exit $rc)"

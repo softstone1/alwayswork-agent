@@ -9,6 +9,14 @@ FAIL=0
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# The CLI is distro-aware: pin an Arch-family os-release for the suite so the
+# legacy dry-run assertions (which expect pacman output) stay deterministic
+# on any host. The == distro == section below covers the full family matrix
+# with per-probe overrides.
+mkdir -p "$TMP/os"
+printf 'ID=cachyos\nID_LIKE=arch\nPRETTY_NAME="CachyOS Linux"\n' > "$TMP/os/arch"
+export AW_OS_RELEASE="$TMP/os/arch"
+
 ok()  { PASS=$(( PASS + 1 )); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$(( FAIL + 1 )); printf '  FAIL %s\n' "$1"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
@@ -276,6 +284,113 @@ if have yq; then
   check "decommission dry-run writes nothing" 'run_aw --dry-run --yes decommission >/dev/null && [[ ! -e "$AW_STATE/decommission.json" ]]'
   check "decommission dry-run summarizes"     'run_aw --dry-run --yes decommission && has "decommissioned"'
   check "provision dry-run is a no-op"        'run_aw --dry-run provision >/dev/null && [[ ! -e "$AW_STATE/decommission.json" ]]'
+fi
+
+echo "== distro =="
+
+# Mock os-release files for the family matrix ($TMP/os/arch is the suite-wide
+# Arch pin created at the top of this file).
+printf 'ID=arch\nPRETTY_NAME="Arch Linux"\n'                             > "$TMP/os/fam-arch"
+printf 'ID=endeavouros\nID_LIKE=arch\nPRETTY_NAME="EndeavourOS"\n'        > "$TMP/os/fam-endeavouros"
+printf 'ID=garuda-linux\nID_LIKE=arch\nPRETTY_NAME="Garuda Linux"\n'     > "$TMP/os/fam-garuda"
+printf 'ID=debian\nPRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\n'       > "$TMP/os/fam-debian"
+printf 'ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu 24.04 LTS"\n'     > "$TMP/os/fam-ubuntu"
+printf 'ID=kali\nID_LIKE=debian\nPRETTY_NAME="Kali GNU/Linux"\n'         > "$TMP/os/fam-kali"
+printf 'ID=pop\nID_LIKE="ubuntu debian"\nPRETTY_NAME="Pop!_OS 22.04"\n'  > "$TMP/os/fam-pop"
+printf 'ID=fedora\nPRETTY_NAME="Fedora Linux 42"\n'                     > "$TMP/os/fam-fedora"
+printf 'PRETTY_NAME="Mystery OS"\n'                                     > "$TMP/os/fam-noid"
+
+# Probe: source core+distro with a mocked os-release, then run one function.
+cat > "$TMP/distro-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; shift
+export AW_OS_RELEASE="$1"; shift
+export AW_ROOT="$ROOT"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/distro.sh"
+"$@"
+EOS
+probe() { bash "$TMP/distro-probe.sh" "$ROOT" "$TMP/os/$1" "${@:2}"; }
+
+check "cli sources distro lib" 'grep -q "lib/distro.sh" "$ROOT/bin/alwayswork"'
+check "detect arch"            '[ "$(probe fam-arch distro_family)" == "arch" ]'
+check "detect cachyos"         '[ "$(probe arch distro_family)" == "arch" ]'
+check "detect endeavouros"     '[ "$(probe fam-endeavouros distro_family)" == "arch" ]'
+check "detect garuda via ID_LIKE" '[ "$(probe fam-garuda distro_family)" == "arch" ]'
+check "detect debian"          '[ "$(probe fam-debian distro_family)" == "debian" ]'
+check "detect ubuntu"          '[ "$(probe fam-ubuntu distro_family)" == "debian" ]'
+check "detect kali"            '[ "$(probe fam-kali distro_family)" == "debian" ]'
+check "detect pop"             '[ "$(probe fam-pop distro_family)" == "debian" ]'
+check "detect fedora unknown"  '[ "$(probe fam-fedora distro_family)" == "unknown" ]'
+check "detect missing ID unknown" '[ "$(probe fam-noid distro_family)" == "unknown" ]'
+check "detect missing file unknown" '[ "$(bash "$TMP/distro-probe.sh" "$ROOT" "$TMP/os/nope" distro_family)" == "unknown" ]'
+check "unknown distro refuses" '! probe fam-fedora distro_require >/dev/null 2>&1'
+check "unknown refusal names the ID" 'out="$(probe fam-fedora distro_require 2>&1 || true)"; grep -q "ID=.fedora." <<<"$out"'
+
+# Stub package managers that log their argv instead of touching the host.
+mkdir -p "$TMP/stubbin"
+export PKGLOG="$TMP/pkglog" INSTALLED_PKGS=""
+: > "$PKGLOG"
+cat > "$TMP/stubbin/pacman" <<'EOS'
+#!/bin/bash
+echo "pacman $*" >> "$PKGLOG"
+if [[ "${1:-}" == "-Q" && -n "${2:-}" ]]; then
+  case " $INSTALLED_PKGS " in *" $2 "*) exit 0;; *) exit 1;; esac
+fi
+exit 0
+EOS
+cat > "$TMP/stubbin/apt-get" <<'EOS'
+#!/bin/bash
+echo "apt-get $*" >> "$PKGLOG"
+exit 0
+EOS
+cat > "$TMP/stubbin/dpkg-query" <<'EOS'
+#!/bin/bash
+echo "dpkg-query $*" >> "$PKGLOG"
+pkg="${@: -1}"
+case " $INSTALLED_PKGS " in
+  *" $pkg "*) echo "install ok installed"; exit 0;;
+  *) exit 1;;
+esac
+EOS
+cat > "$TMP/stubbin/paccache" <<'EOS'
+#!/bin/bash
+echo "paccache $*" >> "$PKGLOG"
+exit 0
+EOS
+chmod +x "$TMP/stubbin/"*
+stub_probe() { PATH="$TMP/stubbin:$PATH" probe "$@"; }
+
+check "debian maps python-pipx to pipx"      '[ "$(probe fam-debian distro_pkg python-pipx)" == "pipx" ]'
+check "debian maps python to python3"        '[ "$(probe fam-debian distro_pkg python)" == "python3" ]'
+check "debian maps docker to docker.io"      '[ "$(probe fam-debian distro_pkg docker)" == "docker.io" ]'
+check "debian maps docker-compose to plugin" '[ "$(probe fam-debian distro_pkg docker-compose)" == "docker-compose-plugin" ]'
+check "debian passes through unmapped"       '[ "$(probe fam-debian distro_pkg restic)" == "restic" ]'
+check "arch keeps names as-is"               '[ "$(probe fam-arch distro_pkg python-pipx)" == "python-pipx" ]'
+
+check "arch install uses pacman"   ': > "$PKGLOG"; stub_probe fam-arch pkg_install ripgrep >/dev/null 2>&1 && grep -qx "pacman -S --needed --noconfirm ripgrep" "$PKGLOG"'
+check "debian install uses apt"    ': > "$PKGLOG"; stub_probe fam-debian pkg_install ripgrep >/dev/null 2>&1 && grep -qx "apt-get install -y ripgrep" "$PKGLOG"'
+check "debian install updates apt first" ': > "$PKGLOG"; stub_probe fam-debian pkg_install ripgrep >/dev/null 2>&1 && head -1 "$PKGLOG" | grep -qx "apt-get update"'
+check "debian install translates names" ': > "$PKGLOG"; stub_probe fam-debian pkg_install python-pipx docker >/dev/null 2>&1 && grep -qx "apt-get install -y pipx docker.io" "$PKGLOG"'
+check "arch remove uses pacman"    ': > "$PKGLOG"; stub_probe fam-arch pkg_remove ripgrep >/dev/null 2>&1 && grep -qx "pacman -Rns --noconfirm ripgrep" "$PKGLOG"'
+check "debian remove uses apt purge" ': > "$PKGLOG"; stub_probe fam-debian pkg_remove ripgrep >/dev/null 2>&1 && grep -qx "apt-get purge -y ripgrep" "$PKGLOG"'
+check "arch upgrade uses pacman -Syu" ': > "$PKGLOG"; stub_probe fam-arch pkg_upgrade >/dev/null 2>&1 && grep -qx "pacman -Syu --noconfirm" "$PKGLOG"'
+check "debian upgrade uses apt"    ': > "$PKGLOG"; stub_probe fam-debian pkg_upgrade >/dev/null 2>&1 && grep -qx "apt-get upgrade -y" "$PKGLOG"'
+check "arch orphans query pacman"  ': > "$PKGLOG"; stub_probe fam-arch pkg_orphans_remove >/dev/null 2>&1 && grep -qx "pacman -Qtdq" "$PKGLOG"'
+check "debian orphans use autoremove" ': > "$PKGLOG"; stub_probe fam-debian pkg_orphans_remove >/dev/null 2>&1 && grep -qx "apt-get autoremove -y" "$PKGLOG"'
+check "arch cache prefers paccache" ': > "$PKGLOG"; stub_probe fam-arch pkg_cache_clean >/dev/null 2>&1 && grep -qx "paccache -rk2" "$PKGLOG"'
+check "debian cache uses apt clean" ': > "$PKGLOG"; stub_probe fam-debian pkg_cache_clean >/dev/null 2>&1 && grep -qx "apt-get clean" "$PKGLOG"'
+
+check "arch installed check true"   'INSTALLED_PKGS="ripgrep" stub_probe fam-arch pkg_is_installed ripgrep'
+check "arch installed check false"  '! INSTALLED_PKGS="" stub_probe fam-arch pkg_is_installed ripgrep'
+check "debian installed check true" 'INSTALLED_PKGS="ripgrep" stub_probe fam-debian pkg_is_installed ripgrep'
+check "debian installed check false" '! INSTALLED_PKGS="" stub_probe fam-debian pkg_is_installed ripgrep'
+
+check "run_paru refuses off arch"  '! stub_probe fam-debian run_paru -S foo >/dev/null 2>&1'
+check "run_paru refusal names AUR" 'out="$(stub_probe fam-debian run_paru -S foo 2>&1 || true)"; grep -qi "only available on Arch" <<<"$out"'
+
+if have yq; then
+  check "app install picks apt on debian" 'AW_OS_RELEASE="$TMP/os/fam-debian" run_aw --dry-run app install ripgrep && has "apt-get install"'
 fi
 
 echo "== secret store =="

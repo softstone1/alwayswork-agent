@@ -76,12 +76,15 @@ cmd_bootstrap() {
   section "AlwaysWork bootstrap"
   hw_report
 
-  if ! hw_is_arch; then
-    warn "this does not look like an Arch-based system; continue with care"
-  fi
   if ! hw_is_btrfs; then
     warn "root is not btrfs; snapshot/rollback will be unavailable"
   fi
+
+  case "$(distro_family)" in
+    arch)   : ;;
+    debian) info "Debian-family system detected ($(distro_pretty)); using apt" ;;
+    *)      warn "unsupported distribution '$(distro_id)'; continuing with care" ;;
+  esac
 
   if cfg_bool '.hardening.firewall' true; then
     log "Configuring firewall (default deny inbound)"

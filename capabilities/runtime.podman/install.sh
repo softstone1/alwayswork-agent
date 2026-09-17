@@ -1,7 +1,7 @@
 # alwayswork capability: runtime.podman
 
 log "runtime.podman: installing podman"
-run pacman -S --needed --noconfirm podman podman-compose
+pkg_install podman podman-compose
 
 if cfg_bool '.engine.rootless' true; then
   log "runtime.podman: enabling rootless socket for ${SUDO_USER:-root}"
