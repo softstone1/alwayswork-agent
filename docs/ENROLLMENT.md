@@ -192,7 +192,9 @@ console — the agent takes over with no SSH session:
    command line, never in a log; the store file is 0600 throughout), then the
    agent reconciles `cloudflared` directly: started on first receipt,
    restarted when the token rotates. A delivery with **no** `tunnel` section
-   leaves any existing tunnel state alone. Signature verification failure
+   — or an explicit `"tunnel": null` (no tunnel provisioned, or the node
+   opted out) — leaves any existing tunnel state alone; a null/absent field
+   never tears cloudflared down. Signature verification failure
    means nothing is applied — fail closed, as always.
 
    One-time control-plane setup, on the operator's own machine:
