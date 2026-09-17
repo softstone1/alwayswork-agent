@@ -1,10 +1,39 @@
 # alwayswork capability: access.tunnel
 
 log "access.tunnel: installing cloudflared"
-if pacman -Si cloudflared >/dev/null 2>&1; then
-  run pacman -S --needed --noconfirm cloudflared
+
+# Cloudflare's official apt repository (Codename: any, signed — apt verifies
+# the Release signature against the keyring). The `any` suite works for every
+# Debian-family distro, including rolling ones like Kali that have no
+# per-release suite on pkg.cloudflare.com.
+cloudflared_install_debian() {
+  local keyring=/usr/share/keyrings/cloudflare-main.gpg
+  local list=/etc/apt/sources.list.d/cloudflared.list
+  if [[ ! -f "$keyring" ]]; then
+    log "access.tunnel: adding Cloudflare's apt keyring"
+    run curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o "$keyring"
+    run chmod 644 "$keyring"
+  fi
+  if [[ ! -f "$list" ]]; then
+    log "access.tunnel: adding Cloudflare's apt repository"
+    aw_write "$list" <<'REPO'
+# Managed by alwayswork (access.tunnel)
+deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main
+REPO
+  fi
+  pkg_install cloudflared
+}
+
+if distro_is_arch; then
+  if pacman -Si cloudflared >/dev/null 2>&1; then
+    pkg_install cloudflared
+  else
+    run_paru -S --needed --noconfirm cloudflared-bin
+  fi
+elif distro_is_debian; then
+  cloudflared_install_debian
 else
-  run_paru -S --needed --noconfirm cloudflared-bin
+  distro_require
 fi
 
 domain="$(cap_config domain)"
