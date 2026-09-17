@@ -8,8 +8,14 @@ cmd_secrets() {
   case "$sub" in
     init)   sec_init ;;
     set)
-      [[ $# -ge 2 ]] || die "usage: aw secrets set KEY VALUE"
-      sec_set "$1" "$2" ;;
+      [[ $# -ge 1 ]] || die "usage: aw secrets set KEY [VALUE|--stdin]"
+      if [[ "${2:-}" == "--stdin" ]]; then
+        # Read the value from stdin so it never appears on a command line.
+        sec_set_stdin "$1"
+      else
+        [[ $# -ge 2 ]] || die "usage: aw secrets set KEY [VALUE|--stdin]"
+        sec_set "$1" "$2"
+      fi ;;
     get)
       [[ $# -ge 1 ]] || die "usage: aw secrets get KEY"
       sec_get "$1" ;;
@@ -17,7 +23,7 @@ cmd_secrets() {
     env)
       [[ $# -ge 1 ]] || die "usage: aw secrets env DEST"
       sec_env "$1" ;;
-    -h|--help) info "usage: aw secrets <init|set|get|list|env>" ;;
+    -h|--help) info "usage: aw secrets <init|set KEY [VALUE|--stdin]|get|list|env>" ;;
     *)      die "usage: aw secrets <init|set|get|list|env>" ;;
   esac
 }
