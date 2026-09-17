@@ -1,7 +1,7 @@
 # alwayswork capability: dev.toolchain
 
 log "dev.toolchain: installing language runtimes"
-run pacman -S --needed --noconfirm nodejs npm python python-pip git
+pkg_install nodejs npm python python-pip git
 
 if ! have pnpm; then
   log "dev.toolchain: installing pnpm"
