@@ -415,9 +415,201 @@ sec_set THIRD 'rebuilt' >/dev/null
 [[ "$(sec_get THIRD)" == 'rebuilt' ]] || exit 1
 EOS
   check "secret store round-trip" 'bash "$TMP/store.sh" "$ROOT" "$TMP/store"'
+  # sec_set_stdin must store a value that never appeared on a command line.
+  cat > "$TMP/store-stdin.sh" <<'EOS'
+set -euo pipefail
+ROOT="$1"
+export AW_ROOT="$ROOT"
+export AW_ETC="$2/etc" AW_STATE="$2/state" AW_LOG_DIR="$2/log" AW_CONFIG="$2/etc/worker.yaml"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/secrets.sh"
+sec_init >/dev/null
+printf '%s' 'fake-tunnel-token-123' | sec_set_stdin TUNNEL_TEST_KEY >/dev/null
+[[ "$(sec_get TUNNEL_TEST_KEY)" == 'fake-tunnel-token-123' ]] || exit 1
+EOS
+  check "sec_set_stdin stores from stdin" 'bash "$TMP/store-stdin.sh" "$ROOT" "$TMP/stdin"'
 else
   echo "  skip  secret store (sops/age/mikefarah yq missing)"
 fi
+
+echo "== tunnel from desired-state =="
+# The agent consumes the tunnel token ONLY from the signed desired-state
+# channel. The helper below stubs the secret store (0600 files), the service
+# manager and the config layer, then runs one scenario per invocation,
+# exiting 0 when the agent behaves as expected. Fake tokens only.
+cat > "$TMP/tunnel-apply.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; OUT="$2"
+export AW_ETC="$3" AW_STATE="$4" AW_TEST=1
+SCENARIO="$5"
+AW_ROOT="$ROOT"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/secrets.sh"
+source "$ROOT/lib/capability.sh"
+source "$ROOT/lib/hardening.sh"
+source "$ROOT/lib/tunnel.sh"
+source "$ROOT/lib/control.sh"
+
+mkdir -p "$OUT" "$OUT/store" "$AW_ETC" "$AW_STATE"
+: > "$OUT/calls"
+
+# --- stubs ---------------------------------------------------------------
+sec_backend() { printf '%s\n' "${SEC_BACKEND:-sops}"; }
+sec_get()     { local f="$OUT/store/$1"; [[ -f "$f" ]] && cat "$f"; return 0; }
+sec_set_stdin() {
+  local k="$1" v; v="$(cat)" || return 1
+  [[ -n "$v" ]] || return 1
+  ( umask 077; printf '%s' "$v" > "$OUT/store/$k" )
+  chmod 600 "$OUT/store/$k"
+}
+cap_install()      { printf 'cap_install %s\n' "$1" >> "$OUT/calls"; return "${CAP_INSTALL_RC:-0}"; }
+cfg_set_str()      { printf 'cfg_set_str %s\n' "$1" >> "$OUT/calls"; }
+cfg_get()          { printf '%s\n' "${CFG_GET:-disabled}"; }
+cfg_bool()         { [[ "${CFG_BOOL:-true}" == "true" ]]; }
+fw_ensure()        { printf 'fw_ensure\n' >> "$OUT/calls"; return "${FW_RC:-0}"; }
+apply_ssh_policy() { printf 'apply_ssh_policy %s\n' "${1:-<cfg>}" >> "$OUT/calls"; return "${SSH_RC:-0}"; }
+systemctl() {
+  printf 'systemctl %s\n' "$*" >> "$OUT/calls"
+  case "$1 $2" in
+    "is-active --quiet")                 return "${SYS_ACTIVE_RC:-0}" ;;
+    "list-unit-files cloudflared.service") return "${UNIT_RC:-1}" ;;
+  esac
+  return 0
+}
+
+D="$OUT/delivery.json"
+mk_tunnel_delivery() { # <token> <hostname> — or "none" for no tunnel section
+  if [[ "$1" == "none" ]]; then
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
+  else
+    jq -n --arg t "$1" --arg h "$2" \
+      '{state:"approved",sequence:9,config:{configVersion:9},tunnel:{token:$t,hostname:$h}}' > "$D"
+  fi
+}
+
+case "$SCENARIO" in
+  tunnel-first)
+    mk_tunnel_delivery "FAKE_TOKEN_AAA" "n1.alwayswork.space"
+    tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    [[ "$(cat "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN")" == "FAKE_TOKEN_AAA" ]] || exit 1
+    [[ "$(stat -c %a "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN")" == "600" ]] || exit 1
+    grep -qx "cap_install access.tunnel" "$OUT/calls" || exit 1
+    grep -qx "cfg_set_str .capabilities.config.access.tunnel.domain" "$OUT/calls" || exit 1
+    [[ "$(jq -r .hostname "$AW_STATE/tunnel.json")" == "n1.alwayswork.space" ]] || exit 1
+    [[ "$(jq -r .source "$AW_STATE/tunnel.json")" == "control-plane" ]] || exit 1
+    # The token must never travel as an argument to an external call.
+    ! grep -q "FAKE_TOKEN_AAA" "$OUT/calls" || exit 1
+    ;;
+  tunnel-rotation)
+    printf 'FAKE_TOKEN_AAA' > "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN"
+    chmod 600 "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN"
+    mk_tunnel_delivery "FAKE_TOKEN_BBB" "n1.alwayswork.space"
+    tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    [[ "$(cat "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN")" == "FAKE_TOKEN_BBB" ]] || exit 1
+    grep -qx "cap_install access.tunnel" "$OUT/calls" || exit 1
+    ;;
+  tunnel-same)
+    printf 'FAKE_TOKEN_AAA' > "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN"
+    chmod 600 "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN"
+    mk_tunnel_delivery "FAKE_TOKEN_AAA" "n1.alwayswork.space"
+    tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    grep -qx "cap_install access.tunnel" "$OUT/calls" || exit 1
+    ;;
+  tunnel-absent)
+    mk_tunnel_delivery none ""
+    tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1
+    [[ "$?" == "3" ]] || exit 1
+    [[ ! -e "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN" ]] || exit 1
+    [[ ! -e "$AW_STATE/tunnel.json" ]] || exit 1
+    ! grep -q "cap_install" "$OUT/calls" || exit 1
+    ;;
+  tunnel-empty)
+    mk_tunnel_delivery "" "n1.alwayswork.space"
+    ! tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    [[ ! -e "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN" ]] || exit 1
+    ;;
+  tunnel-manual-then-delivered)
+    # The manual `aw secrets set` value is a fallback: a verified delivered
+    # token always replaces it.
+    printf 'MANUAL_TOKEN' > "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN"
+    chmod 600 "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN"
+    mk_tunnel_delivery "DELIVERED_TOKEN" "n1.alwayswork.space"
+    tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    [[ "$(cat "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN")" == "DELIVERED_TOKEN" ]] || exit 1
+    ;;
+  tunnel-no-backend)
+    mk_tunnel_delivery "FAKE_TOKEN_AAA" "n1.alwayswork.space"
+    ! tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    [[ ! -e "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN" ]] || exit 1
+    ;;
+  lockdown-tunnel-up)
+    printf '{"hostname":"n1.alwayswork.space","source":"control-plane","updated_at":1}' > "$AW_STATE/tunnel.json"
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
+    control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    grep -qx "fw_ensure" "$OUT/calls" || exit 1
+    grep -qx "apply_ssh_policy disabled" "$OUT/calls" || exit 1
+    ;;
+  lockdown-tunnel-down)
+    printf '{"hostname":"n1.alwayswork.space","source":"control-plane","updated_at":1}' > "$AW_STATE/tunnel.json"
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
+    ! control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    ! grep -q "apply_ssh_policy" "$OUT/calls" || exit 1
+    ;;
+  lockdown-no-tunnel)
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
+    control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    ! grep -q "apply_ssh_policy" "$OUT/calls" || exit 1
+    ! grep -q "fw_ensure" "$OUT/calls" || exit 1
+    ;;
+  lockdown-delivered-policy)
+    printf '{"hostname":"n1.alwayswork.space","source":"control-plane","updated_at":1}' > "$AW_STATE/tunnel.json"
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9,"hardening":{"ssh":"tailscale"}}}' > "$D"
+    control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    grep -qx "cfg_set_str .hardening.ssh" "$OUT/calls" || exit 1
+    grep -qx "apply_ssh_policy tailscale" "$OUT/calls" || exit 1
+    ;;
+  lockdown-unknown-policy)
+    printf '{"hostname":"n1.alwayswork.space","source":"control-plane","updated_at":1}' > "$AW_STATE/tunnel.json"
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9,"hardening":{"ssh":"bogus"}}}' > "$D"
+    control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    ! grep -q "apply_ssh_policy" "$OUT/calls" || exit 1
+    ;;
+  lockdown-ssh-fails)
+    printf '{"hostname":"n1.alwayswork.space","source":"control-plane","updated_at":1}' > "$AW_STATE/tunnel.json"
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
+    ! control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    ;;
+  *) printf 'unknown scenario: %s\n' "$SCENARIO" >&2; exit 2 ;;
+esac
+EOS
+run_tunnel() { rm -rf "$TMP/tout" "$TMP/tetc" "$TMP/tstate"; bash "$TMP/tunnel-apply.sh" "$ROOT" "$TMP/tout" "$TMP/tetc" "$TMP/tstate" "$1" > "$TMP/tunnel.out" 2>&1; }
+check "tunnel token stored 0600 on first delivery" 'run_tunnel tunnel-first'
+check "tunnel token rotates on a new delivery"    'run_tunnel tunnel-rotation'
+check "same token still reconciles the service"   'run_tunnel tunnel-same'
+check "no tunnel section leaves state alone"     'run_tunnel tunnel-absent'
+check "empty tunnel token is refused"             'run_tunnel tunnel-empty'
+check "delivered token wins over manual override" 'run_tunnel tunnel-manual-then-delivered'
+check "no secret store fails the tunnel closed"   'SEC_BACKEND=none run_tunnel tunnel-no-backend'
+check "lockdown runs once the tunnel is up"       'SYS_ACTIVE_RC=0 run_tunnel lockdown-tunnel-up'
+check "lockdown defers while cloudflared is down" 'SYS_ACTIVE_RC=1 run_tunnel lockdown-tunnel-down'
+check "lockdown skips non-tunnel nodes"           'UNIT_RC=1 run_tunnel lockdown-no-tunnel'
+check "lockdown honors the delivered ssh policy"  'SYS_ACTIVE_RC=0 run_tunnel lockdown-delivered-policy'
+check "lockdown ignores an unknown ssh policy"    'SYS_ACTIVE_RC=0 run_tunnel lockdown-unknown-policy'
+check "lockdown failure stays unacked (retry)"    'SYS_ACTIVE_RC=0 SSH_RC=1 run_tunnel lockdown-ssh-fails'
+
+echo "== zero-touch install =="
+check "auto-enroll env is documented"  'grep -q "ALWAYSWORK_AUTO_ENROLL" "$ROOT/install.sh"'
+check "auto-enroll enrolls, never bootstraps" \
+  'ALWAYSWORK_AUTO_ENROLL=1 bash "$ROOT/install.sh" --dry-run --yes > "$TMP/izt" 2>&1 && grep -q "init --profile" "$TMP/izt" && ! grep -q "bootstrap" "$TMP/izt"'
+check "auto-enroll registers a pending claim" 'grep -q "provision" "$TMP/izt"'
+check "auto-enroll pins the agent until approval" 'grep -q "alwayswork-agent.service" "$TMP/izt"'
+check "classic --yes still bootstraps" \
+  'bash "$ROOT/install.sh" --dry-run --yes > "$TMP/icl" 2>&1 && grep -q "bootstrap --yes" "$TMP/icl"'
+check "installer pulls openssl for device identity" 'grep -q "openssl" "$ROOT/install.sh"'
+check "secrets set documents --stdin" 'grep -q -- "--stdin" "$ROOT/commands/secrets.sh"'
+check "tunnel lib is sourced by the cli" 'grep -q "lib/tunnel.sh" "$ROOT/bin/alwayswork"'
+check "hardening lib is sourced by the cli" 'grep -q "lib/hardening.sh" "$ROOT/bin/alwayswork"'
+check "bootstrap uses the shared ssh policy" 'grep -q "apply_ssh_policy" "$ROOT/commands/bootstrap.sh" && ! grep -q "apply_ssh_policy()" "$ROOT/commands/bootstrap.sh"'
 
 echo
 printf 'passed: %s   failed: %s\n' "$PASS" "$FAIL"
