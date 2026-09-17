@@ -147,10 +147,15 @@ install_deps() {
 # publishes — and, as with bundle_yq above, fetching unverified code to run
 # as root is not acceptable.
 SOPS_VERSION="v3.13.3"
-SOPS_SHA256_AMD64="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b"
+SOPS_SHA256_AMD64="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f3b"
 SOPS_SHA256_ARM64="21cf1ee8860bb9c2a0b09ac97901b41ca9f95734f3402ea358e31e296e6be823"
 
 install_sops_debian() {
+  # sops backs the sealed secret store, but a node must still enroll without
+  # it: auto_enroll() documents the degraded path (the agent loudly refuses
+  # the tunnel token until sops/age exist, and the delivery stays unacked).
+  # So every failure here is a loud warning, never a fatal error — a hard
+  # failure in an optional component would brick zero-touch enrollment.
   local arch asset want deb tmp
   if have sops; then
     ok "sops present"
@@ -160,14 +165,15 @@ install_sops_debian() {
   case "$arch" in
     x86_64)  asset="sops_${SOPS_VERSION#v}_amd64.deb"; want="$SOPS_SHA256_AMD64" ;;
     aarch64) asset="sops_${SOPS_VERSION#v}_arm64.deb"; want="$SOPS_SHA256_ARM64" ;;
-    *) die "no sops .deb for ${arch}; install sops manually from https://github.com/getsops/sops/releases" ;;
+    *) warn "no sops .deb for ${arch}; continuing without sops (sealed secret store unavailable until sops is installed manually)"; return 0 ;;
   esac
   tmp="$(mktemp -d)"
   deb="$tmp/$asset"
   log "Fetching sops ${SOPS_VERSION} (${asset})"
   if ! run curl -fsSL "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/${asset}" -o "$deb"; then
     rm -rf "$tmp"
-    die "could not download sops ${SOPS_VERSION}/${asset}; install sops manually from https://github.com/getsops/sops/releases"
+    warn "could not download sops ${SOPS_VERSION}/${asset}; continuing without sops (sealed secret store unavailable until sops is installed manually)"
+    return 0
   fi
   if [[ "$DRY_RUN" == "1" ]]; then
     rm -rf "$tmp"
@@ -176,7 +182,8 @@ install_sops_debian() {
   fi
   if [[ "$(sha256sum "$deb" | cut -d' ' -f1)" != "$want" ]]; then
     rm -rf "$tmp"
-    die "sops checksum mismatch for ${SOPS_VERSION}/${asset}; refusing to install"
+    warn "sops checksum mismatch for ${SOPS_VERSION}/${asset}; refusing to install this binary and continuing without sops"
+    return 0
   fi
   ok "sops ${SOPS_VERSION} (sha256 verified)"
   if ! run dpkg -i "$deb"; then
@@ -185,7 +192,10 @@ install_sops_debian() {
     run dpkg -i "$deb"
   fi
   rm -rf "$tmp"
-  have sops || die "sops install finished but 'sops' is not on PATH"
+  if ! have sops; then
+    warn "sops install finished but 'sops' is not on PATH; continuing without sops"
+    return 0
+  fi
   ok "sops installed"
 }
 
