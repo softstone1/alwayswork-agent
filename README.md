@@ -133,7 +133,8 @@ desired-state document as a top-level `tunnel` object:
 On receipt the agent stores the token in its encrypted secret store (0600,
 never on a command line or in a log) and reconciles `cloudflared`: started on
 first receipt, restarted when the token rotates. A delivery with no `tunnel`
-section leaves any existing tunnel state alone. The token is consumed **only**
+section — or an explicit `"tunnel": null` — leaves any existing tunnel state
+alone; a null/absent field never tears cloudflared down. The token is consumed **only**
 from this verified channel — if signature verification fails, nothing is
 applied.
 
