@@ -3,13 +3,19 @@
 
 # yq is deliberately absent: Arch packages the Python build, so install.sh
 # bundles mikefarah's Go yq beside the CLI instead.
-BASE_PKGS=(git curl jq sops age ufw snapper snap-pac)
-if cfg_bool '.hardening.cve_scan' true; then
-  BASE_PKGS+=(arch-audit)
+BASE_PKGS=(git curl jq sops age ufw snapper)
+if distro_is_arch; then
+  BASE_PKGS+=(snap-pac)
+  if cfg_bool '.hardening.cve_scan' true; then
+    BASE_PKGS+=(arch-audit)
+  fi
+else
+  # snap-pac (btrfs pacman hooks) and arch-audit exist only on Arch.
+  info "skipping Arch-only packages (snap-pac, arch-audit) on $(distro_pretty)"
 fi
 
 log "core: installing base packages"
-run pacman -S --needed --noconfirm "${BASE_PKGS[@]}"
+pkg_install "${BASE_PKGS[@]}"
 
 if cfg_bool '.hardening.firewall' true; then
   log "core: hardening firewall"
