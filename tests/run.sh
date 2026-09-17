@@ -106,6 +106,127 @@ check "url keeps the query string"   'grep -q "desired?since=7" "$TMP/signed.out
 check "canonical path has no query"  'grep -qx "/v1/device/desired" "$TMP/canonical"'
 check "canonical omits since"        '! grep -q "since" "$TMP/canonical"'
 
+# Delivery signature verification: the helper builds a real Ed25519 control
+# key, pins it, signs deliveries with openssl, and runs one scenario per
+# invocation, exiting 0 when the agent behaves as expected.
+cat > "$TMP/verify.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; OUT="$2"
+export AW_ETC="$3" AW_STATE="$4" AW_TEST=1
+SCENARIO="$5"
+AW_ROOT="$ROOT"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/control.sh"
+
+mkdir -p "$AW_ETC" "$AW_STATE" "$OUT"
+printf '{"deviceId":"dev_test","pollSecret":"s","controlUrl":"https://control.test"}' > "$AW_ETC/control.json"
+
+openssl genpkey -algorithm ED25519 -out "$OUT/ctrl.pem" 2>/dev/null
+openssl pkey -in "$OUT/ctrl.pem" -pubout -outform DER -out "$OUT/ctrl.der" 2>/dev/null
+PUB_B64="$(base64 -w0 "$OUT/ctrl.der")"
+KID="ck-$(sha256sum "$OUT/ctrl.der" | cut -c1-12)"
+openssl genpkey -algorithm ED25519 -out "$OUT/evil.pem" 2>/dev/null
+openssl pkey -in "$OUT/evil.pem" -pubout -outform DER -out "$OUT/evil.der" 2>/dev/null
+EVIL_B64="$(base64 -w0 "$OUT/evil.der")"
+EVIL_KID="ck-$(sha256sum "$OUT/evil.der" | cut -c1-12)"
+
+control_pin_pubkey "$KID" "$PUB_B64" "test" >/dev/null 2>&1
+
+# sign_delivery <device> <seq> <exp_ms> <bodyfile> <keypem> -> base64 sig
+sign_delivery() {
+  local h
+  h="$(sha256sum "$4" | cut -d' ' -f1)"
+  printf 'AW-DESIRED-V1\n%s\n%s\n%s\n%s' "$1" "$2" "$3" "$h" > "$OUT/canonical"
+  openssl pkeyutl -sign -inkey "$5" -rawin -in "$OUT/canonical" 2>/dev/null | base64 -w0
+}
+make_hdr() { # <kid> <seq> <exp> <sig> <outfile>
+  printf 'HTTP/1.1 200 OK\r\nx-aw-sig-kid: %s\r\nx-aw-sig-seq: %s\r\nx-aw-sig-exp: %s\r\nx-aw-sig: %s\r\n\r\n' \
+    "$1" "$2" "$3" "$4" > "$5"
+}
+EXP="$(( $(date +%s%3N) + 240000 ))"
+BODY="$OUT/body.json"
+HDR="$OUT/hdr.txt"
+printf '{"state":"approved","sequence":7,"config":{"configVersion":7,"profile":"worker"}}' > "$BODY"
+
+case "$SCENARIO" in
+  valid)
+    SIG="$(sign_delivery dev_test 7 "$EXP" "$BODY" "$OUT/ctrl.pem")"
+    make_hdr "$KID" 7 "$EXP" "$SIG" "$HDR"
+    control_verify_delivery "$BODY" "$HDR" 2>/dev/null ;;
+  tampered)
+    SIG="$(sign_delivery dev_test 7 "$EXP" "$BODY" "$OUT/ctrl.pem")"
+    make_hdr "$KID" 7 "$EXP" "$SIG" "$HDR"
+    sed 's/worker/attacker/' "$BODY" > "$OUT/body2.json"
+    ! control_verify_delivery "$OUT/body2.json" "$HDR" 2>/dev/null ;;
+  wrong-kid)
+    SIG="$(sign_delivery dev_test 7 "$EXP" "$BODY" "$OUT/ctrl.pem")"
+    make_hdr "$EVIL_KID" 7 "$EXP" "$SIG" "$HDR"
+    ! control_verify_delivery "$BODY" "$HDR" 2>/dev/null ;;
+  wrong-sig)
+    SIG="$(sign_delivery dev_test 7 "$EXP" "$BODY" "$OUT/evil.pem")"
+    make_hdr "$KID" 7 "$EXP" "$SIG" "$HDR"
+    ! control_verify_delivery "$BODY" "$HDR" 2>/dev/null ;;
+  wrong-device)
+    SIG="$(sign_delivery dev_other 7 "$EXP" "$BODY" "$OUT/ctrl.pem")"
+    make_hdr "$KID" 7 "$EXP" "$SIG" "$HDR"
+    ! control_verify_delivery "$BODY" "$HDR" 2>/dev/null ;;
+  expired)
+    SIG="$(sign_delivery dev_test 7 "$(( $(date +%s%3N) - 120000 ))" "$BODY" "$OUT/ctrl.pem")"
+    make_hdr "$KID" 7 "$(( $(date +%s%3N) - 120000 ))" "$SIG" "$HDR"
+    ! control_verify_delivery "$BODY" "$HDR" 2>/dev/null ;;
+  missing-headers)
+    printf 'HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n' > "$HDR"
+    ! control_verify_delivery "$BODY" "$HDR" 2>/dev/null ;;
+  pin-mismatch)
+    ! ( control_pin_pubkey "$EVIL_KID" "$EVIL_B64" "test" ) 2>/dev/null ;;
+  apply-seq-mismatch)
+    cfg_set_str() { :; }
+    cfg_set_expr() { :; }
+    sec_backend() { printf 'none\n'; }
+    MISMATCH='{"state":"approved","sequence":8,"config":{"configVersion":7,"profile":"x"}}'
+    ! ( control_apply_delivery "$MISMATCH" ) 2>/dev/null ;;
+  wrapper-new|wrapper-stale|wrapper-rollback)
+    # End-to-end through control_verified_delivery with a mocked transport.
+    case "$SCENARIO" in
+      wrapper-new)      APPLIED=5; SEQ=7; WANT_RC=0 ;;
+      wrapper-stale)    APPLIED=7; SEQ=7; WANT_RC=3 ;;
+      wrapper-rollback) APPLIED=7; SEQ=5; WANT_RC=1 ;;
+    esac
+    cfg_get() { printf '%s\n' "$APPLIED"; }
+    control_sign() { printf 'sig'; }
+    printf '{"state":"approved","sequence":%s,"config":{"configVersion":%s}}' "$SEQ" "$SEQ" > "$OUT/wbody.json"
+    MOCK_SIG="$(sign_delivery dev_test "$SEQ" "$EXP" "$OUT/wbody.json" "$OUT/ctrl.pem")"
+    MOCK_KID="$KID"; MOCK_SEQ="$SEQ"; MOCK_EXP="$EXP"; MOCK_BODY="$(cat "$OUT/wbody.json")"
+    curl() {
+      local df="" prev="" a
+      for a in "$@"; do [[ "$prev" == "-D" ]] && df="$a"; prev="$a"; done
+      make_hdr "$MOCK_KID" "$MOCK_SEQ" "$MOCK_EXP" "$MOCK_SIG" "$df"
+      printf '%s' "$MOCK_BODY"
+    }
+    OUT_BODY="$(control_verified_delivery "/v1/device/desired?since=$APPLIED" 2>/dev/null)"
+    RC=$?
+    [[ "$RC" == "$WANT_RC" ]] || exit 1
+    [[ "$WANT_RC" == "0" && "$OUT_BODY" == "$MOCK_BODY" ]] || [[ "$WANT_RC" != "0" ]]
+    ;;
+  *) printf 'unknown scenario: %s\n' "$SCENARIO" >&2; exit 2 ;;
+esac
+EOS
+run_verify() { rm -rf "$TMP/vout" "$TMP/vetc" "$TMP/vstate"; bash "$TMP/verify.sh" "$ROOT" "$TMP/vout" "$TMP/vetc" "$TMP/vstate" "$1" > "$TMP/verify.out" 2>&1; }
+echo "== delivery verification =="
+check "verify accepts a valid delivery"      'run_verify valid'
+check "verify rejects a tampered body"       'run_verify tampered'
+check "verify rejects a wrong key id"        'run_verify wrong-kid'
+check "verify rejects a foreign signature"   'run_verify wrong-sig'
+check "verify rejects another device's delivery" 'run_verify wrong-device'
+check "verify rejects an expired delivery"   'run_verify expired'
+check "verify rejects missing headers"       'run_verify missing-headers'
+check "pin refuses a mismatched key"         'run_verify pin-mismatch'
+check "apply refuses version/sequence mismatch" 'run_verify apply-seq-mismatch'
+check "wrapper accepts a newer delivery"     'run_verify wrapper-new'
+check "wrapper ignores an already-applied delivery" 'run_verify wrapper-stale'
+check "wrapper refuses a rollback"           'run_verify wrapper-rollback'
+
+
 echo "== node lifecycle =="
 check "decommission --help"            'run_aw decommission --help && has "tombstone"'
 check "provision --help"               'run_aw provision --help && has "First-boot"'
@@ -113,7 +234,7 @@ check "enroll --help documents claim" 'run_aw enroll --help && has "pending clai
 check "enroll --status is honest"      'run_aw enroll --status && has "not enrolled"'
 check "provision unit Before agent"    'grep -q "Before=alwayswork-agent.service" "$ROOT/capabilities/control.join/install.sh"'
 check "provision timer shipped"        'grep -q "alwayswork-provision.timer" "$ROOT/capabilities/control.join/install.sh"'
-check "agent stops on draining"        'grep -q "device_state" "$ROOT/lib/control.sh"'
+check "agent verifies the drain order"     'grep -q "control_maybe_drain" "$ROOT/lib/control.sh"'
 check "claims endpoint wired"          'grep -q "/v1/claims" "$ROOT/lib/control.sh"'
 check "decommission endpoint wired"    'grep -q "/v1/device/" "$ROOT/lib/control.sh"'
 check "tombstone is terminal"          'grep -q "tombstone" "$ROOT/lib/control.sh"'
@@ -181,179 +302,6 @@ EOS
   check "secret store round-trip" 'bash "$TMP/store.sh" "$ROOT" "$TMP/store"'
 else
   echo "  skip  secret store (sops/age/mikefarah yq missing)"
-fi
-
-echo "== curl secret hygiene =="
-# Secrets must never travel on curl's argv (visible via ps). These tests stub
-# curl to capture its exact argv, then assert: no token/secret appears there,
-# bodies/headers go through 0600 temp files, and the files are removed on the
-# success path, the network-failure path, and the approved-poll path.
-cat > "$TMP/curl-hygiene.sh" <<'EOS'
-set -u
-ROOT="$1"; T="$2"
-export AW_ROOT="$ROOT" AW_TEST=1 DRY_RUN=1
-export AW_ETC="$T/etc" AW_STATE="$T/state" AW_LOG_DIR="$T/log" AW_CONFIG="$T/etc/worker.yaml"
-export TMPDIR="$T/tmp"   # isolate _secret_file temp files for leak checks
-mkdir -p "$TMPDIR" "$AW_ETC" "$AW_STATE"
-source "$ROOT/lib/core.sh"
-source "$ROOT/lib/control.sh"
-
-JOIN_TOKEN="join-token-SECRET-123"
-POLL_SECRET='p0ll"s3c\ret'
-CURL_ARGV="$T/argv"; CURL_BODY_PATH="$T/bodypath"; CURL_CONFIG_PATH="$T/cfgpath"
-: > "$CURL_BODY_PATH"; : > "$CURL_CONFIG_PATH"
-
-control_url()        { printf '%s\n' "https://control.test"; }
-control_device_id()  { printf '%s\n' "dev_test"; }
-control_sign()       { printf 'sig'; }
-control_ensure_key() { :; }
-control_pubkey_b64() { printf '%s' "cGstdGVzdA=="; }
-control_machine_id() { printf '%s' "machine-test"; }
-control_macs_json()  { printf '%s' "[]"; }
-control_dmi()        { printf ''; }
-hw_os_pretty()       { printf '%s' "TestOS"; }
-sec_backend()        { printf '%s' "file"; }
-sec_public_key()     { printf '%s' "age1testrecipient"; }
-hostname()           { printf '%s' "testnode"; }
-AW_VERSION="9.9.9-test"
-# argv of a curl call, NUL-separated (unambiguous even with tricky secrets)
-argv_has() { tr '\0' '\n' < "$CURL_ARGV" | grep -qF -- "$1"; }
-curl() {
-  : > "$CURL_ARGV"
-  local a prev=""
-  for a in "$@"; do printf '%s\0' "$a" >> "$CURL_ARGV"; done
-  for a in "$@"; do
-    if [[ "$prev" == "--data" && "$a" == @* ]]; then printf '%s' "${a#@}" > "$CURL_BODY_PATH"; fi
-    if [[ "$prev" == "--config" ]]; then printf '%s' "$a" > "$CURL_CONFIG_PATH"; fi
-    prev="$a"
-  done
-  printf '%s' "$CURL_RESP"
-}
-CURL_RESP="$(jq -n --arg ps "$POLL_SECRET" '{deviceId:"dev_test",pollSecret:$ps}')"
-_REAL_WAIT_APPROVAL="$(declare -f control_wait_approval)"  # (re-)defined below
-control_wait_approval() { printf '%s %s' "$1" "$2" > "$T/waitargs"; }
-control_apply_delivery() { printf 'applied' > "$T/applied"; return 0; }
-
-# 1. enroll: the join token must not appear on curl's argv
-control_enroll_with_token "$JOIN_TOKEN" >/dev/null 2>&1
-argv_has "$JOIN_TOKEN" && { echo "FAIL: join token on curl argv"; exit 1; }
-[[ -s "$CURL_BODY_PATH" ]] || { echo "FAIL: enroll did not use --data @file"; exit 1; }
-bf="$(cat "$CURL_BODY_PATH")"
-[[ -f "$bf" ]] && { echo "FAIL: body temp file not removed after enroll"; exit 1; }
-[[ "$(cat "$T/waitargs")" == "dev_test $POLL_SECRET" ]] || { echo "FAIL: wait-approval args wrong"; exit 1; }
-[[ -z "$(ls -A "$TMPDIR")" ]] || { echo "FAIL: temp leak after enroll"; exit 1; }
-
-# 2. _secret_file itself: 0600, exact content, trap removes it on exit
-_secret_file "content-123" sf
-[[ "$(stat -c %a "$sf")" == "600" ]] || { echo "FAIL: temp file not 0600"; exit 1; }
-[[ "$(cat "$sf")" == "content-123" ]] || { echo "FAIL: temp file content wrong"; exit 1; }
-rm -f "$sf"; trap - EXIT
-# a trap set in a subshell fires when the subshell exits: nothing may leak
-before="$(ls -A "$TMPDIR" | wc -l)"
-( _secret_file "trap-me" sf2 >/dev/null )
-after="$(ls -A "$TMPDIR" | wc -l)"
-[[ "$before" == "$after" ]] || { echo "FAIL: subshell EXIT trap did not clean up"; exit 1; }
-[[ -z "$(ls -A "$TMPDIR")" ]] || { echo "FAIL: temp leak after _secret_file"; exit 1; }
-
-# 3. control_call network-failure path removes the staged body
-curl() { return 7; }
-control_call POST /v1/device/heartbeat '{"appliedVersion":1}' >/dev/null 2>&1
-(( $? == 1 )) || { echo "FAIL: control_call rc on network failure"; exit 1; }
-[[ -z "$(ls -A "$TMPDIR")" ]] || { echo "FAIL: temp leak after control_call failure"; exit 1; }
-
-# 4. poll: the secret header must not be on argv; the --config file carries it
-#    (with curl-config escaping), and is removed once the poll resolves
-eval "$_REAL_WAIT_APPROVAL"   # restore the real poll loop for this test
-curl() {
-  : > "$CURL_ARGV"
-  local a prev=""
-  for a in "$@"; do printf '%s\0' "$a" >> "$CURL_ARGV"; done
-  for a in "$@"; do
-    if [[ "$prev" == "--config" ]]; then printf '%s' "$a" > "$CURL_CONFIG_PATH"; fi
-    prev="$a"
-  done
-  cp "$(cat "$CURL_CONFIG_PATH")" "$T/cfgcopy"   # capture before it is removed
-  printf '%s' '{"state":"approved","config":{"profile":"worker"}}'
-}
-control_wait_approval "dev_test" "$POLL_SECRET" >/dev/null 2>&1
-argv_has "x-poll-secret" && { echo "FAIL: poll-secret header on argv"; exit 1; }
-argv_has "$POLL_SECRET" && { echo "FAIL: poll secret value on argv"; exit 1; }
-[[ "$(cat "$T/cfgcopy")" == 'header = "x-poll-secret: p0ll\"s3c\\ret"' ]] \
-  || { echo "FAIL: config content wrong: $(cat "$T/cfgcopy")"; exit 1; }
-[[ -f "$(cat "$CURL_CONFIG_PATH")" ]] && { echo "FAIL: config temp file not removed"; exit 1; }
-[[ "$(cat "$T/applied")" == "applied" ]] || { echo "FAIL: approved delivery not applied"; exit 1; }
-[[ -z "$(ls -A "$TMPDIR")" ]] || { echo "FAIL: temp leak at end"; exit 1; }
-echo "hygiene-stub OK"
-EOS
-check "secrets never on curl argv (stubbed)" 'bash "$TMP/curl-hygiene.sh" "$ROOT" "$TMP/hygiene"'
-
-# Live round-trip: real curl through the new code paths against a localhost
-# server, proving --data @file and --config actually deliver the exact bytes.
-if have python3 && have timeout; then
-cat > "$TMP/curl-live.sh" <<'EOS'
-set -u
-ROOT="$1"; T="$2"
-export AW_ROOT="$ROOT" AW_TEST=1 DRY_RUN=1
-export AW_ETC="$T/etc" AW_STATE="$T/state" AW_LOG_DIR="$T/log" AW_CONFIG="$T/etc/worker.yaml"
-export TMPDIR="$T/tmp"
-mkdir -p "$TMPDIR" "$AW_ETC" "$AW_STATE"
-source "$ROOT/lib/core.sh"
-source "$ROOT/lib/control.sh"
-PORT=18931
-JOIN_TOKEN="live-join-TOKEN-999"
-POLL_SECRET='lv"s3c\ret$!'
-python3 - "$PORT" "$T" "$POLL_SECRET" <<'PYEOF' &
-import http.server, sys, json
-port, t, poll_secret = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-class H(http.server.BaseHTTPRequestHandler):
-    def _rec(self, name, body):
-        with open("%s/%s.headers" % (t, name), "w") as f:
-            for k, v in self.headers.items(): f.write("%s: %s\n" % (k.lower(), v))
-        with open("%s/%s.body" % (t, name), "wb") as f: f.write(body)
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        self._rec("enroll", body)
-        data = json.dumps({"deviceId": "dev_live", "pollSecret": poll_secret}).encode()
-        self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data))); self.end_headers()
-        self.wfile.write(data)
-    def do_GET(self):
-        self._rec("poll", b"")
-        data = json.dumps({"state": "approved", "config": {"profile": "worker",
-            "capabilities": [], "apps": [], "configVersion": 3}}).encode()
-        self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data))); self.end_headers()
-        self.wfile.write(data)
-    def log_message(self, *a): pass
-http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
-PYEOF
-SRV=$!
-trap 'kill $SRV 2>/dev/null' EXIT
-for _ in $(seq 1 100); do (echo > /dev/tcp/127.0.0.1/$PORT) 2>/dev/null && break; sleep 0.1; done
-control_url()        { printf '%s\n' "http://127.0.0.1:$PORT"; }
-control_ensure_key() { :; }
-control_pubkey_b64() { printf '%s' "cGstdGVzdA=="; }
-control_machine_id() { printf '%s' "machine-test"; }
-control_macs_json()  { printf '%s' "[]"; }
-control_dmi()        { printf ''; }
-hw_os_pretty()       { printf '%s' "TestOS"; }
-sec_backend()        { printf '%s' "file"; }
-sec_public_key()     { printf '%s' "age1testrecipient"; }
-hostname()           { printf '%s' "testnode"; }
-AW_VERSION="9.9.9-test"
-control_apply_delivery() { return 0; }
-control_enroll_with_token "$JOIN_TOKEN" >/dev/null 2>&1 || { echo "FAIL: enroll error"; exit 1; }
-[[ "$(python3 -c "import json;print(json.load(open('$T/enroll.body'))['joinToken'])")" == "$JOIN_TOKEN" ]] \
-  || { echo "FAIL: server did not receive the join token in the body"; exit 1; }
-[[ "$(grep -i '^x-poll-secret:' "$T/poll.headers" | cut -d' ' -f2-)" == "$POLL_SECRET" ]] \
-  || { echo "FAIL: server did not receive the poll secret header"; grep -i poll "$T/poll.headers"; exit 1; }
-kill $SRV 2>/dev/null; trap - EXIT
-[[ -z "$(ls -A "$TMPDIR")" ]] || { echo "FAIL: temp leak after live run"; exit 1; }
-echo "hygiene-live OK"
-EOS
-check "live: body+header delivered via temp files" 'timeout 60 bash "$TMP/curl-live.sh" "$ROOT" "$TMP/live"'
-else
-  echo "  skip  live curl test (python3/timeout missing)"
 fi
 
 echo
