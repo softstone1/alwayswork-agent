@@ -194,6 +194,12 @@ console — the agent takes over with no SSH session:
    restarted when the token rotates. A delivery with **no** `tunnel` section
    leaves any existing tunnel state alone. Signature verification failure
    means nothing is applied — fail closed, as always.
+
+   One-time control-plane setup, on the operator's own machine:
+   `npx wrangler secret put CLOUDFLARE_API_TOKEN`. Its plaintext lives in
+   authd as a use-only credential — no agent can retrieve or set it, and the
+   deploy pipeline does not set it. Everything after that step, per node,
+   works with zero operator involvement.
 4. **Lockdown, deferred.** Only once the node is active *and* `cloudflared`
    is up does the agent apply the SSH lockdown (public SSH off, firewall
    default-deny, per the delivered `.config.hardening.ssh` or the node's own
