@@ -144,8 +144,10 @@ On approval the worker receives, in one sealed response:
   short-lived token that is renewed over the channel;
 - the **desired configuration** — profile, capabilities, apps, limits,
   always-on policy;
-- **one-time secrets** — tunnel token, provider keys — encrypted to the
-  worker's public key so the server never sees them in clear.
+- **one-time secrets** — provider keys and the like — encrypted to the
+  worker's public key so the server never sees them in clear. (The tunnel
+  token travels separately, as a top-level `tunnel` object in the signed
+  desired-state — see "Zero-touch ordering" below.)
 
 ## Stage 5 — Self-configuration
 
@@ -160,6 +162,61 @@ aw apply              # capabilities + apps from the assigned profile
 
 It joins its Cloudflare Tunnel and reports **online**. At no point does anything
 listen on an inbound port.
+
+## Zero-touch ordering: install -> pending -> approval -> active -> lockdown
+
+The platform bootstrapper (`https://alwayswork.space/install.sh`) performs a
+zero-touch install: dependencies, the agent, and enrollment — **but never the
+lockdown**. `ALWAYSWORK_AUTO_ENROLL=1` makes `install.sh --yes` run `aw init`,
+`aw secrets init`, `aw enable control.join --url <control-plane>` and one
+non-blocking `aw provision` (which registers the pending claim), then stop. No
+`aw bootstrap`, no firewall, no SSH hardening at install time: cutting SSH
+before the tunnel is verified would strand the box.
+
+After the one deliberate human step — approving the pending node in the
+console — the agent takes over with no SSH session:
+
+1. The provision timer completes enrollment and starts the control agent.
+2. The first **verified** desired-state delivery is applied: profile,
+   capabilities, apps, sealed secrets.
+3. **Tunnel, automatically.** The delivery carries the provisioned tunnel as a
+   top-level object, and the agent consumes it from *only* this signed
+   channel:
+
+   ```json
+   { "tunnel": { "token": "<cloudflared tunnel token>",
+                 "hostname": "<node-hostname>.<baseDomain>" } }
+   ```
+
+   The token is written to the encrypted secret store from stdin (never on a
+   command line, never in a log; the store file is 0600 throughout), then the
+   agent reconciles `cloudflared` directly: started on first receipt,
+   restarted when the token rotates. A delivery with **no** `tunnel` section
+   leaves any existing tunnel state alone. Signature verification failure
+   means nothing is applied — fail closed, as always.
+4. **Lockdown, deferred.** Only once the node is active *and* `cloudflared`
+   is up does the agent apply the SSH lockdown (public SSH off, firewall
+   default-deny, per the delivered `.config.hardening.ssh` or the node's own
+   `.hardening.ssh`, default `disabled`). The tunnel is the only way back in
+   after sshd goes down, so a lockdown attempted before the tunnel is
+   reachable is deferred — the delivery stays unacked and the next tick
+   retries it. Nodes with no tunnel at all are left alone: their SSH stays a
+   bootstrap-time, operator-managed concern.
+
+**Conflict rule (delivered wins).** `aw secrets set CLOUDFLARE_TUNNEL_TOKEN`
+(`--stdin` keeps the value off the command line) remains as an explicit local
+fallback for nodes with no delivery yet. The moment a verified delivery
+carries a `tunnel` section, the delivered token **replaces** the stored one —
+the control plane must be able to rotate tokens centrally, and a sticky local
+value would silently break rotation.
+
+### Plug-and-play acceptance bar
+
+Fresh Ubuntu 24.04 or Arch/CachyOS, root + internet. The only human actions
+are (1) running the install entry point and (2) approving the pending node in
+the console. Dependencies, install, enrollment/claim, tunnel + DNS
+provisioning, signed desired-state application and the final lockdown all
+happen automatically.
 
 ## Stage 6 — Steady state (the real payoff)
 
