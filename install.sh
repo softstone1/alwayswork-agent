@@ -47,6 +47,19 @@ Usage: install.sh [options]
   --ref <gitref>   Branch/tag to download (default: ${REPO_REF})
   --from <path>    Install from a local checkout
   -h, --help       Show this help
+
+Zero-touch (the platform bootstrapper at https://alwayswork.space/install.sh
+sets these; not for hand use):
+
+  curl -fsSL https://alwayswork.space/install.sh | sudo bash
+
+  ALWAYSWORK_AUTO_ENROLL=1   Enroll only: no bootstrap, no SSH lockdown at
+                             install time. The node registers a pending claim
+                             and waits for console approval; the lockdown
+                             happens later, automatically, when signed
+                             desired-state marks the node active.
+  ALWAYSWORK_CONTROL_URL     Control plane URL (default: https://alwayswork.space)
+  ALWAYSWORK_PROFILE         Starting profile (default: worker)
 EOF
 }
 
@@ -112,7 +125,7 @@ resolve_source() {
 }
 
 install_deps() {
-  local -a pkgs=(git curl jq sops age restic ufw)
+  local -a pkgs=(git curl jq openssl sops age restic ufw)
   log "Installing base dependencies: ${pkgs[*]}"
   case "${INSTALL_FAMILY:-unknown}" in
     arch)   run pacman -Syu --needed --noconfirm "${pkgs[@]}" ;;
@@ -203,6 +216,43 @@ bundle_yq() {
   fi
 }
 
+# Zero-touch enrollment (the platform bootstrapper sets ALWAYSWORK_AUTO_ENROLL=1).
+#
+# Enrolls ONLY: init, secret store, the control.join capability (agent units +
+# provision timer), and one non-blocking provision run that registers the
+# pending claim. No bootstrap, no firewall, no SSH lockdown at install time —
+# cutting SSH here would strand the box before the tunnel is verified.
+#
+# After the console approves the claim, the provision timer completes
+# enrollment, the agent starts, and the first signed desired-state delivery
+# applies everything automatically: tunnel token -> cloudflared up, config,
+# then the deferred lockdown (public SSH off). Ordering:
+#   install -> pending -> (console approval) -> active -> lockdown.
+auto_enroll() {
+  local url="${ALWAYSWORK_CONTROL_URL:-https://alwayswork.space}"
+  local profile="${ALWAYSWORK_PROFILE:-worker}"
+  log "Zero-touch install: enrolling against ${url} (profile: ${profile})"
+  info "no lockdown at install time — SSH stays up until the tunnel is verified"
+  run "$BIN_LINK" init --profile "$profile"
+  # The secret store must exist before the control plane can deliver the
+  # tunnel token into it. Non-fatal: on distros where sops is not yet
+  # installable the agent loudly refuses the token and the delivery stays
+  # unacked until the store exists.
+  run "$BIN_LINK" secrets init \
+    || warn "secret store not initialised; run 'sudo aw secrets init' once sops/age are present"
+  # --url lands in .capabilities.config.control.join.url; the capability's
+  # install script persists it as .control.url and installs the agent unit
+  # plus the provision timer.
+  run "$BIN_LINK" enable control.join --url "$url"
+  # The agent must not run before enrollment completes: with no identity it
+  # would only crash-loop. The provision timer registers the pending claim
+  # now; claim completion starts the agent on approval.
+  run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
+  run "$BIN_LINK" provision
+  ok "enrollment started: approve the pending claim in the console"
+  info "after approval the node configures itself: tunnel, capabilities, lockdown"
+}
+
 main() {
   log "AlwaysWork ${VERSION} installer"
   detect_platform
@@ -212,9 +262,13 @@ main() {
   install_files "$src"
 
   if [[ "$ASSUME_YES" == "1" ]]; then
-    log "Bootstrapping foundation profile"
-    run "$BIN_LINK" init --yes
-    run "$BIN_LINK" bootstrap --yes
+    if [[ "${ALWAYSWORK_AUTO_ENROLL:-0}" == "1" ]]; then
+      auto_enroll
+    else
+      log "Bootstrapping foundation profile"
+      run "$BIN_LINK" init --yes
+      run "$BIN_LINK" bootstrap --yes
+    fi
   else
     log "Done. Next steps:"
     info "sudo aw init --profile foundation"
