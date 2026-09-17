@@ -69,33 +69,7 @@ _control_is_revoked() {
   return 1
 }
 
-# --- secret hygiene for curl -----------------------------------------------------
-# Request bodies and secret headers must never appear on a process argument
-# vector: any local user can read argv via ps(1). _secret_file writes its first
-# argument to a 0600 temp file and stores the path in the variable named by
-# its second argument; callers then pass the path to curl as --data @file
-# (bodies) or --config file (secret headers). The file is removed explicitly
-# on the normal path; the EXIT trap covers abnormal exits (die).
-# Callers must clear the trap (trap - EXIT) after removing the file, matching
-# the existing mktemp/trap idiom used in control_apply_delivery.
-# _secret_file <content> <varname> — write $1 to a 0600 temp file and store the
-# path in $2. Call it directly, never in a command substitution: a trap set
-# inside $(...) fires when the substitution ends, deleting the file before the
-# caller can use it.
-_secret_file() {
-  local f
-  f="$(mktemp "${TMPDIR:-/tmp}/aw-secret.XXXXXX")" || return 1
-  chmod 600 "$f"
-  printf '%s' "$1" > "$f"
-  # Expanded now, not when the trap fires: the path comes from our own mktemp
-  # template (no quotes or spaces possible), so baking it in is safe and the
-  # cleanup works no matter when the shell exits.
-  # shellcheck disable=SC2064
-  trap "rm -f '$f'" EXIT
-  printf -v "$2" '%s' "$f"
-}
-
-# control_call METHOD PATH [BODY] — signed device request.
+# control_call METHOD PATH [BODY] [HEADER_FILE] — signed device request.
 #
 # Prints the response body on stdout. Returns 0 on success, 1 on transient
 # failure (network error, 5xx, empty body), 2 when the control plane reports
@@ -108,7 +82,7 @@ _secret_file() {
 # made every signed GET fail verification (401), which the client then mistook
 # for an empty delivery and re-applied defaults on every tick.
 control_call() {
-  local method="${1^^}" path="$2" body="${3:-}"
+  local method="${1^^}" path="$2" body="${3:-}" header_file="${4:-}"
   local url ts nonce bodyhash canonical sig signed_path resp http
   url="$(control_url)"
   signed_path="${path%%\?*}"
@@ -130,19 +104,14 @@ $bodyhash"
     -H "x-nonce: $nonce"
     -H "x-signature: $sig"
     -w '\n%{http_code}')
-  # The body travels via a 0600 temp file, never on curl's argv: a future
-  # caller must be able to put secret material here without a ps(1) leak.
-  local bodyfile=""
-  if [[ -n "$body" ]]; then
-    _secret_file "$body" bodyfile || { warn "control: cannot stage request body"; return 1; }
-    args+=(-H 'content-type: application/json' --data @"$bodyfile")
-  fi
+  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data "$body")
+  # Optional 4th arg: capture the response headers (for delivery signature
+  # verification) into a file instead of letting them mix into the body.
+  [[ -n "$header_file" ]] && args+=(-D "$header_file")
   if ! resp="$(curl "${args[@]}" 2>/dev/null)"; then
-    if [[ -n "$bodyfile" ]]; then rm -f "$bodyfile"; trap - EXIT; fi
     warn "control: $method $signed_path failed (network)"
     return 1
   fi
-  if [[ -n "$bodyfile" ]]; then rm -f "$bodyfile"; trap - EXIT; fi
   http="${resp##*$'\n'}"; resp="${resp%$'\n'*}"
   if _control_is_revoked "$resp"; then
     printf '%s' "$resp"
@@ -163,6 +132,235 @@ $bodyhash"
   fi
   printf '%s' "$resp"
 }
+
+# --- control-plane key pinning and delivery verification -----------------------
+# Desired-state deliveries are signed by the control plane (Ed25519,
+# x-aw-sig-* headers). The node pins the control-plane public key at
+# enrollment — trust-on-first-use over TLS — and refuses any delivery that
+# does not verify: wrong key, tampered body, expired signature, another
+# device's delivery, or a sequence rollback. A rejected delivery is logged
+# loudly and the last-known-good config is kept; nothing is applied.
+
+control_pubkey_file() { echo "$AW_STATE/control-pubkey.json"; }
+
+# _header_value <headerfile> <name> — first value of a response header,
+# case-insensitive, CRLF-tolerant. Prints nothing when absent.
+_header_value() {
+  awk -v name="$2" 'BEGIN{IGNORECASE=1} {line=$0; sub(/\r$/,"",line)}
+    tolower(line) ~ ("^" name ":") {sub(/^[^:]*:[ \t]*/,"",line); print line; exit}' "$1"
+}
+
+# control_pin_pubkey <kid> <pubkey_b64> <source> — pin the control-plane
+# signing key (TOFU). A later mismatch is refused outright: it means MITM or
+# key rotation, and rotation is deliberately explicit (re-enroll the node).
+control_pin_pubkey() {
+  local kid="$1" b64="$2" source="$3" f cur_kid cur_key
+  f="$(control_pubkey_file)"
+  [[ -n "$kid" && -n "$b64" ]] || die "control: refusing to pin an empty control-plane key"
+  if [[ -f "$f" ]]; then
+    cur_kid="$(jq -r '.kid // ""' "$f" 2>/dev/null)"
+    cur_key="$(jq -r '.publicKey // ""' "$f" 2>/dev/null)"
+    [[ "$cur_kid" == "$kid" && "$cur_key" == "$b64" ]] && return 0
+    die "control: CONTROL-PLANE KEY MISMATCH (pinned=$cur_kid offered=$kid source=$source): refusing — possible MITM or key rotation; re-enroll this node to rotate trust"
+  fi
+  ensure_dir "$AW_STATE"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    [dry-run] pin control key %s\n' "$kid" >&2
+  else
+    # umask 077: the pinned key is node identity material, never world-readable.
+    ( umask 077
+      jq -n --arg kid "$kid" --arg key "$b64" --arg src "$source" --argjson t "$(date +%s)" \
+        '{kid:$kid, publicKey:$key, pinned_at:$t, source:$src}' > "$f" )
+    chmod 600 "$f"
+  fi
+  log "control: pinned control-plane signing key $kid (TOFU over TLS, source: $source)"
+}
+
+# control_ensure_pubkey — pin the key when this node enrolled before pinning
+# existed. Still TOFU over TLS: one GET to the public /v1/control-key.
+control_ensure_pubkey() {
+  [[ -f "$(control_pubkey_file)" ]] && return 0
+  control_require
+  local resp kid b64
+  if ! resp="$(curl -sS --connect-timeout 5 --max-time 30 "$(control_url)/v1/control-key" 2>/dev/null)"; then
+    warn "control: cannot fetch control-plane signing key (network)"
+    return 1
+  fi
+  kid="$(jq -r '.kid // ""' <<<"$resp" 2>/dev/null)"
+  b64="$(jq -r '.publicKey // ""' <<<"$resp" 2>/dev/null)"
+  if [[ -z "$kid" || -z "$b64" ]]; then
+    warn "control: control plane sent no signing key; deliveries will be refused until it does"
+    return 1
+  fi
+  control_pin_pubkey "$kid" "$b64" "control-key (TOFU)"
+}
+
+# control_verify_delivery <bodyfile> <headerfile> — 0 when the delivery is
+# authentically from the pinned control-plane key, 1 otherwise (loud).
+# Checks, in order: headers present, kid matches the pin, sequence is numeric,
+# expiry is live (60s clock-skew allowance), Ed25519 signature over the
+# canonical string. The device id in the canonical string is this node's own,
+# so a delivery signed for another node fails verification here.
+control_verify_delivery() {
+  local bodyfile="$1" headerfile="$2"
+  local kid seq exp sig
+  kid="$(_header_value "$headerfile" "x-aw-sig-kid")"
+  seq="$(_header_value "$headerfile" "x-aw-sig-seq")"
+  exp="$(_header_value "$headerfile" "x-aw-sig-exp")"
+  sig="$(_header_value "$headerfile" "x-aw-sig")"
+  if [[ -z "$kid" || -z "$seq" || -z "$exp" || -z "$sig" ]]; then
+    err "control: delivery is not signed (missing x-aw-sig-* headers); refusing"
+    return 1
+  fi
+  local f pinned_kid pinned_key
+  f="$(control_pubkey_file)"
+  pinned_kid="$(jq -r '.kid // ""' "$f" 2>/dev/null)"
+  pinned_key="$(jq -r '.publicKey // ""' "$f" 2>/dev/null)"
+  if [[ -z "$pinned_kid" ]]; then
+    err "control: no pinned control-plane key; refusing delivery"
+    return 1
+  fi
+  if [[ "$kid" != "$pinned_kid" ]]; then
+    err "control: delivery key id $kid does not match pinned $pinned_kid; refusing (possible rotation or MITM)"
+    return 1
+  fi
+  [[ "$seq" =~ ^[0-9]+$ ]] || { err "control: delivery has a malformed sequence; refusing"; return 1; }
+  [[ "$exp" =~ ^[0-9]+$ ]] || { err "control: delivery has a malformed signature expiry; refusing"; return 1; }
+  local now_ms
+  now_ms="$(date +%s%3N)"
+  if (( exp + 60000 < now_ms )); then
+    err "control: delivery signature expired; refusing"
+    return 1
+  fi
+  local hash tmp
+  hash="$(sha256sum "$bodyfile" | cut -d' ' -f1)"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/aw-verify.XXXXXX")" || return 1
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  printf 'AW-DESIRED-V1\n%s\n%s\n%s\n%s' "$(control_device_id)" "$seq" "$exp" "$hash" > "$tmp/canonical"
+  if ! printf '%s' "$sig" | base64 -d > "$tmp/sig" 2>/dev/null; then
+    err "control: delivery signature is not valid base64; refusing"
+    rm -rf "$tmp"; trap - EXIT; return 1
+  fi
+  if ! printf '%s' "$pinned_key" | base64 -d > "$tmp/pub.der" 2>/dev/null || \
+     ! openssl pkey -pubin -inform DER -in "$tmp/pub.der" -outform PEM -out "$tmp/pub.pem" 2>/dev/null; then
+    err "control: pinned control-plane key is corrupt; refusing"
+    rm -rf "$tmp"; trap - EXIT; return 1
+  fi
+  if openssl pkeyutl -verify -pubin -inkey "$tmp/pub.pem" -rawin \
+       -in "$tmp/canonical" -sigfile "$tmp/sig" >/dev/null 2>&1; then
+    log "control: delivery signature verified (kid $kid, sequence $seq)"
+    rm -rf "$tmp"; trap - EXIT
+    return 0
+  fi
+  err "control: DELIVERY SIGNATURE INVALID (kid $kid); refusing — keeping last-known-good config"
+  rm -rf "$tmp"; trap - EXIT
+  return 1
+}
+
+# control_verified_delivery <path> — GET a delivery, verify its signature,
+# and print the body on stdout. Returns:
+#   0  verified and newer than the applied version -> body on stdout
+#   1  transient failure or verification failure -> caller backs off / logs
+#   2  revoked (control_call's signal) -> caller handles revocation
+#   3  verified but not newer -> nothing to do
+control_verified_delivery() {
+  local path="$1" hdr body out rc seq applied
+  hdr="$(mktemp "${TMPDIR:-/tmp}/aw-hdr.XXXXXX")" || return 1
+  # shellcheck disable=SC2064
+  trap "rm -f '$hdr'" EXIT
+  if ! out="$(control_call GET "$path" "" "$hdr")"; then
+    rc=$?
+    rm -f "$hdr"; trap - EXIT
+    return "$rc"
+  fi
+  body="$(mktemp "${TMPDIR:-/tmp}/aw-body.XXXXXX")" || { rm -f "$hdr"; trap - EXIT; return 1; }
+  # shellcheck disable=SC2064
+  trap "rm -f '$hdr' '$body'" EXIT
+  printf '%s' "$out" > "$body"
+  if ! control_verify_delivery "$body" "$hdr"; then
+    err "control: REJECTED delivery from $path; keeping last-known-good config"
+    rm -f "$hdr" "$body"; trap - EXIT
+    return 1
+  fi
+  # Monotonic sequence: never apply a delivery at or below the applied
+  # version. A long-poll that wakes on timeout (not on change) returns the
+  # current version; re-applying it would be noisy, and a replayed older
+  # delivery must never move the node backwards.
+  seq="$(_header_value "$hdr" "x-aw-sig-seq")"
+  applied="$(cfg_get '.control.appliedVersion' 0)"
+  [[ "$applied" =~ ^[0-9]+$ ]] || applied=0
+  if (( seq < applied )); then
+    err "control: delivery sequence $seq is older than applied $applied; refusing (replay/rollback)"
+    rm -f "$hdr" "$body"; trap - EXIT
+    return 1
+  fi
+  if (( seq == applied )); then
+    log "control: delivery sequence $seq is already applied; keeping current config"
+    rm -f "$hdr" "$body"; trap - EXIT
+    return 3
+  fi
+  rm -f "$hdr" "$body"; trap - EXIT
+  printf '%s' "$out"
+  return 0
+}
+
+# control_maybe_drain — the heartbeat reported this identity retired
+# (401 device_tombstoned). A decommissioned node must wipe itself, but ONLY
+# on a verified signed drain order; a revoked node just stops. The drain
+# order is the one read a tombstoned identity may still make. Never exits
+# except to stop the agent; returns 1 when the drain order could not be
+# fetched or verified (transient) so the tick retries instead of wiping or
+# stopping on a network blip.
+control_maybe_drain() {
+  local hdr body out rc seq applied state
+  hdr="$(mktemp "${TMPDIR:-/tmp}/aw-hdr.XXXXXX")" || return 1
+  body="$(mktemp "${TMPDIR:-/tmp}/aw-body.XXXXXX")" || { rm -f "$hdr"; return 1; }
+  # shellcheck disable=SC2064
+  trap "rm -f '$hdr' '$body'" EXIT
+  # since=0: the drain order is returned immediately, not long-polled.
+  if ! out="$(control_call GET "/v1/device/desired?since=0" "" "$hdr")"; then
+    rc=$?
+    rm -f "$hdr" "$body"; trap - EXIT
+    if (( rc == 2 )); then
+      # Still tombstoned and not draining: a real revocation. Stop cleanly.
+      control_handle_revoked
+    fi
+    warn "control: could not fetch the drain order (transient); will retry"
+    return 1
+  fi
+  printf '%s' "$out" > "$body"
+  if ! control_verify_delivery "$body" "$hdr"; then
+    err "control: REJECTED drain order; keeping last-known-good config"
+    rm -f "$hdr" "$body"; trap - EXIT
+    return 1
+  fi
+  seq="$(_header_value "$hdr" "x-aw-sig-seq")"
+  applied="$(cfg_get '.control.appliedVersion' 0)"
+  [[ "$applied" =~ ^[0-9]+$ ]] || applied=0
+  if (( seq < applied )); then
+    err "control: drain order sequence $seq is older than applied $applied; refusing"
+    rm -f "$hdr" "$body"; trap - EXIT
+    return 1
+  fi
+  state="$(jq -r '.state // ""' "$body" 2>/dev/null)"
+  if [[ "$state" != "draining" ]]; then
+    # Tombstoned but not draining: revocation, not decommission. Stop.
+    rm -f "$hdr" "$body"; trap - EXIT
+    control_handle_revoked
+  fi
+  rm -f "$hdr" "$body"; trap - EXIT
+  log "control: verified signed drain order (sequence $seq); decommissioning"
+  if decommission_run 0; then
+    ok "control: decommission complete"
+  else
+    warn "control: decommission incomplete; will retry on the next tick"
+    return 1
+  fi
+  run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
+  exit 0
+}
+
 control_enroll() {
   local token="" url="" usb=0 status_only=0
   while [[ $# -gt 0 ]]; do
@@ -238,14 +436,9 @@ control_enroll_with_token() {
      + (if $token == "" then {} else {joinToken:$token} end)')"
 
   log "control: announcing this worker"
-  local resp id secret bodyfile
-  # The payload carries the join token: it must never appear on curl's argv
-  # (visible via ps), so it travels through a 0600 temp file instead. On the
-  # die path the EXIT trap installed by _secret_file removes the file.
-  _secret_file "$payload" bodyfile || die "control: cannot stage enrollment request"
-  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data @"$bodyfile")" \
+  local resp id secret
+  resp="$(curl -sS --connect-timeout 5 --max-time 60 -X POST "$(control_url)/v1/enroll" -H 'content-type: application/json' --data "$payload")" \
     || die "control: POST /v1/enroll failed (network)"
-  rm -f "$bodyfile"; trap - EXIT
   id="$(jq -r '.deviceId // ""' <<<"$resp")"
   secret="$(jq -r '.pollSecret // ""' <<<"$resp")"
   if [[ -z "$id" ]]; then
@@ -263,32 +456,58 @@ control_enroll_with_token() {
   fi
   ok "announced as $id"
 
+  # Pin the control-plane signing key now: trust-on-first-use over TLS. Every
+  # later delivery must verify against this pin or be refused outright.
+  local ck_kid ck_pub
+  ck_kid="$(jq -r '.controlKey.kid // ""' <<<"$resp")"
+  ck_pub="$(jq -r '.controlKey.publicKey // ""' <<<"$resp")"
+  if [[ -n "$ck_kid" && -n "$ck_pub" ]]; then
+    control_pin_pubkey "$ck_kid" "$ck_pub" "enroll"
+  else
+    warn "control: enroll response carried no signing key; will pin from /v1/control-key before the first delivery"
+  fi
+
   control_wait_approval "$id" "$secret"
 }
 control_wait_approval() {
-  local id="$1" secret="$2" resp state cfg esc_secret
-  # The poll secret is a credential: curl has no -H @file, so it travels in a
-  # 0600 --config file instead of on the argv header (visible via ps). Escape
-  # for curl's config parser, where only \" and \\ are special inside quotes.
-  esc_secret="${secret//\\/\\\\}"
-  esc_secret="${esc_secret//\"/\\\"}"
-  _secret_file "header = \"x-poll-secret: $esc_secret\"" cfg \
-    || die "control: cannot stage approval poll"
+  local id="$1" secret="$2" resp state hdr bodyf cfgf
+  # The poll secret travels in a curl config file, never on the command line:
+  # command lines are visible to every local user via /proc.
+  cfgf="$(mktemp "${TMPDIR:-/tmp}/aw-cfg.XXXXXX")" || die "control: cannot stage approval poll"
+  chmod 600 "$cfgf"
+  printf 'header = "x-poll-secret: %s"\n' "$secret" > "$cfgf"
+  hdr="$(mktemp "${TMPDIR:-/tmp}/aw-hdr.XXXXXX")" || die "control: cannot stage approval poll"
+  bodyf="$(mktemp "${TMPDIR:-/tmp}/aw-body.XXXXXX")" || die "control: cannot stage approval poll"
+  # shellcheck disable=SC2064
+  trap "rm -f '$cfgf' '$hdr' '$bodyf'" EXIT
   info "waiting for approval in the console (Ctrl-C to stop)"
   while :; do
-    if ! resp="$(curl -sS --connect-timeout 5 --max-time 30 --config "$cfg" "$(control_url)/v1/enroll/$id")"; then
+    if ! curl -sS --connect-timeout 5 --max-time 30 -D "$hdr" -o "$bodyf" \
+         --config "$cfgf" "$(control_url)/v1/enroll/$id" 2>/dev/null; then
       warn "control: approval poll failed (network); retrying"
       sleep 3
       continue
     fi
+    resp="$(cat "$bodyf")"
     state="$(jq -r '.state // "unknown"' <<<"$resp")"
     case "$state" in
-      approved) ok "approved"
-               rm -f "$cfg"; trap - EXIT
-               control_apply_delivery "$resp" || die "control: initial apply failed"
-               return 0 ;;
+      approved)
+        ok "approved"
+        # The approval is the first signed delivery this node applies: make
+        # sure the control-plane key is pinned (enrollment usually did this
+        # already), then verify the delivery before applying anything it says.
+        control_ensure_pubkey || { warn "control: cannot pin the control-plane key; retrying"; sleep 3; continue; }
+        if ! control_verify_delivery "$bodyf" "$hdr"; then
+          err "control: REJECTED approval delivery; keeping last-known-good config"
+          sleep 3
+          continue
+        fi
+        rm -f "$cfgf" "$hdr" "$bodyf"; trap - EXIT
+        control_apply_delivery "$resp" || die "control: initial apply failed"
+        return 0 ;;
       pending)  sleep 3 ;;
-      *)        die "enrollment was $state" ;;
+      *)        rm -f "$cfgf" "$hdr" "$bodyf"; trap - EXIT
+                die "enrollment was $state" ;;
     esac
   done
 }
@@ -331,6 +550,14 @@ control_apply_delivery() {
   fi
 
   ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
+  # The signed sequence and the config version must agree: a delivery whose
+  # config claims a different version than the signature covered is either
+  # corrupt or forged, and is refused before anything is applied.
+  local seq
+  seq="$(jq -r '.sequence // ""' <<<"$json" 2>/dev/null)"
+  if [[ -n "$seq" && "$seq" != "$ver" ]]; then
+    die "control: refusing delivery: config version ($ver) does not match the signed sequence ($seq)"
+  fi
   log "control: applying desired state (version $ver)"
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
@@ -400,6 +627,9 @@ control_agent() {
 
 control_agent_tick() {
   local applied body resp desired delivery ver rc webui
+  # The pinned key must exist before any delivery is trusted. Nodes that
+  # enrolled before pinning existed fetch it once here (TOFU over TLS).
+  control_ensure_pubkey || return 1
   applied="$(cfg_get '.control.appliedVersion' 0)"
   webui="$(control_webui_json)"
   body="$(jq -n --argjson v "$applied" --argjson ui "$webui" \
@@ -410,24 +640,12 @@ control_agent_tick() {
   else
     rc=$?
   fi
-  (( rc == 2 )) && control_handle_revoked
+  # A retired identity (401 device_tombstoned) is either decommissioned — in
+  # which case the node must wipe itself, but ONLY on a verified signed drain
+  # order — or revoked, in which case it stops without wiping. A bare 401
+  # never triggers a wipe on its own.
+  (( rc == 2 )) && control_maybe_drain
   (( rc == 0 )) || return 1
-  # A draining device decommissions itself: the operator removed this node in
-  # the web console (or ran aw decommission elsewhere). Decommission is never
-  # automatic — draining is always the result of an explicit operator decision.
-  local device_state
-  device_state="$(jq -r '.device_state // "active"' <<<"$resp" 2>/dev/null || printf 'active')"
-  if [[ "$device_state" == "draining" ]]; then
-    log "control: this node is draining; decommissioning"
-    if decommission_run 0; then
-      ok "control: decommission complete"
-    else
-      warn "control: decommission incomplete; will retry on the next tick"
-      return 1
-    fi
-    run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
-    exit 0
-  fi
   desired="0"
   if ! desired="$(jq -r '.configVersion // 0' <<<"$resp")"; then
     warn "control: heartbeat response was not JSON; skipping delivery check"
@@ -436,12 +654,15 @@ control_agent_tick() {
   if [[ "$desired" != "$applied" ]]; then
     log "control: desired version $desired (applied $applied)"
     delivery=""; rc=1
-    if delivery="$(control_call GET "/v1/device/desired?since=$applied")"; then
+    if delivery="$(control_verified_delivery "/v1/device/desired?since=$applied")"; then
       rc=0
     else
       rc=$?
     fi
     (( rc == 2 )) && control_handle_revoked
+    # Verified but already applied (a race between heartbeat and fetch): rest
+    # easy, the next tick will see the versions agree.
+    (( rc == 3 )) && return 0
     (( rc == 0 )) || return 1
     if ! control_apply_delivery "$delivery"; then
       warn "control: apply of version $desired failed; it stays unacked and will be retried"
@@ -472,19 +693,15 @@ control_machine_id_hash() {
 
 control_claim_create() {
   control_ensure_key
-  local payload resp claim_id expires bodyfile
+  local payload resp claim_id expires
   payload="$(jq -n \
     --arg pk "$(control_pubkey_b64)" \
     --arg host "$(hostname)" \
     --arg mid "$(control_machine_id_hash)" \
     '{device_pubkey:$pk, hostname:$host, machine_id_hash:$mid}')"
-  # Device identity travels via a 0600 temp file, never on curl's argv. On the
-  # die path the EXIT trap installed by _secret_file removes the file.
-  _secret_file "$payload" bodyfile || die "control: cannot stage claim request"
   resp="$(curl -sS --connect-timeout 5 --max-time 30 -X POST "$(control_url)/v1/claims" \
-    -H 'content-type: application/json' --data @"$bodyfile")" \
+    -H 'content-type: application/json' --data "$payload")" \
     || die "control: POST /v1/claims failed (network)"
-  rm -f "$bodyfile"; trap - EXIT
   claim_id="$(jq -r '.claim_id // ""' <<<"$resp")"
   expires="$(jq -r '.expires_at // ""' <<<"$resp")"
   if [[ -z "$claim_id" ]]; then
