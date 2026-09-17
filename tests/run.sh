@@ -567,9 +567,13 @@ systemctl() {
 }
 
 D="$OUT/delivery.json"
-mk_tunnel_delivery() { # <token> <hostname> — or "none" for no tunnel section
+mk_tunnel_delivery() { # <token> <hostname> — "none" for no tunnel section, "null" for an explicit null
   if [[ "$1" == "none" ]]; then
     printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
+  elif [[ "$1" == "null" ]]; then
+    # The control plane sends an explicit null when no tunnel is provisioned
+    # or the node opted out.
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9},"tunnel":null}' > "$D"
   else
     jq -n --arg t "$1" --arg h "$2" \
       '{state:"approved",sequence:9,config:{configVersion:9},tunnel:{token:$t,hostname:$h}}' > "$D"
@@ -606,6 +610,16 @@ case "$SCENARIO" in
     ;;
   tunnel-absent)
     mk_tunnel_delivery none ""
+    tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1
+    [[ "$?" == "3" ]] || exit 1
+    [[ ! -e "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN" ]] || exit 1
+    [[ ! -e "$AW_STATE/tunnel.json" ]] || exit 1
+    ! grep -q "cap_install" "$OUT/calls" || exit 1
+    ;;
+  tunnel-null)
+    # Explicit null (no tunnel provisioned, or the node opted out) is the
+    # same as absent: no-op, and never a teardown of cloudflared.
+    mk_tunnel_delivery null ""
     tunnel_apply_from_delivery "$(cat "$D")" >/dev/null 2>&1
     [[ "$?" == "3" ]] || exit 1
     [[ ! -e "$OUT/store/CLOUDFLARE_TUNNEL_TOKEN" ]] || exit 1
@@ -676,6 +690,7 @@ check "tunnel token stored 0600 on first delivery" 'run_tunnel tunnel-first'
 check "tunnel token rotates on a new delivery"    'run_tunnel tunnel-rotation'
 check "same token still reconciles the service"   'run_tunnel tunnel-same'
 check "no tunnel section leaves state alone"     'run_tunnel tunnel-absent'
+check "explicit null tunnel leaves state alone"  'run_tunnel tunnel-null'
 check "empty tunnel token is refused"             'run_tunnel tunnel-empty'
 check "delivered token wins over manual override" 'run_tunnel tunnel-manual-then-delivered'
 check "no secret store fails the tunnel closed"   'SEC_BACKEND=none run_tunnel tunnel-no-backend'
