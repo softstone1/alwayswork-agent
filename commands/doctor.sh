@@ -83,6 +83,11 @@ cmd_doctor() {
     local pending; pending="$(checkupdates 2>/dev/null | wc -l)"
     if (( pending > 0 )); then _dwarn "${pending} package update(s) pending" "run: sudo aw update"
     else _dpass "system is up to date"; fi
+  elif distro_is_debian && have apt-get; then
+    local pending
+    pending="$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst' || true)"
+    if (( pending > 0 )); then _dwarn "${pending} package update(s) pending" "run: sudo aw update"
+    else _dpass "system is up to date"; fi
   fi
 
   # --- container surface ----------------------------------------------------
