@@ -393,6 +393,95 @@ if have yq; then
   check "app install picks apt on debian" 'AW_OS_RELEASE="$TMP/os/fam-debian" run_aw --dry-run app install ripgrep && has "apt-get install"'
 fi
 
+echo "== install.sh sops =="
+
+# Exercise install.sh's dependency logic without touching the host: source the
+# installer with `main` stripped and stub the tools it shells out to.
+mkdir -p "$TMP/sopsbin"
+cat > "$TMP/sopsbin/curl" <<'EOS'
+#!/bin/bash
+# Fake curl: writes canned content to the -o target, or fails on demand.
+out=""
+prev=""
+for a in "$@"; do
+  [[ "$prev" == "-o" ]] && out="$a"
+  prev="$a"
+done
+[[ "${CURL_FAIL:-0}" == "1" ]] && exit 1
+[[ -n "${CURL_MARKER:-}" ]] && touch "$CURL_MARKER"
+printf 'fake-deb-content' > "$out"
+exit 0
+EOS
+cat > "$TMP/sopsbin/sha256sum" <<'EOS'
+#!/bin/bash
+printf '%s  %s\n' "${SHA256_STUB:-unset}" "${@: -1}"
+EOS
+cat > "$TMP/sopsbin/dpkg" <<'EOS'
+#!/bin/bash
+echo "dpkg $*" >> "$PKGLOG"
+if [[ "${DPKG_FAIL_ONCE:-0}" == "1" && ! -f "$TMP/dpkg-failed" ]]; then
+  touch "$TMP/dpkg-failed"
+  exit 1
+fi
+# pretend the install drops a sops binary on PATH
+printf '#!/bin/sh\necho stub-sops\n' > "$TMP/sopsbin/sops"
+chmod +x "$TMP/sopsbin/sops"
+exit 0
+EOS
+cat > "$TMP/sopsbin/apt-get" <<'EOS'
+#!/bin/bash
+echo "apt-get $*" >> "$PKGLOG"
+exit 0
+EOS
+cat > "$TMP/sopsbin/pacman" <<'EOS'
+#!/bin/bash
+echo "pacman $*" >> "$PKGLOG"
+exit 0
+EOS
+cat > "$TMP/sopsbin/uname" <<'EOS'
+#!/bin/bash
+printf '%s\n' "${UNAME_M:-x86_64}"
+EOS
+chmod +x "$TMP/sopsbin/"*
+
+cat > "$TMP/sops-probe.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; MODE="$2"; shift 2
+sed '/^main "$@"/d' "$ROOT/install.sh" > "$TMP/sops-install.sh"
+# shellcheck disable=SC1090
+source "$TMP/sops-install.sh"
+INSTALL_FAMILY="debian"
+case "$MODE" in
+  present)  install_sops_debian ;;
+  install)  install_sops_debian ;;
+  deps)     install_deps ;;
+  archdeps) INSTALL_FAMILY="arch"; install_deps ;;
+esac
+EOS
+sops_probe() { # <install.sh path> <mode>
+  rm -f "$TMP/dpkg-failed" "$TMP/curl-marker"
+  export PKGLOG="$TMP/sopspkglog" CURL_MARKER="$TMP/curl-marker" TMP
+  : > "$PKGLOG"
+  PATH="$TMP/sopsbin:/usr/bin:/bin" bash "$TMP/sops-probe.sh" "$1" "$2" > "$TMP/sops.out" 2>&1
+}
+shas() { grep -q "$1" "$TMP/sops.out"; }
+check "sops present skips download" \
+  'printf "#!/bin/sh\n" > "$TMP/sopsbin/sops"; chmod +x "$TMP/sopsbin/sops"; sops_probe "$ROOT" present && shas "sops present" && [[ ! -e "$TMP/curl-marker" ]]'
+check "debian installs verified sops deb" \
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b" sops_probe "$ROOT" install && shas "sha256 verified" && grep -q "dpkg -i .*/sops_3.13.3_amd64.deb" "$PKGLOG" && shas "sops installed"'
+check "debian refuses sops on checksum mismatch" \
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="deadbeef" sops_probe "$ROOT" install; rc=$?; [[ $rc -ne 0 ]] && shas "checksum mismatch"'
+check "debian fails clearly when sops download fails" \
+  'rm -f "$TMP/sopsbin/sops"; CURL_FAIL=1 sops_probe "$ROOT" install; rc=$?; [[ $rc -ne 0 ]] && shas "could not download sops"'
+check "debian refuses sops on unknown arch" \
+  'rm -f "$TMP/sopsbin/sops"; UNAME_M="riscv64" sops_probe "$ROOT" install; rc=$?; [[ $rc -ne 0 ]] && shas "no sops .deb for riscv64"'
+check "debian retries sops install after fixing deps" \
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b" DPKG_FAIL_ONCE=1 sops_probe "$ROOT" install && grep -qx "apt-get install -f -y" "$PKGLOG" && [[ "$(grep -c "^dpkg -i" "$PKGLOG")" == "2" ]] && shas "sops installed"'
+check "debian apt list excludes sops" \
+  'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b" sops_probe "$ROOT" deps && grep -qx "apt-get install -y git curl jq age restic ufw" "$PKGLOG" && ! grep -q "^apt-get.*sops" "$PKGLOG"'
+check "arch pacman still installs sops from repos" \
+  'sops_probe "$ROOT" archdeps && grep -qx "pacman -Syu --needed --noconfirm git curl jq age restic ufw sops" "$PKGLOG"'
+
 echo "== secret store =="
 if have sops && have age && yq --version 2>/dev/null | grep -qi mikefarah; then
   cat > "$TMP/store.sh" <<'EOS'

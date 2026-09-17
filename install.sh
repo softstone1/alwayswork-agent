@@ -112,14 +112,68 @@ resolve_source() {
 }
 
 install_deps() {
-  local -a pkgs=(git curl jq sops age restic ufw)
-  log "Installing base dependencies: ${pkgs[*]}"
+  # sops is not in Debian/Ubuntu's apt repositories, so it is handled
+  # separately per family below (official .deb on debian).
+  local -a pkgs=(git curl jq age restic ufw)
+  log "Installing base dependencies: ${pkgs[*]} sops"
   case "${INSTALL_FAMILY:-unknown}" in
-    arch)   run pacman -Syu --needed --noconfirm "${pkgs[@]}" ;;
+    arch)   run pacman -Syu --needed --noconfirm "${pkgs[@]}" sops ;;
     debian) run apt-get update
-            run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}" ;;
-    *)      warn "no package manager for this distribution; install manually: ${pkgs[*]}" ;;
+            run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
+            install_sops_debian ;;
+    *)      warn "no package manager for this distribution; install manually: ${pkgs[*]} sops" ;;
   esac
+}
+
+# sops ships no Debian/Ubuntu package: install the official .deb from the
+# GitHub release on the debian family.
+#
+# The version is pinned and the download is sha256-verified. The sops
+# release's published checksums.txt does not cover the .deb assets, so a
+# "latest" lookup could never be verified against anything the release
+# publishes — and, as with bundle_yq above, fetching unverified code to run
+# as root is not acceptable.
+SOPS_VERSION="v3.13.3"
+SOPS_SHA256_AMD64="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f222697a51e0a7081e3f3b"
+SOPS_SHA256_ARM64="21cf1ee8860bb9c2a0b09ac97901b41ca9f95734f3402ea358e31e296e6be823"
+
+install_sops_debian() {
+  local arch asset want deb tmp
+  if have sops; then
+    ok "sops present"
+    return 0
+  fi
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)  asset="sops_${SOPS_VERSION#v}_amd64.deb"; want="$SOPS_SHA256_AMD64" ;;
+    aarch64) asset="sops_${SOPS_VERSION#v}_arm64.deb"; want="$SOPS_SHA256_ARM64" ;;
+    *) die "no sops .deb for ${arch}; install sops manually from https://github.com/getsops/sops/releases" ;;
+  esac
+  tmp="$(mktemp -d)"
+  deb="$tmp/$asset"
+  log "Fetching sops ${SOPS_VERSION} (${asset})"
+  if ! run curl -fsSL "https://github.com/getsops/sops/releases/download/${SOPS_VERSION}/${asset}" -o "$deb"; then
+    rm -rf "$tmp"
+    die "could not download sops ${SOPS_VERSION}/${asset}; install sops manually from https://github.com/getsops/sops/releases"
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    rm -rf "$tmp"
+    ok "sops ${SOPS_VERSION} (checksum check runs on a real install)"
+    return 0
+  fi
+  if [[ "$(sha256sum "$deb" | cut -d' ' -f1)" != "$want" ]]; then
+    rm -rf "$tmp"
+    die "sops checksum mismatch for ${SOPS_VERSION}/${asset}; refusing to install"
+  fi
+  ok "sops ${SOPS_VERSION} (sha256 verified)"
+  if ! run dpkg -i "$deb"; then
+    warn "dpkg reported missing dependencies; attempting to fix"
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -f -y
+    run dpkg -i "$deb"
+  fi
+  rm -rf "$tmp"
+  have sops || die "sops install finished but 'sops' is not on PATH"
+  ok "sops installed"
 }
 
 install_alias() {
