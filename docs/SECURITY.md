@@ -12,6 +12,43 @@
 | Kernel | `dmesg_restrict`, `kptr_restrict=2`, `ptrace_scope=1`, rp_filter, syncookies |
 | Snapshots | btrfs/snapper before every update |
 
+## Control-plane trust boundary
+
+The agent talks to the control plane over mutually authenticated HTTPS
+(device identity key + short-lived token), but TLS alone does not decide
+what the node *runs*. Every desired-state delivery is additionally signed
+by the control plane with a dedicated Ed25519 **delivery key** that the
+node pins at enrollment; a compromised proxy or stolen TLS session cannot
+forge deliveries.
+
+- **Pinning.** Enrollment (`aw enroll`) pins the delivery key into
+  `$AW_STATE/control-pubkey.json` (mode `0600`), keyed by key id
+  (`ck-` + 12 hex chars of the key's SHA-256). Nodes that enrolled before
+  pinning existed fetch the key once over TLS from `GET /v1/control-key`
+  (one-time TOFU migration). A pinned key never changes silently: a
+  different key id is refused loudly, never overwritten in-band.
+- **Verification.** Every `/v1/device/desired` response must carry the
+  `x-aw-sig-kid`, `x-aw-sig-seq`, `x-aw-sig-exp`, and `x-aw-sig` headers.
+  The node checks the key id against its pin, rebuilds the canonical
+  string (`AW-DESIRED-V1`, device id, sequence, expiry, SHA-256 of the
+  exact response bytes), and verifies the Ed25519 signature with
+  `openssl`. Expiry skew allowance is 60 seconds.
+- **Freshness and rollback.** The signed sequence is monotonic. A
+  delivery is refused when its sequence is older than the last applied
+  version, and an `approved` delivery is applied only when
+  `config.configVersion` equals the signed sequence. The node keeps its
+  last-known-good config and sends no acknowledgement on any failure.
+- **Rotation.** Delivery keys rotate only through explicit re-enrollment:
+  `aw reset --purge` drops the pin along with enrollment state, and the
+  next enrollment pins the new key. There is no silent rotation path.
+- **Signed drain order.** After decommission, a node receives only a
+  terminal 401 — except for one deliberate carve-out: a node whose stored
+  state is `draining` may still fetch a *signed* drain order, which is
+  verified exactly like any delivery before the node wipes itself. A bare
+  401 never triggers a wipe, and a revoked (non-draining) tombstoned node
+  stops without wiping. The drain order carries the node's monotonic
+  sequence, so it can never be mistaken for a rollback.
+
 ## Threat model
 
 | Threat | Mitigation |
@@ -20,6 +57,9 @@
 | Stolen disk | **not covered by default** — decide on LUKS at install time |
 | Malicious agent output | ephemeral containers, `cap-drop ALL`, no socket, resource caps, egress proxy recommended |
 | Leaked API keys | sops+age store, mode 600, never in git or images |
+| Forged control-plane delivery (compromised proxy / stolen TLS session) | Ed25519-signed deliveries, key pinned at enrollment, sequence + expiry; unsigned, tampered, expired, or rolled-back deliveries are refused and keep last-known-good config |
+| Replay of an old signed delivery | monotonic sequence: older-than-applied deliveries are refused, never acknowledged |
+| Wipe triggered by a bare tombstone response | only a *verified signed* drain order wipes; a 401 alone stops the node without wiping |
 | Bad update bricks a headless box | pre-update snapshot + documented `snapper rollback` |
 | Lockout after misconfiguring the tunnel | keep a break-glass path (Tailscale or physical console) |
 | Privilege escalation via container | `no-new-privileges`, `cap-drop ALL`, non-root where possible |
