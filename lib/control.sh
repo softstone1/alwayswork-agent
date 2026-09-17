@@ -559,6 +559,13 @@ control_apply_delivery() {
     die "control: refusing delivery: config version ($ver) does not match the signed sequence ($seq)"
   fi
   log "control: applying desired state (version $ver)"
+  # The tunnel token arrives ONLY over this verified channel, as a top-level
+  # "tunnel" object ({token, hostname}). No tunnel section: existing tunnel
+  # state is left alone. A failure keeps the version unacked so the next
+  # tick retries the delivery.
+  if tunnel_section_present "$json"; then
+    tunnel_apply_from_delivery "$json" || { err "control: tunnel apply of version $ver failed"; return 1; }
+  fi
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.
@@ -566,9 +573,59 @@ control_apply_delivery() {
     err "control: apply of version $ver failed"
     return 1
   fi
+  # Deferred lockdown: public SSH goes off only once the node is active AND
+  # reachable through its tunnel — never at install time, where it would cut
+  # off access before the tunnel is verified. A deferred lockdown keeps the
+  # version unacked so the next tick retries it.
+  control_apply_lockdown "$json" || { err "control: lockdown of version $ver deferred"; return 1; }
   # Record the applied version only after the reconcile succeeded, so a failed
   # apply stays unacked and is retried on the next tick.
   cfg_set_expr '.control.appliedVersion' "$ver"
+}
+
+# control_apply_lockdown <delivery-json> — the zero-touch finale.
+#
+# The SSH lockdown never runs at install time. It runs here, automatically,
+# once a verified delivery marks the node active — but only on
+# tunnel-managed nodes, and only once cloudflared is actually up: the tunnel
+# is the only way back in after sshd goes down, so cutting SSH first would
+# strand the node. The policy is the delivered .config.hardening.ssh when
+# present, else the node's own .hardening.ssh (default: disabled).
+#
+# Returns 1 when the lockdown cannot run yet (tunnel not up, or the policy
+# could not be applied); the delivery stays unacked and the next tick
+# retries. Returns 0 when there is nothing to do (no tunnel on this node, or
+# an unknown policy — both logged loudly, never fatal).
+control_apply_lockdown() {
+  local json="$1" policy delivered
+  if ! tunnel_managed; then
+    info "control: no tunnel on this node; SSH stays operator-managed (bootstrap-time concern)"
+    return 0
+  fi
+  delivered="$(jq -r '.config.hardening.ssh // ""' <<<"$json" 2>/dev/null)"
+  if [[ -n "$delivered" ]]; then
+    policy="$delivered"
+    cfg_set_str '.hardening.ssh' "$policy"
+  else
+    policy="$(cfg_get '.hardening.ssh' 'disabled')"
+  fi
+  case "$policy" in
+    disabled|tailscale|lan) ;;
+    *) warn "control: unknown SSH lockdown policy '$policy'; skipping lockdown"; return 0 ;;
+  esac
+  if ! systemctl is-active --quiet cloudflared 2>/dev/null; then
+    warn "control: lockdown deferred — cloudflared is not up yet (SSH goes off only once the tunnel is reachable); will retry"
+    return 1
+  fi
+  log "control: applying lockdown (hardening.ssh=$policy)"
+  if cfg_bool '.hardening.firewall' true; then
+    fw_ensure || warn "control: firewall lockdown failed; continuing with the SSH policy"
+  fi
+  # apply_ssh_policy dies on an unusable policy (tailscale without the
+  # capability, lan without a detectable LAN address). In the agent that must
+  # be a loud warning + retry, never a crash — so it runs in a subshell.
+  ( apply_ssh_policy "$policy" ) || { warn "control: SSH lockdown failed; will retry"; return 1; }
+  ok "control: lockdown applied (SSH policy: $policy)"
 }
 # The node's own web UI, as the agent should report it: host + port only.
 # The console needs a link target, not a credential - Access gates the hostname
