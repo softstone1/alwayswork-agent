@@ -123,8 +123,11 @@ group sets `expose.webUi.enabled`:
    record**, so provisioning needs no DNS-scoped credential.
 4. Rely on one **wildcard Access application** (`*.alwayswork.space`) for Zero
    Trust, so a new node needs no Access work at all.
-5. Deliver the tunnel token as a **device secret**; `access.tunnel` on the node
-   installs the cloudflared service from it.
+5. Deliver the tunnel token inside the **signed desired-state** document as a
+   top-level `tunnel` object (`{ "token": "<cloudflared token>",
+   "hostname": "<label>.alwayswork.space" }`); the agent consumes it from
+   *only* that verified channel — never an unsigned path. `access.tunnel` on
+   the node installs the cloudflared service from it.
 
 ### Stage 5 — The node's UI
 
