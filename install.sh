@@ -20,6 +20,7 @@ SKIP_DEPS=0
 NO_ALIAS=0
 FORCE=0
 SRC_DIR=""
+INSTALL_FAMILY=""
 
 C_CYAN=$'\033[1;36m'; C_GREEN=$'\033[1;32m'; C_YELLOW=$'\033[1;33m'
 C_RED=$'\033[1;31m'; C_RESET=$'\033[0m'
@@ -41,7 +42,7 @@ Usage: install.sh [options]
   --yes, -y        Non-interactive; bootstrap the foundation after install
   --skip-deps      Do not install system packages
   --no-alias       Do not create the short ${ALIAS} alias
-  --force          Continue on a non-Arch distribution
+  --force          Continue on an unsupported distribution
   --dir <path>     Install directory (default: ${INSTALL_DIR})
   --ref <gitref>   Branch/tag to download (default: ${REPO_REF})
   --from <path>    Install from a local checkout
@@ -67,10 +68,26 @@ done
 
 detect_platform() {
   [[ -f /etc/os-release ]] || die "unsupported system: missing /etc/os-release"
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  if [[ "${ID:-}" != "arch" && "${ID:-}" != "cachyos" && "${ID_LIKE:-}" != *arch* ]]; then
-    warn "alwayswork targets Arch-based systems; detected ${PRETTY_NAME:-unknown}"
+  # Standalone copy of the lib/distro.sh family detection: install.sh can run
+  # from a pipe (curl | bash), where lib/ is not available yet. Parsed, not
+  # sourced, so os-release values (e.g. VERSION=) can never clobber the
+  # installer's own variables.
+  local id="" like="" fam="unknown"
+  id="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -1 || true)"
+  like="$(sed -n 's/^ID_LIKE=//p' /etc/os-release 2>/dev/null | tr -d '"' | head -1 || true)"
+  case "$id" in
+    arch|cachyos|endeavouros|manjaro|garuda|artix) fam="arch" ;;
+    debian|ubuntu|kali|raspbian|pop|linuxmint|elementary|zorin|mx) fam="debian" ;;
+  esac
+  if [[ "$fam" == "unknown" ]]; then
+    case " $like " in
+      *" arch "*)                fam="arch" ;;
+      *" debian "*|*" ubuntu "*) fam="debian" ;;
+    esac
+  fi
+  INSTALL_FAMILY="$fam"
+  if [[ "$fam" == "unknown" ]]; then
+    warn "alwayswork supports Arch- and Debian-family systems; detected ${id:-unknown}"
     [[ "$FORCE" == "1" ]] || die "refusing to continue without --force"
   fi
 }
@@ -97,11 +114,12 @@ resolve_source() {
 install_deps() {
   local -a pkgs=(git curl jq sops age restic ufw)
   log "Installing base dependencies: ${pkgs[*]}"
-  if have pacman; then
-    run pacman -Syu --needed --noconfirm "${pkgs[@]}"
-  else
-    warn "pacman not found; install manually: ${pkgs[*]}"
-  fi
+  case "${INSTALL_FAMILY:-unknown}" in
+    arch)   run pacman -Syu --needed --noconfirm "${pkgs[@]}" ;;
+    debian) run apt-get update
+            run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}" ;;
+    *)      warn "no package manager for this distribution; install manually: ${pkgs[*]}" ;;
+  esac
 }
 
 install_alias() {
@@ -139,13 +157,22 @@ install_files() {
 YQ_VERSION="v4.47.2"
 YQ_SHA256_AMD64="1bb99e1019e23de33c7e6afc23e93dad72aad6cf2cb03c797f068ea79814ddb0"
 YQ_SHA256_ARM64="05df1f6aed334f223bb3e6a967db259f7185e33650c3b6447625e16fea0ed31f"
+# Distro-appropriate hint for getting mikefarah's Go yq by hand.
+yq_install_hint() {
+  if [[ "${INSTALL_FAMILY:-}" == "debian" ]]; then
+    printf "install mikefarah yq (e.g. from https://github.com/mikefarah/yq/releases)"
+  else
+    printf "install the AUR 'go-yq'"
+  fi
+}
+
 bundle_yq() {
   local arch asset target want
   arch="$(uname -m)"
   case "$arch" in
     x86_64)  asset="yq_linux_amd64"; want="$YQ_SHA256_AMD64" ;;
     aarch64) asset="yq_linux_arm64"; want="$YQ_SHA256_ARM64" ;;
-    *) warn "no bundled yq for ${arch}; install the AUR 'go-yq'"; return 0 ;;
+    *) warn "no bundled yq for ${arch}; $(yq_install_hint)"; return 0 ;;
   esac
   target="${INSTALL_DIR}/bin/yq"
   if [[ -x "$target" ]] && "$target" --version 2>/dev/null | grep -qi mikefarah; then
@@ -172,7 +199,7 @@ bundle_yq() {
       die "yq checksum mismatch for ${YQ_VERSION}/${asset}; refusing to install"
     fi
   else
-    warn "could not fetch yq; install the AUR 'go-yq' or place mikefarah yq at ${target}"
+    warn "could not fetch yq; $(yq_install_hint), or place mikefarah yq at ${target}"
   fi
 }
 
