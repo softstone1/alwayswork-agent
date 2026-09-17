@@ -103,6 +103,63 @@ outbound-only channel. No inbound port is ever opened.
 
 Full protocol, API sketch and security model: `docs/ENROLLMENT.md`.
 
+## Zero-touch install (plug-and-play)
+
+A fresh machine becomes a working node with exactly two human actions:
+
+```bash
+# 1. Run the single install entry point (as root, with internet):
+curl -fsSL https://alwayswork.space/install.sh | sudo bash
+# 2. Approve the pending node once in the web console.
+```
+
+That is the whole list. The bootstrapper installs the agent non-interactively
+and enrolls the box — it registers a **pending claim** and waits. After the
+console approval, the agent does everything else by itself:
+
+```
+install -> pending -> (console approval) -> active -> lockdown
+```
+
+**Automatic tunnel from desired-state.** The control plane provisions the
+Cloudflare Tunnel (tunnel + DNS) and delivers the token inside the *signed*
+desired-state document as a top-level `tunnel` object:
+
+```json
+{ "tunnel": { "token": "<cloudflared tunnel token>",
+              "hostname": "<node-hostname>.<baseDomain>" } }
+```
+
+On receipt the agent stores the token in its encrypted secret store (0600,
+never on a command line or in a log) and reconciles `cloudflared`: started on
+first receipt, restarted when the token rotates. A delivery with no `tunnel`
+section leaves any existing tunnel state alone. The token is consumed **only**
+from this verified channel — if signature verification fails, nothing is
+applied.
+
+**Deferred lockdown.** The installer never hardens SSH: cutting it at install
+time would strand the box before the tunnel is verified. The lockdown (public
+SSH off, firewall default-deny, per the `hardening.ssh` policy) happens later,
+automatically, once signed desired-state marks the node active *and* the tunnel
+is up — the tunnel is the only way back in after sshd goes down, so the agent
+defers the lockdown (and retries) until `cloudflared` is running. The node
+reaches "active and reachable" with no SSH session and no human in the loop.
+
+**Manual override.** `sudo aw secrets set CLOUDFLARE_TUNNEL_TOKEN <token>` (or
+`... --stdin` to keep the value off the command line) still works as an
+explicit local fallback for nodes with no delivery yet. Conflict rule: a
+verified delivered token **always replaces** the stored one — the control plane
+must be able to rotate tokens centrally, and a sticky local value would
+silently break rotation.
+
+### Plug-and-play acceptance bar
+
+Fresh Ubuntu 24.04 or Arch/CachyOS, root + internet. The only human actions
+are (1) running the install entry point above and (2) approving the pending
+node in the console. Everything else — dependencies, install,
+enrollment/claim, tunnel + DNS provisioning, signed desired-state application,
+final lockdown — must happen with no SSH session and no further commands.
+
 ## Design principles
 
 | Principle | Meaning |
