@@ -7,22 +7,12 @@
 cleanup_apply() {
   if cfg_bool '.cleanup.orphans' true; then
     log "clean: removing orphaned packages"
-    local -a orphans=()
-    mapfile -t orphans < <(pacman -Qtdq 2>/dev/null || true)
-    if (( "${#orphans[@]}" > 0 )); then
-      run pacman -Rns --noconfirm "${orphans[@]}"
-    else
-      info "no orphaned packages"
-    fi
+    pkg_orphans_remove
   fi
 
   if cfg_bool '.cleanup.package_cache' true; then
     log "clean: trimming package cache"
-    if have paccache; then
-      run paccache -rk2
-    else
-      run pacman -Sc --noconfirm
-    fi
+    pkg_cache_clean
   fi
 
   if cfg_bool '.cleanup.journal' true && have journalctl; then
@@ -51,10 +41,12 @@ cleanup_apply() {
 }
 
 cleanup_status() {
-  local orphans
-  orphans="$(pacman -Qtdq 2>/dev/null | wc -l)"
-  kv "orphan packages" "$orphans"
-  if have paccache; then kv "paccache" "present"; else kv "paccache" "absent (pacman -Sc)"; fi
+  kv "orphan packages" "$(pkg_orphan_count)"
+  if distro_is_arch; then
+    if have paccache; then kv "paccache" "present"; else kv "paccache" "absent (pacman -Sc)"; fi
+  else
+    kv "package cache" "trimmed via apt clean"
+  fi
   if engine_present; then
     local imgs
     imgs="$("$(engine_bin)" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | wc -l || echo 0)"
