@@ -2,19 +2,14 @@
 # The node's own agent web UI. It binds loopback only; the public name is
 # published by the node's Cloudflare Tunnel and gated by Cloudflare Access.
 
-# The harness CLI is a node script, so look beyond root's PATH: an operator
-# installs it under their own home. Set one explicitly with --dsh to override.
-ds_dsh_bin() {
-  local candidate
-  for candidate in "$(cap_config dsh)" "$(command -v dsh 2>/dev/null || true)" \
-    /usr/local/bin/dsh /opt/*/dsh /home/*/.local/bin/dsh; do
-    [[ -n "$candidate" && -x "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
-  done
-  return 1
-}
+# shellcheck disable=SC1090
+source "${CAP_DIR}/ensure.sh"
 
-dsh_bin="$(ds_dsh_bin || true)"
-[[ -n "$dsh_bin" ]] || die "agents.dsh needs the DeepSeek Harness CLI: aw enable agents.dsh --dsh /path/to/dsh"
+# Zero-touch: when no dsh binary exists on the node, install the pinned
+# DeepSeek Harness release (and node 22 LTS first) instead of dying. An
+# already-present binary is used as-is. Set one explicitly with --dsh to
+# override.
+dsh_bin="$(ds_ensure_harness)"
 
 # The account that runs agent work: explicit, then the recorded node account,
 # then whoever owns the harness CLI - the natural owner of its sessions.

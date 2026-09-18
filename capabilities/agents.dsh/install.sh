@@ -3,19 +3,12 @@
 # loopback, trusted for the public hostname the tunnel publishes it under. The
 # host is written to the state file the control agent reports on heartbeat.
 
-# The harness CLI is a node script, so look beyond root's PATH: an operator
-# installs it under their own home. Set one explicitly with --dsh to override.
-ds_dsh_bin() {
-  local candidate
-  for candidate in "$(cap_config dsh)" "$(command -v dsh 2>/dev/null || true)" \
-    /usr/local/bin/dsh /opt/*/dsh /home/*/.local/bin/dsh; do
-    [[ -n "$candidate" && -x "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
-  done
-  return 1
-}
+# shellcheck disable=SC1090
+source "${CAP_DIR}/ensure.sh"
 
-dsh_bin="$(ds_dsh_bin || true)"
-[[ -n "$dsh_bin" ]] || die "no executable dsh; set one with: aw enable agents.dsh --dsh /path/to/dsh"
+# Zero-touch: the preflight already ensured a binary, but install.sh must
+# also stand alone — find or install the harness the same way.
+dsh_bin="$(ds_ensure_harness)"
 
 # Same account rule as the preflight: explicit, recorded, then the harness owner.
 ds_user="$(cap_config user)"

@@ -497,6 +497,150 @@ check "debian apt list excludes sops" \
 check "arch pacman still installs sops from repos" \
   'sops_probe "$ROOT" archdeps && grep -qx "pacman -Syu --needed --noconfirm git curl jq openssl age restic ufw sops" "$PKGLOG"'
 
+echo "== agents.dsh zero-touch =="
+# Exercise capabilities/agents.dsh/ensure.sh without touching the host:
+# source it with stubbed config/distro/package helpers and stub binaries.
+mkdir -p "$TMP/dshbin"
+cat > "$TMP/dshbin/curl" <<'EOS'
+#!/bin/bash
+# Fake curl: packument JSON to stdout when no -o given, canned bytes to the
+# -o target otherwise. Touches CURL_MARKER on every download call.
+out=""; url=""; prev=""
+for a in "$@"; do
+  [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$a" == https://* ]] && url="$a"
+  prev="$a"
+done
+[[ "${CURL_FAIL:-0}" == "1" ]] && exit 1
+if [[ -z "$out" ]]; then
+  printf '%s' "${PACKUMENT_JSON:-{}}"
+else
+  printf 'fake-download-content' > "$out"
+  [[ -n "${CURL_MARKER:-}" ]] && touch "$CURL_MARKER"
+fi
+exit 0
+EOS
+cat > "$TMP/dshbin/sha256sum" <<'EOS'
+#!/bin/bash
+printf '%s  %s\n' "${SHA256_STUB:-unset}" "${@: -1}"
+EOS
+cat > "$TMP/dshbin/openssl" <<'EOS'
+#!/bin/bash
+# dgst emits canned bytes; base64 -A emits the canned digest of them.
+if [[ "${1:-}" == "dgst" ]]; then printf 'fake-digest-bytes'; else printf '%s' "${SHA512_STUB_B64:-}"; fi
+EOS
+cat > "$TMP/dshbin/jq" <<'EOS'
+#!/bin/bash
+printf '%s' "${JQ_RESULT:-}"
+EOS
+cat > "$TMP/dshbin/npm" <<'EOS'
+#!/bin/bash
+echo "npm $*" >> "$PKGLOG"
+# pretend the global install drops dsh on PATH
+printf '#!/bin/sh\nexit 0\n' > "$TMP/dshbin/dsh"
+chmod +x "$TMP/dshbin/dsh"
+exit 0
+EOS
+cat > "$TMP/dshbin/tar" <<'EOS'
+#!/bin/bash
+echo "tar $*" >> "$PKGLOG"
+# pretend extracting the node tarball drops node 22 on PATH (npm stub is
+# already there)
+printf '#!/bin/sh\n[ "$1" = "-v" ] && echo "v22.23.2"\n' > "$TMP/dshbin/node"
+chmod +x "$TMP/dshbin/node"
+exit 0
+EOS
+cat > "$TMP/dshbin/uname" <<'EOS'
+#!/bin/bash
+printf '%s\n' "${UNAME_M:-x86_64}"
+EOS
+chmod +x "$TMP/dshbin/"*
+# Passthroughs for the coreutils the probe needs: the probe PATH is
+# $TMP/dshbin ONLY, so the host's node/npm stay invisible to the stubs.
+for _t in mktemp rm cut chmod touch; do ln -sf "/usr/bin/$_t" "$TMP/dshbin/$_t"; done
+unset _t
+
+cat > "$TMP/dsh-probe.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; MODE="$2"; shift 2
+export AW_ROOT="$ROOT"
+source "$ROOT/lib/core.sh"
+CAP_ID="agents.dsh"
+CAP_DIR="$ROOT/capabilities/agents.dsh"
+cap_config() {
+  case "$1" in
+    dsh)         printf '%s' "${DSH_TEST_DSH:-}" ;;
+    dsh_version) printf '%s' "${DSH_TEST_DSH_VERSION:-}" ;;
+    *)           printf '' ;;
+  esac
+}
+distro_family() { printf '%s' "${DSH_TEST_FAMILY:-debian}"; }
+distro_pretty() { printf '%s-test\n' "${DSH_TEST_FAMILY:-debian}"; }
+pkg_install() {
+  printf 'pkg_install %s\n' "$*" >> "$PKGLOG"
+  # pretend pacman drops a current node + npm on PATH
+  printf '#!/bin/sh\n[ "$1" = "-v" ] && echo "v24.1.0"\n' > "$TMP/dshbin/node"
+  chmod +x "$TMP/dshbin/node"
+}
+# shellcheck disable=SC1090
+source "$ROOT/capabilities/agents.dsh/ensure.sh"
+case "$MODE" in
+  ensure) ds_ensure_harness ;;
+esac
+EOS
+dsh_probe() { # <mode>
+  # Fixtures (dsh/node stubs) are managed by each test, sops-style; the
+  # probe only resets the logs. PATH is $TMP/dshbin alone so the host's
+  # node/npm can never leak into the stubbed environment (bash itself is
+  # resolved before the PATH override).
+  rm -f "$TMP/curl-marker"
+  export PKGLOG="$TMP/dshpkglog" CURL_MARKER="$TMP/curl-marker" TMP
+  : > "$PKGLOG"
+  local bash_bin
+  bash_bin="$(command -v bash)"
+  PATH="$TMP/dshbin" DRY_RUN=0 "$bash_bin" "$TMP/dsh-probe.sh" "$ROOT" "$1" > "$TMP/dsh.out" 2>&1
+}
+dshshas() { grep -q "$1" "$TMP/dsh.out"; }
+dsh_reset() { rm -f "$TMP/dshbin/dsh" "$TMP/dshbin/node"; }
+dsh_with_node22() { printf '#!/bin/sh\n[ "$1" = "-v" ] && echo "v22.23.2"\n' > "$TMP/dshbin/node"; chmod +x "$TMP/dshbin/node"; }
+# Real pins, so the happy-path tests prove the script's constants verify.
+NODE_PIN_X64="d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307"
+DSH_PIN_B64="8Xc8hCQHcIWRmTCVU/xZdp6/qMsWMeAd2ObChKDEsfhUPJFXx6H0lgeb1DxUMD86HZrrVN+1bCvn1ppjZ/fOxw=="
+check "existing dsh is used untouched (no download)" \
+  'dsh_reset; printf "#!/bin/sh\nexit 0\n" > "$TMP/dshbin/dsh"; chmod +x "$TMP/dshbin/dsh"; dsh_probe ensure && dshshas "dshbin/dsh" && [[ ! -e "$TMP/curl-marker" ]]'
+check "explicit --dsh override wins, no install" \
+  'dsh_reset; mkdir -p "$TMP/custom"; printf "#!/bin/sh\nexit 0\n" > "$TMP/custom/dsh"; chmod +x "$TMP/custom/dsh"; DSH_TEST_DSH="$TMP/custom/dsh" dsh_probe ensure && dshshas "$TMP/custom/dsh" && [[ ! -e "$TMP/curl-marker" ]]'
+check "debian zero-touch: node tarball then pinned dsh" \
+  'dsh_reset; DSH_TEST_FAMILY=debian SHA256_STUB="$NODE_PIN_X64" SHA512_STUB_B64="$DSH_PIN_B64" dsh_probe ensure && dshshas "sha256 verified" && dshshas "sha512 verified" && dshshas "dshbin/dsh" && grep -q "^tar -xf" "$PKGLOG" && grep -q "npm install -g" "$PKGLOG"'
+check "debian node checksum mismatch refuses the binary" \
+  'dsh_reset; ! DSH_TEST_FAMILY=debian SHA256_STUB="deadbeef" dsh_probe ensure && dshshas "checksum mismatch" && dshshas "refusing to install"'
+check "node download failure dies loudly" \
+  'dsh_reset; ! DSH_TEST_FAMILY=debian CURL_FAIL=1 dsh_probe ensure && dshshas "could not download node"'
+check "arch zero-touch: node via pacman, dsh via npm" \
+  'dsh_reset; DSH_TEST_FAMILY=arch SHA512_STUB_B64="$DSH_PIN_B64" dsh_probe ensure && grep -qx "pkg_install nodejs" "$PKGLOG" && ! grep -q "^tar -xf" "$PKGLOG" && dshshas "node v24" && dshshas "dshbin/dsh"'
+check "usable node present: skips node install" \
+  'dsh_reset; dsh_with_node22; DSH_TEST_FAMILY=debian SHA512_STUB_B64="$DSH_PIN_B64" dsh_probe ensure && ! grep -q "^tar -xf" "$PKGLOG" && ! grep -q "^pkg_install" "$PKGLOG" && dshshas "dshbin/dsh"'
+check "node too old is replaced" \
+  'dsh_reset; printf "#!/bin/sh\n[ \"\$1\" = \"-v\" ] && echo \"v20.19.0\"\n" > "$TMP/dshbin/node"; chmod +x "$TMP/dshbin/node"; DSH_TEST_FAMILY=arch SHA512_STUB_B64="$DSH_PIN_B64" dsh_probe ensure && grep -qx "pkg_install nodejs" "$PKGLOG" && dshshas "node v24"'
+check "dsh_version override verified against registry integrity" \
+  'dsh_reset; dsh_with_node22; DSH_TEST_DSH_VERSION="0.1.6-alpha.2" JQ_RESULT="sha512-PHR/3ZHpJNWXlDQ3U9weFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==" SHA512_STUB_B64="PHR/3ZHpJNWXlDQ3U9weFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==" dsh_probe ensure && dshshas "@deepseek-ai/dsh@0.1.6-alpha.2" && dshshas "sha512 verified"'
+check "unknown dsh_version dies" \
+  'dsh_reset; dsh_with_node22; ! DSH_TEST_DSH_VERSION="9.9.9" JQ_RESULT="" dsh_probe ensure && dshshas "not found in the npm registry"'
+check "suspicious dsh_version refused" \
+  'dsh_reset; dsh_with_node22; ! DSH_TEST_DSH_VERSION="1.0;touch /tmp/pwned" dsh_probe ensure && dshshas "refusing suspicious"'
+check "dsh tarball integrity mismatch refuses install" \
+  'dsh_reset; dsh_with_node22; ! SHA512_STUB_B64="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" dsh_probe ensure && dshshas "integrity mismatch" && dshshas "refusing to install"'
+check "pinned dsh sha512 decodes to 64 bytes" \
+  'v="$(sed -n "s/^DSH_NPM_SHA512_DEFAULT=\"\([^\"]*\)\"/\1/p" "$ROOT/capabilities/agents.dsh/ensure.sh")"; [[ "$(python3 -c "import base64,sys; sys.stdout.write(str(len(base64.b64decode(sys.argv[1]))))" "$v")" == "64" ]]'
+check "pinned node sha256 are 64 hex chars" \
+  'bad=0; while IFS= read -r hv; do [[ "$hv" =~ ^[0-9a-f]{64}$ ]] || bad=1; done < <(grep -oE "^NODE_SHA256_[A-Z0-9_]+=\"[0-9a-f]*\"" "$ROOT/capabilities/agents.dsh/ensure.sh" | grep -oE "\"[^\"]*\"" | tr -d "\""); [[ "$bad" == "0" ]]'
+# No dsh on the box: dry-run must print the plan, not die or download.
+# Needs yq like the other enable/dry-run tests above (config rendering).
+if have yq; then
+check "dry-run enable without dsh prints plan, changes nothing" \
+  'rm -f "$TMP/dsh"; PATH="$(printf "%s" "$PATH" | tr ":" "\n" | grep -v "^$TMP$" | paste -sd: -)" run_aw --dry-run enable agents.dsh && has "would install node" && [[ ! -e "$AW_STATE/webui.json" ]]'
+fi
+
 echo "== secret store =="
 if have sops && have age && yq --version 2>/dev/null | grep -qi mikefarah; then
   cat > "$TMP/store.sh" <<'EOS'
