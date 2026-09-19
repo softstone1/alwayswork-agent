@@ -149,9 +149,13 @@ control plane being unreachable and keeps serving.
 
 ### Stage 7 — Retire
 
-Revoke in the console → the node's next request is `403` → it stops
-`control.join` and, with `--purge`, deletes its identity. The control plane
-then removes the tunnel, the custom domain and the audit trail records the act.
+Two exits. **Revoke** in the console → the node's next request is refused →
+it stops `control.join` and touches nothing else (forensic state).
+**Decommission** → the control plane tombstones the id and delivers a signed
+drain order → the node drains capabilities, wipes identity and secrets, then
+restores the machine from its ledger (`docs/DECOMMISSION.md`) and removes
+itself. The control plane removes the tunnel and DNS records and the audit
+trail records the act.
 
 ## 6. Desired state
 
@@ -206,21 +210,34 @@ and why the node's UI cookie is bound to `127.0.0.1:<port>`.
 
 ## 10. Current state vs. gaps
 
+The system-wide status table lives in the control repo,
+`docs/SYSTEM_SPEC.md` §12. Node-side summary:
+
 Working today: install, enrollment, signed requests, sealed secrets, desired
-state, capability/app install, tunnel + cloudflared, per-node custom domain and
-VPC proxy, WebSocket pass-through.
+state, capability/app install, tunnel + cloudflared (provisioned by the
+control plane on approval), deferred lockdown, `agents.dsh` managed web UI
+with `--trusted-host`, `webUi` on heartbeat and the console's Open UI,
+`install.sh` served by the control plane, USB `provision.toml` on first
+boot, drain order → tombstone → wipe, ledger and **restore** on decommission,
+typed **health** heartbeat, clock guard, SSH policy `tunnel`.
 
 Gaps, in build order:
 
-1. **`expose` in desired state + control-plane provisioning** of tunnel,
-   binding, custom domain and Access. Needs a Worker-held provisioning token
-   (Workers Scripts:Edit, Zero Trust:Edit, Connectivity:Admin).
-2. **One wildcard Access application** for `*.alwayswork.space`.
-3. **`agents.dsh`** — managed `dsh web` with `--trusted-host <node host>`.
-4. **`webUi` on heartbeat + console Open UI** — store the URL/token encrypted,
-   render a link per node.
-5. **`install.sh` served by the control plane** so the one-liner needs no git.
-6. **Device-scoped secrets** (per-node, not only per-group).
+1. **Node portal + `expose.services`** — a page per node with a card per
+   loopback service (terminal, automations, files), each behind a per-path
+   Access policy. Today the only exposed service is the agent engine's UI.
+2. **Node-side session mint** — verify the Access JWT on the node and mint
+   the engine's UI cookie locally, so the per-node proxy Worker (and its
+   hand-edited `wrangler.jsonc`) can be retired. Spec §10, decision B.
+3. **Objectives** — a signed task in desired state, executed by the node's
+   agent, reported in heartbeat. Spec §5.5.
+4. **Unattended installer image** with the agent baked in, for blank mini
+   PCs from a USB stick. Spec §4.4.
+5. **Control key rotation** without re-enrollment (`nextKey` signed by the
+   pinned key). **Reinstall matching** so a rebuilt box replaces its old
+   identity instead of appearing twice.
+6. **Device-scoped secrets and package pins**; **packages** as signed
+   manifests with rollout waves. Spec §9.
 7. **Update channel/window** in desired state.
 
 ## 11. Decisions to confirm
