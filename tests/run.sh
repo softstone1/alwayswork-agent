@@ -1462,6 +1462,8 @@ check "tunnel policy reloads sshd"               'grep -q "systemctl reload-or-r
 check "tunnel policy drops the lan drop-in"      'grep -q "rm -f /etc/ssh/sshd_config.d/10-alwayswork-lan.conf" "$TMP/sshtun.out"'
 check "tunnel policy documented"                 'grep -q "| \`tunnel\` |" "$ROOT/docs/SECURITY.md" && grep -q "lan | tunnel" "$ROOT/config/defaults.yaml"'
 check "doctor grades tunnel via loopback check"  'grep -q "ssh_loopback_only" "$ROOT/commands/doctor.sh"'
+check "doctor survives checkupdates exiting 2 (no pending updates) and still writes its score" \
+  'mkdir -p "$TMP/dbin" && printf "#!/bin/sh\nexit 2\n" > "$TMP/dbin/checkupdates" && chmod +x "$TMP/dbin/checkupdates" && rm -rf "$TMP/doc" && mkdir -p "$TMP/doc/etc" "$TMP/doc/state" && cp "$ROOT/config/defaults.yaml" "$TMP/doc/etc/worker.yaml" && PATH="$TMP/dbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out" 2>&1; grep -q "system is up to date" "$TMP/doc/out" && grep -q "score" "$TMP/doc/out" && [[ "$(jq -r .score "$TMP/doc/state/doctor.json")" =~ ^[0-9]+$ ]]'
 
 echo "== health =="
 # control_health_json must be valid JSON with the SYSTEM_SPEC §6 names even

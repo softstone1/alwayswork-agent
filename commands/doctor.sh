@@ -87,7 +87,9 @@ cmd_doctor() {
   else _dwarn "low disk space: ${free_gb:-?} GiB free" "free space before running agents"; fi
 
   if have checkupdates; then
-    local pending; pending="$(checkupdates 2>/dev/null | wc -l)"
+    # checkupdates exits 2 when nothing is pending; under set -e -o pipefail
+    # that would end doctor here, before the score is written.
+    local pending; pending="$( (checkupdates 2>/dev/null || true) | wc -l)"
     if (( pending > 0 )); then _dwarn "${pending} package update(s) pending" "run: sudo aw update"
     else _dpass "system is up to date"; fi
   elif distro_is_debian && have apt-get; then
