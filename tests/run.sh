@@ -1452,7 +1452,7 @@ control_health_json
 EOS
 run_health() { bash "$TMP/health.sh" "$ROOT" "$TMP/health" > "$TMP/health.out" 2>"$TMP/health.err"; }
 check "health json is valid"            'run_health && jq -e . "$TMP/health.out" >/dev/null'
-check "health json is a single line"    '[[ "$(wc -l < "$TMP/health.out")" == "1" ]]'
+check "health json is a single line"    '[[ "$(wc -l < "$TMP/health.out")" == "1" ]] || { cat "$TMP/health.err" >&2; false; }'
 check "health has agentVersion"         'jq -e ".agentVersion | type == \"string\"" "$TMP/health.out" >/dev/null'
 check "health has uptimeSec"            'jq -e ".uptimeSec | type == \"number\"" "$TMP/health.out" >/dev/null'
 check "health has clockSynced"          'jq -e ".clockSynced | type == \"boolean\"" "$TMP/health.out" >/dev/null'

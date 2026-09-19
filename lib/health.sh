@@ -153,5 +153,11 @@ control_health_json() {
   local upd; upd="$(declare -F upd_result_json >/dev/null && upd_result_json || printf null)"
   [[ "$upd" != "null" ]] && _health_raw update "$upd"
 
-  jq -nc "${_HEALTH_ARGS[@]}" "{${_HEALTH_FIELDS%,}}" 2>/dev/null || printf '{}'
+  # A field that jq rejects must be visible, not a silent empty heartbeat.
+  local jqerr; jqerr="$(mktemp)"
+  if ! jq -nc "${_HEALTH_ARGS[@]}" "{${_HEALTH_FIELDS%,}}" 2>"$jqerr"; then
+    warn "health: could not assemble the report: $(head -c 300 "$jqerr" | tr '\n' ' ') (fields: ${_HEALTH_FIELDS%,})"
+    printf '{}'
+  fi
+  rm -f "$jqerr"
 }
