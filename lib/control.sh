@@ -660,6 +660,9 @@ control_apply_delivery() {
   # A rollout wave (lib/updates.sh): `update: { rolloutId }` asks this node
   # to run `aw update` now, detached; the result rides the heartbeat.
   upd_apply_from_delivery "$json"
+  # Objectives (lib/objectives.sh): intent for the harness, materialised in
+  # its workspace; results ride the heartbeat.
+  obj_apply_from_delivery "$json"
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.
@@ -902,10 +905,13 @@ control_agent_tick() {
   health="$(control_health_json)"
   # Exposed services (SYSTEM_SPEC §5.2/§12.7): the control plane adds
   # <id>-<node>.<base> to the tunnel for each; omitted when there are none.
-  local services; services="$(wl_services_json 2>/dev/null || printf '[]')"
-  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" --argjson h "$health" --argjson s "$services" \
+  local services objectives
+  services="$(wl_services_json 2>/dev/null || printf '[]')"
+  objectives="$(obj_reports_json 2>/dev/null || printf '[]')"
+  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" --argjson h "$health" --argjson s "$services" --argjson o "$objectives" \
     '{appliedVersion:$v, health:$h} + (if $ui == null then {} else {webUi:$ui} end)
-     + (if ($s | length) == 0 then {} else {expose:{services:$s}} end)')"
+     + (if ($s | length) == 0 then {} else {expose:{services:$s}} end)
+     + (if ($o | length) == 0 then {} else {objectives:$o} end)')"
   resp=""; rc=1
   if resp="$(control_call POST /v1/device/heartbeat "$body")"; then
     rc=0

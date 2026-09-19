@@ -961,7 +961,7 @@ if have yq; then
   check "aw service refuses unknown ids"           '! run_aw service status nope 2>/dev/null'
 fi
 check "heartbeat carries expose.services when present" 'grep -q "expose:{services:" "$ROOT/lib/control.sh" && grep -q "wl_services_json" "$ROOT/lib/control.sh"'
-check "service command is dispatched and documented" 'grep -q "service|help" "$ROOT/bin/alwayswork" && run_aw help && has "service <action> <id>"'
+check "service command is dispatched and documented" 'grep -q "|service|" "$ROOT/bin/alwayswork" && run_aw help && has "service <action> <id>"'
 
 echo "== safe unattended updates (SYSTEM_SPEC §13.1) =="
 cat > "$TMP/upd-probe.sh" <<'EOS'
@@ -1031,6 +1031,35 @@ fi
 check "browser image: chromium with CDP, noVNC, unprivileged user" 'grep -q "remote-debugging-port" "$ROOT/capabilities/tools.browser/entrypoint.sh" && grep -q "websockify" "$ROOT/capabilities/tools.browser/entrypoint.sh" && grep -q "^USER browser" "$ROOT/capabilities/tools.browser/Containerfile"'
 check "runtime.podman creates the node network" 'grep -q "podman network create alwayswork" "$ROOT/capabilities/runtime.podman/install.sh"'
 check "image workflow builds the browser too"   'grep -q "alwayswork-browser" "$ROOT/.github/workflows/image.yml"'
+
+echo "== objectives and the host bridge (SYSTEM_SPEC §5.5) =="
+cat > "$TMP/obj-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"; shift 2
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml" AW_TEST=1
+mkdir -p "$AW_ETC" "$AW_STATE"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/objectives.sh"
+DRY_RUN=0
+# The bridge shells out to bin/alwayswork; point it at a stub that echoes its argv.
+if [[ -n "${STUB_AW:-}" ]]; then AW_ROOT="$D/stubroot"; mkdir -p "$AW_ROOT/bin"; printf '#!/bin/sh\necho "aw $*"\n' > "$AW_ROOT/bin/alwayswork"; chmod +x "$AW_ROOT/bin/alwayswork"; fi
+"$@"
+EOS
+obj_probe() { bash "$TMP/obj-probe.sh" "$ROOT" "$TMP/obj" "$@"; }
+rm -rf "$TMP/obj"; OBJD="$TMP/obj/state/workspaces/dsh/.alwayswork"
+check "objectives: a delivered objective lands in the harness workspace" \
+  'obj_probe obj_apply_from_delivery "{\"objectives\":[{\"id\":\"obj_abcd1\",\"text\":\"run doctor\",\"timeoutSec\":600,\"createdAt\":1}]}" >/dev/null 2>&1 && [[ "$(jq -r .text "$OBJD/objectives/obj_abcd1.json")" == "run doctor" && "$(jq -r .state "$OBJD/objectives/obj_abcd1.json")" == "pending" ]]'
+check "objectives: a bad id is ignored"   'obj_probe obj_apply_from_delivery "{\"objectives\":[{\"id\":\"../evil\",\"text\":\"x\"}]}" >/dev/null 2>&1 && [[ ! -e "$OBJD/objectives/../evil.json" ]] && [[ "$(ls "$OBJD/objectives" | wc -l)" == "0" ]]'
+check "objectives: the harness result is reported on heartbeat" \
+  'obj_probe obj_apply_from_delivery "{\"objectives\":[{\"id\":\"obj_abcd1\",\"text\":\"run doctor\",\"timeoutSec\":600,\"createdAt\":1}]}" >/dev/null 2>&1 && printf "{\"state\":\"done\",\"summary\":\"doctor 92\"}" > "$OBJD/objectives/obj_abcd1.result.json" && [[ "$(obj_probe obj_reports_json | jq -r ".[0].id + \" \" + .[0].state + \" \" + .[0].summary")" == "obj_abcd1 done doctor 92" ]]'
+check "objectives: closed on the control plane -> retired from the workspace" \
+  'obj_probe obj_apply_from_delivery "{\"objectives\":[]}" >/dev/null 2>&1 && [[ ! -e "$OBJD/objectives/obj_abcd1.json" && ! -e "$OBJD/objectives/obj_abcd1.result.json" ]]'
+check "bridge: serves an allowlisted op, result in results/, request consumed" \
+  'mkdir -p "$OBJD/requests" && printf "{\"op\":\"service.status\",\"args\":[\"postgres\"]}" > "$OBJD/requests/req1.json" && STUB_AW=1 obj_probe obj_bridge_serve_once >/dev/null 2>&1 && [[ "$(jq -r .output "$OBJD/results/req1.json")" == "aw service status postgres" && "$(jq -r .ok "$OBJD/results/req1.json")" == "true" ]] && [[ ! -e "$OBJD/requests/req1.json" ]]'
+check "bridge: unknown op and bad service id are refused" \
+  'printf "{\"op\":\"shell\",\"args\":[\"rm -rf /\"]}" > "$OBJD/requests/req2.json"; printf "{\"op\":\"service.logs\",\"args\":[\"pg; id\"]}" > "$OBJD/requests/req3.json"; STUB_AW=1 obj_probe obj_bridge_serve_once >/dev/null 2>&1 && [[ "$(jq -r .ok "$OBJD/results/req2.json")" == "false" && "$(jq -r .ok "$OBJD/results/req3.json")" == "false" ]] && grep -q "unknown op" "$OBJD/results/req2.json"'
+check "bridge: path unit watches the request dir; agents.dsh installs it" 'grep -q "DirectoryNotEmpty=" "$ROOT/lib/objectives.sh" && grep -q "obj_install_units" "$ROOT/capabilities/agents.dsh/install.sh"'
+check "heartbeat carries objectives when present" 'grep -q "objectives:\$o" "$ROOT/lib/control.sh" && grep -q "obj_apply_from_delivery" "$ROOT/lib/control.sh"'
+check "bridge command dispatched"               'grep -q "|bridge|" "$ROOT/bin/alwayswork"'
 
 echo "== node UI gate (SYSTEM_SPEC §10 B) =="
 check "gate ships in the image"       'grep -q "COPY gate.mjs /usr/local/bin/alwayswork-gate" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'

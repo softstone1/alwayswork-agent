@@ -30,6 +30,9 @@ dsc_ensure_workspace
 dsc_render_env
 dsc_ensure_image
 
+# The objectives channel and host bridge live in the harness workspace.
+obj_ensure_dirs
+obj_install_units
 dsc_retire_legacy_unit
 # Restarts only when the unit changed or is down (lib/workload.sh): `aw apply`
 # runs this hook on every delivery and must not bounce a working session.
