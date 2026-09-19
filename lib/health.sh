@@ -146,6 +146,12 @@ control_health_json() {
   _health_raw gpus "$(hw_gpus_json 2>/dev/null)"
   _health_str virt "$(hw_virt 2>/dev/null | head -c 32)"
   _health_num diskRootFreeGb "$(hw_free_disk_gb 2>/dev/null || true)"
+  # What is installed: catalog apps, and every workload container with live usage.
+  if cfg_exists; then
+    _health_raw apps "$(cfg_list '.capabilities.apps' 2>/dev/null | jq -R . 2>/dev/null | jq -sc . 2>/dev/null || true)"
+  fi
+  local wl; wl="$(declare -F wl_workloads_json >/dev/null && wl_workloads_json || printf '[]')"
+  [[ "$wl" != "[]" ]] && _health_raw workloads "$wl"
   # Packages as installed (lib/packages.sh), digest included.
   local pk; pk="$(declare -F pkg_reports_json >/dev/null && pkg_reports_json || printf '[]')"
   [[ "$pk" != "[]" ]] && _health_raw packages "$pk"

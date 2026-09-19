@@ -213,3 +213,34 @@ wl_services_json() {
     jq -c --arg h "$health" '. + {health:$h}' "$f" 2>/dev/null
   done | jq -sc '.'
 }
+
+# Every AlwaysWork container on this node with live usage, for the heartbeat
+# (health.workloads): the harness, services, tools and packages alike. One
+# `podman ps` and one `podman stats --no-stream`; nothing per container.
+wl_workloads_json() {
+  if ! have podman || [[ -n "${AW_TEST:-}" && -z "${AW_TEST_PODMAN:-}" ]]; then printf '[]'; return 0; fi
+  local ps stats
+  ps="$(podman ps -a --filter label=alwayswork=true --format json 2>/dev/null)" || ps='[]'
+  stats="$(podman stats --no-stream --format json 2>/dev/null)" || stats='[]'
+  [[ "$ps" == \[* ]] || ps='[]'
+  [[ "$stats" == \[* ]] || stats='[]'
+  jq -nc --argjson ps "$ps" --argjson st "$stats" '
+    ($st | map({key: .Name, value: .}) | from_entries) as $s
+    | $ps | map(
+      (if (.Names | type) == "array" then .Names[0] else .Names end // "") as $n
+      | ($s[$n] // {}) as $x
+      | (.Labels // {}) as $l
+      | { id: ($n | sub("^alwayswork-"; "")),
+          image: (.Image // ""),
+          state: (.State // "unknown"),
+          health: (.Status // "" | if test("\\(healthy\\)") then "healthy" elif test("\\(unhealthy\\)") then "unhealthy" elif test("\\(starting\\)") then "starting" else null end),
+          kind: (if $l["dev.alwayswork.package"] then "package"
+                 else ($l["alwayswork.capability"] // "" | if startswith("agents.") then "harness" elif startswith("services.") then "service" elif startswith("tools.") then "tool" else "workload" end) end),
+          source: ($l["dev.alwayswork.package"] // $l["alwayswork.capability"] // null),
+          startedAt: (if (.StartedAt | type) == "number" and .StartedAt > 0 then .StartedAt * 1000 else null end),
+          cpuPct: (if ($x.CPU | type) == "number" then ($x.CPU * 100 | round / 100) else ($x.CPUPerc // "" | rtrimstr("%") | tonumber? // null) end),
+          memMb: (if ($x.MemUsage | type) == "number" then ($x.MemUsage / 1048576 | floor) else null end),
+          memLimitMb: (if ($x.MemLimit | type) == "number" and $x.MemLimit > 0 then ($x.MemLimit / 1048576 | floor) else null end),
+          pids: (if ($x.PIDs | type) == "number" then $x.PIDs else ($x.PIDS // "" | tonumber? // null) end) }
+      | with_entries(select(.value != null)))' 2>/dev/null || printf '[]'
+}

@@ -1008,6 +1008,9 @@ check "packages: a bad package name is ignored" \
 check "packages: a distro package adds catalog apps to the desired list" \
   'pkg_probe pkg_apply_from_delivery "{\"packages\":[{\"name\":\"tools\",\"version\":\"1\",\"kind\":\"distro\",\"digest\":\"sha256:dd\",\"manifest\":{\"kind\":\"distro\",\"apps\":[\"ripgrep\"]}}]}" >/dev/null 2>&1 && yq -r ".capabilities.apps[]" "$TMP/pkg/etc/worker.yaml" | grep -qx ripgrep && [[ "$(jq -r .state "$PKGD/installed/tools.json")" == "installed" ]]'
 fi
+check "workloads: heartbeat inventory from podman ps + stats (both stats formats)" \
+  'mkdir -p "$TMP/wlbin" && cp "$ROOT/tests/fixtures/podman-stub.sh" "$TMP/wlbin/podman" && chmod +x "$TMP/wlbin/podman" && out="$(PATH="$TMP/wlbin:$PATH" AW_TEST_PODMAN=1 bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/workload.sh\"; wl_workloads_json")" && [[ "$(jq -r "map(.id + \":\" + .kind + \":\" + .state + \":\" + (.health // \"-\")) | join(\" \")" <<<"$out")" == "dsh:harness:running:healthy n8n:package:exited:- postgres:service:running:unhealthy" ]] && [[ "$(jq -r ".[0] | (.cpuPct|tostring) + \" \" + (.memMb|tostring) + \" \" + (.memLimitMb|tostring)" <<<"$out")" == "12.35 700 4096" ]] && [[ "$(jq -r ".[2].cpuPct" <<<"$out")" == "0.75" ]]'
+check "workloads: no podman -> empty list, never an error" '[[ "$(PATH=/nonexistent:/usr/bin:/bin bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/workload.sh\"; wl_workloads_json")" == "[]" ]]'
 check "packages: bridge allows the packages op" 'grep -q "packages)" "$ROOT/lib/objectives.sh"'
 check "packages: aw package is a command"        'grep -q "|package|" "$ROOT/bin/alwayswork" && [[ -f "$ROOT/commands/package.sh" ]]'
 
