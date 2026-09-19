@@ -224,8 +224,23 @@ wl_workloads_json() {
   stats="$(podman stats --no-stream --format json 2>/dev/null)" || stats='[]'
   [[ "$ps" == \[* ]] || ps='[]'
   [[ "$stats" == \[* ]] || stats='[]'
+  # podman stats JSON differs by version: 5.x gives {Name, CPU (number),
+  # MemUsage/MemLimit (bytes), PIDs}; 4.x gives {name, cpu_percent: "3.6%",
+  # mem_usage: "273MB / 3.1GB", pids: "20"}. Normalise both.
   jq -nc --argjson ps "$ps" --argjson st "$stats" '
-    ($st | map({key: .Name, value: .}) | from_entries) as $s
+    def mb: if type == "number" then . / 1048576
+            else (capture("(?<n>[0-9.]+)\\s*(?<u>[kKMGT]?i?B)") // null) as $m
+                 | if $m == null then null else ($m.n | tonumber) * ({"B":0.000001,"kB":0.001,"KB":0.001,"KiB":0.001,"MB":1,"MiB":1,"GB":1024,"GiB":1024,"TB":1048576,"TiB":1048576}[$m.u] // 1) end end;
+    def pct: if type == "number" then . else (. // "" | rtrimstr("%") | tonumber? // null) end;
+    ($st | map(
+        (.Name // .name // "") as $n
+        | (.MemUsage // .mem_usage) as $mu
+        | { key: $n,
+            value: { cpu: ((.CPU // .CPUPerc // .cpu_percent) | pct),
+                     mem: (if ($mu | type) == "string" then ($mu | split("/")[0] | mb) else ($mu | mb) end),
+                     memLimit: (if ($mu | type) == "string" then ($mu | split("/")[1] // "" | mb) else ((.MemLimit // null) | if . == null then null else mb end) end),
+                     pids: ((.PIDs // .PIDS // .pids) | if type == "number" then . else (. // "" | tonumber? // null) end) } })
+      | map(select(.key != "")) | from_entries) as $s
     | $ps | map(
       (if (.Names | type) == "array" then .Names[0] else .Names end // "") as $n
       | ($s[$n] // {}) as $x
@@ -238,9 +253,9 @@ wl_workloads_json() {
                  else ($l["alwayswork.capability"] // "" | if startswith("agents.") then "harness" elif startswith("services.") then "service" elif startswith("tools.") then "tool" else "workload" end) end),
           source: ($l["dev.alwayswork.package"] // $l["alwayswork.capability"] // null),
           startedAt: (if (.StartedAt | type) == "number" and .StartedAt > 0 then .StartedAt * 1000 else null end),
-          cpuPct: (if ($x.CPU | type) == "number" then ($x.CPU * 100 | round / 100) else ($x.CPUPerc // "" | rtrimstr("%") | tonumber? // null) end),
-          memMb: (if ($x.MemUsage | type) == "number" then ($x.MemUsage / 1048576 | floor) else null end),
-          memLimitMb: (if ($x.MemLimit | type) == "number" and $x.MemLimit > 0 then ($x.MemLimit / 1048576 | floor) else null end),
-          pids: (if ($x.PIDs | type) == "number" then $x.PIDs else ($x.PIDS // "" | tonumber? // null) end) }
+          cpuPct: (if $x.cpu == null then null else ($x.cpu * 100 | round / 100) end),
+          memMb: (if $x.mem == null then null else ($x.mem | floor) end),
+          memLimitMb: (if $x.memLimit == null or $x.memLimit == 0 then null else ($x.memLimit | floor) end),
+          pids: $x.pids }
       | with_entries(select(.value != null)))' 2>/dev/null || printf '[]'
 }

@@ -8,7 +8,8 @@ J
   ;;
   stats) cat <<'J'
 [{"Name":"alwayswork-dsh","CPU":12.3456,"MemUsage":734003200,"MemLimit":4294967296,"PIDs":41},
- {"Name":"alwayswork-postgres","CPUPerc":"0.75%","MemUsage":"120MB / 2GB","PIDS":"9"}]
+ {"Name":"alwayswork-postgres","CPUPerc":"0.75%","MemUsage":"120MB / 2GB","PIDS":"9"},
+ {"id":"abc","name":"alwayswork-n8n","cpu_percent":"3.63%","mem_usage":"273.4MB / 3.129GB","mem_percent":"8.74%","pids":"20"}]
 J
   ;;
 esac
