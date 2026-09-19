@@ -16,11 +16,12 @@
 # Containerfile is built locally, so the image is identical either way.
 
 DSH_IMAGE_REPO_DEFAULT="ghcr.io/softstone1/alwayswork-dsh"
+# shellcheck disable=SC2034  # read by the hooks that source this file
 DSH_CONTAINER="alwayswork-dsh"
+# shellcheck disable=SC2034
 DSH_UNIT="alwayswork-dsh.service"
 DSH_LEGACY_UNIT="alwayswork-webui.service"
-# Test seam: the harness suite renders units into a scratch directory.
-DSH_UNIT_DIR="${AW_SYSTEMD_DIR:-/etc/systemd/system}"
+DSH_UNIT_DIR="$WL_UNIT_DIR"
 
 dsc_mode() {
   local m; m="$(cap_config mode)"
@@ -69,16 +70,8 @@ dsc_control_pubkey() { printf '%s' "$AW_STATE/control-pubkey.json"; }
 # A workspace is a btrfs subvolume where the host has btrfs (snapshot per
 # task later), a plain directory otherwise. Idempotent.
 dsc_ensure_workspace() {
-  local ws; ws="$(dsc_workspace)"
-  ensure_dir "$(dirname "$ws")"
   ensure_dir "$(dsc_home)"
-  if [[ -d "$ws" ]]; then return 0; fi
-  if hw_is_btrfs && have btrfs && [[ "$(findmnt -no FSTYPE --target "$(dirname "$ws")" 2>/dev/null)" == "btrfs" ]]; then
-    log "agents.dsh: creating btrfs subvolume $ws"
-    run btrfs subvolume create "$ws" >/dev/null || run mkdir -p "$ws"
-  else
-    run mkdir -p "$ws"
-  fi
+  wl_subvolume "$(dsc_workspace)"
 }
 
 # Provider keys and gateway tokens for the harness, from the sealed store:
@@ -128,85 +121,37 @@ dsc_render_env() {
 
 # Pull the pinned image; fall back to building the identical Containerfile.
 dsc_ensure_image() {
-  local img; img="$(dsc_image)"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    info "agents.dsh: dry-run — would pull $img (or build ${CAP_DIR}/Containerfile)"
-    return 0
-  fi
-  if podman image exists "$img" 2>/dev/null && [[ "$(cap_config pull)" != "always" ]]; then
-    ok "image present: $img"
-    return 0
-  fi
-  if [[ "$(cap_config build)" != "true" ]]; then
-    log "agents.dsh: pulling $img"
-    if run podman pull "$img" >/dev/null; then ok "pulled $img"; return 0; fi
-    warn "agents.dsh: pull failed; building the same image locally"
-  fi
   local version pin
   version="$(ds_want_version)"
   pin=""; [[ "$version" == "$DSH_NPM_VERSION_DEFAULT" ]] && pin="$DSH_NPM_SHA512_DEFAULT"
-  log "agents.dsh: building $img from ${CAP_DIR}/Containerfile (dsh $version)"
-  run podman build --pull=newer -t "$img" \
-    --build-arg "DSH_VERSION=$version" --build-arg "DSH_SHA512=$pin" \
-    -f "${CAP_DIR}/Containerfile" "${CAP_DIR}" >/dev/null \
-    || die "agents.dsh: image build failed"
-  ok "built $img"
+  WL_PULL="$(cap_config pull)" WL_BUILD="$(cap_config build)" \
+    wl_ensure_image "$(dsc_image)" "$CAP_DIR" --build-arg "DSH_VERSION=$version" --build-arg "DSH_SHA512=$pin"
 }
 
-# Extra podman flags beyond engine_build_args: the isolation contract.
-dsc_isolation_args() {
-  # shellcheck disable=SC2054  # the commas are podman's tmpfs option syntax
-  DSC_ISO_ARGS=(--userns=auto --read-only --tmpfs "/tmp:rw,nosuid,size=512m")
-  if [[ "$(cap_config network)" == "none" ]]; then DSC_ISO_ARGS+=(--network none); fi
-}
-
-# The system unit. podman runs in the foreground with sdnotify so systemd
-# knows when the UI is really up; --replace makes restarts idempotent.
-dsc_write_unit() {
-  local img port host ws home envf podman_bin
-  img="$(dsc_image)"; port="$(dsc_port)"; host="$(dsc_host)"
-  ws="$(dsc_workspace)"; home="$(dsc_home)"; envf="$(dsc_env_file)"
-  podman_bin="$(command -v podman || echo /usr/bin/podman)"
-  engine_build_args
-  dsc_isolation_args
-  local flags pubkey_mount=""
-  flags="$(printf '%q ' "${AW_ENGINE_ARGS[@]}" "${DSC_ISO_ARGS[@]}")"
+# The system unit, on the shared workload contract (lib/workload.sh): the
+# harness gets a read-only rootfs, its two volumes, loopback publish, the
+# env file, and the pinned control key for tenant sessions.
+# shellcheck disable=SC2034  # WL_* are read by lib/workload.sh
+dsc_workload_vars() {
+  WL_NAME="dsh"
+  WL_IMAGE="$(dsc_image)"
+  WL_DESC="DeepSeek Harness web UI (container)"
+  WL_PUBLISH=("$(dsc_port):$(dsc_port)")
+  WL_VOLUMES=("$(dsc_workspace):/workspace:U" "$(dsc_home):/home/dsh:U")
   # The pinned control key is public material (0644); mounted read-only so
   # the gate can verify control-plane tenant sessions.
-  if [[ -f "$(dsc_control_pubkey)" ]]; then
-    pubkey_mount="--volume $(dsc_control_pubkey):/run/alwayswork/control-pubkey.json:ro "
-  fi
-  aw_write "$DSH_UNIT_DIR/$DSH_UNIT" <<UNIT
-[Unit]
-Description=AlwaysWork workload: DeepSeek Harness web UI (container)
-Documentation=https://github.com/softstone1/alwayswork-agent
-After=network-online.target
-Wants=network-online.target
-# Managed by alwayswork (capabilities/agents.dsh). Image: $img
-
-[Service]
-Type=notify
-NotifyAccess=all
-Restart=always
-RestartSec=5
-TimeoutStartSec=300
-TimeoutStopSec=30
-ExecStartPre=-$podman_bin rm -f $DSH_CONTAINER
-ExecStart=$podman_bin run --rm --replace --sdnotify=conmon --name $DSH_CONTAINER \\
-  ${flags}\\
-  --publish 127.0.0.1:$port:$port \\
-  --env-file $envf \\
-  --volume $ws:/workspace:U \\
-  --volume $home:/home/dsh:U \\
-  ${pubkey_mount}\\
-  --label dev.alwayswork.workload=dsh --label dev.alwayswork.host=$host \\
-  $img
-ExecStop=$podman_bin stop -t 10 $DSH_CONTAINER
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+  [[ -f "$(dsc_control_pubkey)" ]] && WL_VOLUMES+=("$(dsc_control_pubkey):/run/alwayswork/control-pubkey.json:ro")
+  WL_ENV_FILE="$(dsc_env_file)"
+  WL_LABELS=("dev.alwayswork.workload=dsh" "dev.alwayswork.host=$(dsc_host)")
+  WL_READ_ONLY=1
+  WL_TMPFS=()
+  WL_HEALTH=""
+  WL_EXTRA=()
+  WL_NETWORK="$(cap_config network)"
+  WL_ARGS=()
 }
+dsc_write_unit() { dsc_workload_vars; wl_write_unit; }
+dsc_apply_unit() { dsc_workload_vars; wl_apply_unit; }
 
 # The pre-container unit ran the harness straight on the host. Retire it
 # once the container is in place; the operator's old sessions stay in that

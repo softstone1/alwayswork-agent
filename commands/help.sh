@@ -31,6 +31,8 @@ OPERATIONS
       [--keep-foundation|--keep-agent]   ... but keep the hardening / keep alwayswork
   reset [--purge]           Forget this identity so the node can re-join
   agent [interval]          Report state and reconcile (run as a service)
+  service list              Service workloads on this node (postgres, ...)
+  service <action> <id>     status|logs|snapshot|backup|restore|upgrade|psql
 
 APPS
   app list [category]       Browse the curated tool catalog

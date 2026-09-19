@@ -878,7 +878,7 @@ export CAP_ID=agents.dsh CAP_DIR="$ROOT/capabilities/agents.dsh"
 mkdir -p "$AW_ETC" "$AW_STATE" "$AW_SYSTEMD_DIR"
 source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"
 source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
-source "$ROOT/lib/capability.sh"
+source "$ROOT/lib/capability.sh"; source "$ROOT/lib/workload.sh"
 source "$CAP_DIR/ensure.sh"; source "$CAP_DIR/container.sh"
 DRY_RUN=0
 [[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
@@ -916,6 +916,50 @@ check "dsc: entrypoint binds loopback, gate in front"  'grep -q -- "--host 127.0
 check "dsc: image workflow publishes the pinned tag"  'grep -q "alwayswork-dsh" "$ROOT/.github/workflows/image.yml" && grep -q "DSH_NPM_VERSION_DEFAULT" "$ROOT/.github/workflows/image.yml"'
 check "dsc: runtime.podman provides userns ranges"    'grep -q "containers:2147483647:2147483648" "$ROOT/capabilities/runtime.podman/install.sh"'
 check "apply persists resolved dependencies"          'grep -q "cfg_list_add .\.capabilities\.enabled. \"\$c\"" "$ROOT/commands/apply.sh"'
+
+echo "== services.postgres on the workload contract (SYSTEM_SPEC §12.7) =="
+cat > "$TMP/pg-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"; shift 2
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml"
+export AW_SYSTEMD_DIR="$D/systemd" AW_OS_RELEASE="$D/../os/arch" AW_TEST=1
+export CAP_ID=services.postgres CAP_DIR="$ROOT/capabilities/services.postgres"
+mkdir -p "$AW_ETC" "$AW_STATE" "$AW_SYSTEMD_DIR"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"
+source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
+source "$ROOT/lib/capability.sh"; source "$ROOT/lib/workload.sh"
+source "$CAP_DIR/postgres.sh"
+DRY_RUN=0
+[[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
+"$@"
+EOS
+pg_probe() { bash "$TMP/pg-probe.sh" "$ROOT" "$TMP/pg" "$@"; }
+rm -rf "$TMP/pg"
+if have yq; then
+  check "pg: defaults are a pinned major, loopback 5432, app db/role" \
+    '[[ "$(pg_probe pg_image)" == "docker.io/library/postgres:16" && "$(pg_probe pg_port)" == "5432" && "$(pg_probe pg_db)" == "app" && "$(pg_probe pg_user)" == "app" ]]'
+  check "pg: suspicious names are refused" \
+    'yq -i ".capabilities.config.services.postgres.db = \"app; drop\"" "$TMP/pg/etc/worker.yaml" && ! pg_probe pg_db >/dev/null 2>&1; yq -i "del(.capabilities.config.services.postgres.db)" "$TMP/pg/etc/worker.yaml"'
+  check "pg: unit is a writable-data workload with a healthcheck, loopback publish, data volume" \
+    'pg_probe pg_write_unit >/dev/null 2>&1 && u="$TMP/pg/systemd/alwayswork-postgres.service" && grep -q -- "--userns=auto" "$u" && ! grep -q -- "--read-only" "$u" && grep -q -- "--health-cmd \"pg_isready -U postgres -h 127.0.0.1\"" "$u" && grep -q -- "--health-on-failure=stop" "$u" && grep -q -- "--publish 127.0.0.1:5432:5432" "$u" && grep -q -- "--volume $TMP/pg/state/services/postgres/data:/var/lib/postgresql/data:U" "$u" && grep -q -- "--user 999:999" "$u" && grep -q -- "--shm-size 256m" "$u" && grep -q "docker.io/library/postgres:16" "$u"'
+  check "pg: memory_mb override lands as a container budget" \
+    'yq -i ".capabilities.config.services.postgres.memory_mb = 3072" "$TMP/pg/etc/worker.yaml" && pg_probe pg_write_unit >/dev/null 2>&1 && grep -q -- "--memory 3072m" "$TMP/pg/systemd/alwayswork-postgres.service" && yq -i "del(.capabilities.config.services.postgres.memory_mb)" "$TMP/pg/etc/worker.yaml"'
+  check "pg: init script creates the app role as owner, never hardcodes a password" \
+    'pg_probe pg_render_init >/dev/null 2>&1 && f="$TMP/pg/state/services/postgres/init/10-app-role.sh" && grep -q "CREATE ROLE" "$f" && grep -q "AW_APP_PASSWORD" "$f" && ! grep -qi "password .[a-z0-9]\{8,\}" "$f"'
+  check "pg: service is reported for the heartbeat as tcp 5432" \
+    'pg_probe wl_report_service postgres PostgreSQL tcp 5432 >/dev/null 2>&1 && [[ "$(pg_probe wl_services_json | jq -r ".[0] | .id + \" \" + .protocol + \" \" + (.port|tostring) + \" \" + .health")" == "postgres tcp 5432 unknown" ]]'
+  check "pg: unreport removes it"     'pg_probe wl_unreport_service postgres >/dev/null 2>&1 && [[ "$(pg_probe wl_services_json)" == "[]" ]]'
+  check "workload: subvolume falls back to a directory off btrfs; snapshot warns" \
+    'pg_probe wl_subvolume "$TMP/pg/state/x/data" >/dev/null 2>&1 && [[ -d "$TMP/pg/state/x/data" ]] && ! pg_probe wl_snapshot "$TMP/pg/state/x/data" >/dev/null 2>&1'
+  check "workload: systemd quoting of arguments with spaces and quotes" \
+    '[[ "$(pg_probe wl_qs --a "b c" "d\"e")" == "--a \"b c\" \"d\\\"e\" " ]]'
+  check "pg: dry-run enable pulls runtime.podman and renders the unit" \
+    'run_aw --dry-run enable services.postgres && has "runtime.podman" && has "alwayswork-postgres.service" && has "postgres ready on 127.0.0.1:5432"'
+  check "aw service list shows nothing enabled"   'run_aw service list && has "none"'
+  check "aw service refuses unknown ids"           '! run_aw service status nope 2>/dev/null'
+fi
+check "heartbeat carries expose.services when present" 'grep -q "expose:{services:" "$ROOT/lib/control.sh" && grep -q "wl_services_json" "$ROOT/lib/control.sh"'
+check "service command is dispatched and documented" 'grep -q "service|help" "$ROOT/bin/alwayswork" && run_aw help && has "service <action> <id>"'
 
 echo "== node UI gate (SYSTEM_SPEC §10 B) =="
 check "gate ships in the image"       'grep -q "COPY gate.mjs /usr/local/bin/alwayswork-gate" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'

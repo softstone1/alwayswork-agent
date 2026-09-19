@@ -1,0 +1,6 @@
+id: services.postgres
+name: PostgreSQL
+description: PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps), exposed through the tunnel for Hyperdrive.
+version: 1
+requires: [core, runtime.podman]
+profiles: [full]

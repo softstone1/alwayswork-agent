@@ -30,23 +30,10 @@ dsc_ensure_workspace
 dsc_render_env
 dsc_ensure_image
 
-# Only restart the container when the unit actually changed: `aw apply` runs
-# this hook on every delivery and must not bounce a working session.
-unit="$DSH_UNIT_DIR/$DSH_UNIT"
-before=""; [[ -f "$unit" ]] && before="$(sha256sum "$unit" | cut -d' ' -f1)"
-dsc_write_unit
-after=""; [[ -f "$unit" && "$DRY_RUN" != "1" ]] && after="$(sha256sum "$unit" | cut -d' ' -f1)"
-
 dsc_retire_legacy_unit
-run systemctl daemon-reload
-run systemctl enable "$DSH_UNIT"
-if [[ "$DRY_RUN" == "1" ]]; then
-  info "agents.dsh: dry-run — would (re)start $DSH_UNIT"
-elif [[ "$before" != "$after" ]] || ! systemctl is-active --quiet "$DSH_UNIT"; then
-  run systemctl restart "$DSH_UNIT"
-else
-  info "agents.dsh: unit unchanged; container left running"
-fi
+# Restarts only when the unit changed or is down (lib/workload.sh): `aw apply`
+# runs this hook on every delivery and must not bounce a working session.
+dsc_apply_unit
 
 dsc_report_webui "$host" "$port"
 cfg_set_str '.agents.dsh.mode' container 2>/dev/null || true

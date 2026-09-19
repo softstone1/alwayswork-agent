@@ -864,8 +864,12 @@ control_agent_tick() {
   # refreshed at most hourly.
   health_doctor_refresh
   health="$(control_health_json)"
-  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" --argjson h "$health" \
-    '{appliedVersion:$v, health:$h} + (if $ui == null then {} else {webUi:$ui} end)')"
+  # Exposed services (SYSTEM_SPEC §5.2/§12.7): the control plane adds
+  # <id>-<node>.<base> to the tunnel for each; omitted when there are none.
+  local services; services="$(wl_services_json 2>/dev/null || printf '[]')"
+  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" --argjson h "$health" --argjson s "$services" \
+    '{appliedVersion:$v, health:$h} + (if $ui == null then {} else {webUi:$ui} end)
+     + (if ($s | length) == 0 then {} else {expose:{services:$s}} end)')"
   resp=""; rc=1
   if resp="$(control_call POST /v1/device/heartbeat "$body")"; then
     rc=0
