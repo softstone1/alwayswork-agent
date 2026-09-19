@@ -205,7 +205,9 @@ console — the agent takes over with no SSH session:
 4. **Lockdown, deferred.** Only once the node is active *and* `cloudflared`
    is up does the agent apply the SSH lockdown (public SSH off, firewall
    default-deny, per the delivered `.config.hardening.ssh` or the node's own
-   `.hardening.ssh`, default `disabled`). The tunnel is the only way back in
+   `.hardening.ssh`, default `disabled`; policy `tunnel` keeps sshd on loopback
+   for the Access SSH ingress and trusts the CA delivered as `access.sshCa` —
+   see docs/SECURITY.md). The tunnel is the only way back in
    after sshd goes down, so a lockdown attempted before the tunnel is
    reachable is deferred — the delivery stays unacked and the next tick
    retries it. Nodes with no tunnel at all are left alone: their SSH stays a

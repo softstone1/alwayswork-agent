@@ -12,6 +12,40 @@
 | Kernel | `dmesg_restrict`, `kptr_restrict=2`, `ptrace_scope=1`, rp_filter, syncookies |
 | Snapshots | btrfs/snapper before every update |
 
+## SSH policies (`hardening.ssh`)
+
+Applied by `aw bootstrap` on interactive installs and, on tunnel-managed
+nodes, by the control agent once the node is active and its tunnel is up
+(docs/ENROLLMENT.md, "Lockdown, deferred"). Port 22 is opened in the
+firewall only by `lan`, and only for the LAN subnet.
+
+| Policy | sshd | Listens on | Firewall | Authentication |
+|--------|------|------------|----------|----------------|
+| `disabled` (default) | disabled and stopped | — | nothing opened | — |
+| `tailscale` | enabled | all interfaces | only `tailscale0` is allowed in (needs `access.tailscale`) | system default |
+| `lan` | enabled | the LAN address (`10-alwayswork-lan.conf`) | 22 opened for the LAN subnet only | system default |
+| `tunnel` | enabled | `127.0.0.1` and `::1` only (`10-alwayswork-tunnel.conf`) | nothing opened, ever | `PasswordAuthentication no`; short-lived certificates via `TrustedUserCAKeys /etc/ssh/alwayswork_access_ca.pub` |
+
+With `tunnel`, the only way in is the Cloudflare Access SSH ingress
+(`<node>-ssh.<base>` -> `ssh://127.0.0.1:22`). The Access SSH CA public key
+arrives in the signed desired-state delivery as a top-level
+`access.sshCa` string (OpenSSH public key format) and is written to
+`/etc/ssh/alwayswork_access_ca.pub` (0644); an absent or `null` `access`
+leaves the file alone, and anything that is not a single
+`ssh-ed25519` / `ecdsa-*` / `ssh-rsa` key line is refused with a warning.
+No `authorized_keys` are ever written. `aw doctor` grades `tunnel` as
+passing when every port-22 listener is bound to loopback.
+
+## Clock guard
+
+Signed device requests carry a timestamp the control plane checks against a
+300 s window, so the agent refuses to sign anything until the clock is
+trusted: `timedatectl` reports NTP synchronised, or the wall clock is later
+than a floor baked into the agent (the date the guard shipped; a reading
+before it is provably wrong). `aw enroll` refuses with the same rule, the
+agent unit orders itself after `time-sync.target`, and the heartbeat reports
+`health.clockSynced`.
+
 ## Control-plane trust boundary
 
 The agent talks to the control plane over mutually authenticated HTTPS

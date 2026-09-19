@@ -42,6 +42,30 @@ control_macs_json() {
 }
 
 control_dmi() { cat "/sys/class/dmi/id/$1" 2>/dev/null || true; }
+
+# --- clock guard ---------------------------------------------------------------
+# Every signed request carries a timestamp the control plane checks against a
+# 300 s window, so a box whose clock is wrong after a power loss would sign
+# requests that are rejected anyway — and a delivery expiry check against a
+# bogus clock is meaningless. The clock is trusted when systemd-timesyncd (or
+# any NTP client timedatectl knows about) reports it synced, OR when the wall
+# clock is later than the floor below: this code did not exist before that
+# date, so an earlier reading is provably wrong. The second rule covers boxes
+# without timedatectl. AW_CLOCK_FLOOR overrides the floor (tests).
+AW_CLOCK_FLOOR_DEFAULT=1789776000   # 2026-09-19T00:00:00Z, the date of this change
+
+control_clock_trusted() {
+  local synced floor now
+  if have timedatectl; then
+    synced="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+    [[ "$synced" == "yes" ]] && return 0
+  fi
+  floor="${AW_CLOCK_FLOOR:-$AW_CLOCK_FLOOR_DEFAULT}"
+  now="$(date +%s 2>/dev/null || true)"
+  [[ "$now" =~ ^[0-9]+$ && "$floor" =~ ^[0-9]+$ ]] || return 1
+  [[ "$now" -gt "$floor" ]]
+}
+
 control_sign() {
   local msg sig
   msg="$(mktemp)"
@@ -384,6 +408,11 @@ control_enroll() {
   require_root enroll
   cfg_require
   cfg_need
+  # Enrollment mints and pins keys and starts signing timestamped requests: a
+  # box with a wrong clock would fail every one of them. Refuse until NTP
+  # syncs (or the clock is at least plausible) rather than enroll into a loop.
+  control_clock_trusted \
+    || die "clock not trusted (NTP not synced and the wall clock reads $(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)); set the time or wait for time-sync before enrolling"
   [[ -n "$url" ]] && cfg_set_str '.control.url' "$url"
   # Record the account agent work runs as while we still know who invoked us;
   # capabilities like agents.dsh need it to serve that account's sessions.
@@ -566,6 +595,9 @@ control_apply_delivery() {
   if tunnel_section_present "$json"; then
     tunnel_apply_from_delivery "$json" || { err "control: tunnel apply of version $ver failed"; return 1; }
   fi
+  # The SSH access CA (policy `tunnel`) arrives the same way, as a top-level
+  # "access" object. Absent or null: the CA file is left alone.
+  control_apply_access "$json"
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.
@@ -610,7 +642,7 @@ control_apply_lockdown() {
     policy="$(cfg_get '.hardening.ssh' 'disabled')"
   fi
   case "$policy" in
-    disabled|tailscale|lan) ;;
+    disabled|tailscale|lan|tunnel) ;;
     *) warn "control: unknown SSH lockdown policy '$policy'; skipping lockdown"; return 0 ;;
   esac
   if ! systemctl is-active --quiet cloudflared 2>/dev/null; then
@@ -626,6 +658,50 @@ control_apply_lockdown() {
   # be a loud warning + retry, never a crash — so it runs in a subshell.
   ( apply_ssh_policy "$policy" ) || { warn "control: SSH lockdown failed; will retry"; return 1; }
   ok "control: lockdown applied (SSH policy: $policy)"
+}
+
+# control_apply_access <delivery-json> — the SSH access CA from desired state.
+#
+# SSH policy `tunnel` trusts short-lived certificates signed by the Cloudflare
+# Access SSH CA (docs/SYSTEM_SPEC.md §5.4). The CA public key travels in the
+# verified delivery as `access.sshCa` and is written to
+# /etc/ssh/alwayswork_access_ca.pub; no authorized_keys are ever written. An
+# absent or null `access` leaves the file alone, and a value that is not an
+# OpenSSH public key line is refused loudly. Never fails the delivery: a bad
+# CA is a warning, the rest of the desired state still applies.
+control_access_ca_file() { printf '%s\n' "/etc/ssh/alwayswork_access_ca.pub"; }
+
+control_apply_access() {
+  local json="$1" ca f policy
+  jq -e '.access | type == "object"' >/dev/null 2>&1 <<<"$json" || return 0
+  jq -e '.access.sshCa | type == "string"' >/dev/null 2>&1 <<<"$json" || return 0
+  ca="$(jq -r '.access.sshCa' <<<"$json" 2>/dev/null)"
+  ca="${ca//$'\r'/}"
+  # Trailing newlines are noise; an embedded one means more than one key line.
+  while [[ "$ca" == *$'\n' ]]; do ca="${ca%$'\n'}"; done
+  case "$ca" in
+    "ssh-ed25519 "*|"ecdsa-"*|"ssh-rsa "*) ;;
+    *) warn "control: access.sshCa is not an OpenSSH public key (expected ssh-ed25519 / ecdsa-* / ssh-rsa); leaving the CA untouched"; return 0 ;;
+  esac
+  if [[ "$ca" == *$'\n'* ]]; then
+    warn "control: access.sshCa must be a single key line; leaving the CA untouched"
+    return 0
+  fi
+  f="$(control_access_ca_file)"
+  if [[ "$DRY_RUN" != "1" && -f "$f" && "$(cat "$f" 2>/dev/null)" == "$ca" ]]; then
+    info "control: SSH access CA already current"
+    return 0
+  fi
+  log "control: writing the SSH access CA ($f)"
+  printf '%s\n' "$ca" | aw_write "$f" || { warn "control: could not write $f"; return 0; }
+  run chmod 0644 "$f" || true
+  # Only policy `tunnel` references the CA; sshd re-reads TrustedUserCAKeys on
+  # reload. Other policies pick it up if and when they switch to tunnel.
+  policy="$(jq -r '.config.hardening.ssh // ""' <<<"$json" 2>/dev/null)"
+  [[ -n "$policy" ]] || policy="$(cfg_get '.hardening.ssh' disabled)"
+  if [[ "$policy" == "tunnel" ]] && systemctl is-active --quiet sshd 2>/dev/null; then
+    run systemctl reload sshd 2>/dev/null || warn "control: sshd reload failed; the CA applies on the next restart"
+  fi
 }
 # The node's own web UI, as the agent should report it: host + port only.
 # The console needs a link target, not a credential - Access gates the hostname
@@ -683,14 +759,25 @@ control_agent() {
 }
 
 control_agent_tick() {
-  local applied body resp desired delivery ver rc webui
+  local applied body resp desired delivery ver rc webui health
+  # Nothing is signed against an untrusted clock: the control plane would
+  # reject the timestamp anyway, and a delivery expiry check would be
+  # meaningless. The tick backs off and retries once NTP has synced.
+  if ! control_clock_trusted; then
+    warn "control: clock not trusted; skipping signed calls until NTP syncs"
+    return 1
+  fi
   # The pinned key must exist before any delivery is trusted. Nodes that
   # enrolled before pinning existed fetch it once here (TOFU over TLS).
   control_ensure_pubkey || return 1
   applied="$(cfg_get '.control.appliedVersion' 0)"
   webui="$(control_webui_json)"
-  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" \
-    '{appliedVersion:$v, health:{}} + (if $ui == null then {} else {webUi:$ui} end)')"
+  # Typed health (docs/SYSTEM_SPEC.md §6); the doctor score inside it is
+  # refreshed at most hourly.
+  health_doctor_refresh
+  health="$(control_health_json)"
+  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" --argjson h "$health" \
+    '{appliedVersion:$v, health:$h} + (if $ui == null then {} else {webUi:$ui} end)')"
   resp=""; rc=1
   if resp="$(control_call POST /v1/device/heartbeat "$body")"; then
     rc=0

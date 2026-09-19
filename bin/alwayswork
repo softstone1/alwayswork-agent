@@ -44,6 +44,8 @@ source "$AW_ROOT/lib/apps.sh"
 source "$AW_ROOT/lib/cleanup.sh"
 # shellcheck source=../lib/control.sh
 source "$AW_ROOT/lib/control.sh"
+# shellcheck source=../lib/health.sh
+source "$AW_ROOT/lib/health.sh"
 
 # --- global flags -----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
