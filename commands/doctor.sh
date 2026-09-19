@@ -34,7 +34,10 @@ cmd_doctor() {
 
   case "$(fw_backend)" in
     ufw)
-      if ufw status 2>/dev/null | grep -qi 'Default: deny (incoming)'; then
+      # The default policy is printed only by `status verbose`; /etc/default/ufw
+      # is the fallback when ufw cannot answer (e.g. doctor run without root).
+      if ufw status verbose 2>/dev/null | grep -qi 'Default: deny (incoming)' \
+        || grep -qE '^DEFAULT_INPUT_POLICY="?DROP"?' /etc/default/ufw 2>/dev/null; then
         _dpass "ufw default incoming policy is deny"
       else
         _dwarn "ufw default incoming policy is not deny" "sudo ufw default deny incoming"
