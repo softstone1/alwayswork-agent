@@ -73,4 +73,9 @@ if cfg_bool '.always_on.enabled' true; then
   power_apply
 fi
 
+# Safe unattended updates (lib/updates.sh): only `aw update` changes packages,
+# and every boot after an update verifies health or rolls back.
+upd_install_guard_hooks
+upd_install_units
+
 ok "core foundation ready"

@@ -141,6 +141,9 @@ control_health_json() {
   fi
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
+  # Last update result (lib/updates.sh): what a rollout wave waits for.
+  local upd; upd="$(declare -F upd_result_json >/dev/null && upd_result_json || printf null)"
+  [[ "$upd" != "null" ]] && _health_raw update "$upd"
 
   jq -nc "${_HEALTH_ARGS[@]}" "{${_HEALTH_FIELDS%,}}" 2>/dev/null || printf '{}'
 }

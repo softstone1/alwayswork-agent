@@ -963,6 +963,41 @@ fi
 check "heartbeat carries expose.services when present" 'grep -q "expose:{services:" "$ROOT/lib/control.sh" && grep -q "wl_services_json" "$ROOT/lib/control.sh"'
 check "service command is dispatched and documented" 'grep -q "service|help" "$ROOT/bin/alwayswork" && run_aw help && has "service <action> <id>"'
 
+echo "== safe unattended updates (SYSTEM_SPEC §13.1) =="
+cat > "$TMP/upd-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"; shift 2
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml" AW_RUN_DIR="$D/run"
+export AW_SYSTEMD_DIR="$D/systemd" AW_OS_RELEASE="$D/../os/arch" AW_TEST=1
+mkdir -p "$AW_ETC" "$AW_STATE" "$AW_RUN_DIR"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"; source "$ROOT/lib/distro.sh"
+source "$ROOT/lib/secrets.sh"; source "$ROOT/lib/snapshot.sh"; source "$ROOT/lib/health.sh"; source "$ROOT/lib/control.sh"; source "$ROOT/lib/updates.sh"
+DRY_RUN="${PROBE_DRY:-0}"
+[[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
+"$@"
+EOS
+upd_probe() { bash "$TMP/upd-probe.sh" "$ROOT" "$TMP/upd" "$@"; }
+rm -rf "$TMP/upd"
+if have yq; then
+  check "update guard: refuses without the lock, allows the agent's own installs" \
+    '! upd_probe upd_guard >/dev/null 2>&1 && AW_PKG_GUARD_OK=1 upd_probe upd_guard >/dev/null 2>&1'
+  check "update guard: can be switched off in config" \
+    'yq -i ".updates.guard = false" "$TMP/upd/etc/worker.yaml" && upd_probe upd_guard >/dev/null 2>&1; yq -i "del(.updates.guard)" "$TMP/upd/etc/worker.yaml"'
+  check "boot check: nothing on probation is a no-op" 'upd_probe upd_boot_check >/dev/null 2>&1'
+  check "boot check: healthy clears probation and records ok" \
+    'upd_probe upd_probation_start 41 r_1 && AW_TEST_HEALTH=ok upd_probe upd_boot_check >/dev/null 2>&1 && [[ ! -e "$TMP/upd/state/update-probation.json" ]] && [[ "$(jq -r .state "$TMP/upd/state/update-result.json")" == "ok" && "$(jq -r .rolloutId "$TMP/upd/state/update-result.json")" == "r_1" ]]'
+  check "boot check: unhealthy once waits, twice records rolled_back (no snapper here)" \
+    'upd_probe upd_probation_start 42 r_2 && ! AW_TEST_HEALTH=bad upd_probe upd_boot_check >/dev/null 2>&1 && [[ "$(jq -r .boots "$TMP/upd/state/update-probation.json")" == "1" ]] && ! AW_TEST_HEALTH=bad upd_probe upd_boot_check >/dev/null 2>&1 && [[ "$(jq -r .state "$TMP/upd/state/update-result.json")" == "failed" ]]'
+  check "rollout from desired state: runs once per id, reports running" \
+    'rm -f "$TMP/upd/state/update-result.json"; upd_probe upd_apply_from_delivery "{\"update\":{\"rolloutId\":\"ro_abc\"}}" >/dev/null 2>&1 && [[ "$(jq -r .rolloutId "$TMP/upd/state/update-result.json")" == "ro_abc" && "$(jq -r .state "$TMP/upd/state/update-result.json")" == "running" ]] && ! upd_probe upd_apply_from_delivery "{\"update\":{\"rolloutId\":\"ro_abc\"}}" 2>&1 | grep -q "asks this node"'
+  check "rollout: suspicious id ignored"  '! upd_probe upd_apply_from_delivery "{\"update\":{\"rolloutId\":\"../x\"}}" 2>&1 | grep -q "asks this node"'
+  check "health carries the update result"  '[[ "$(upd_probe control_health_json | jq -r ".update.rolloutId")" == "ro_abc" ]]'
+  check "aw update --dry-run: snapshot, upgrade, gate, probation" \
+    'run_aw --dry-run update && has "pre-update" && has "update gate: dry-run" && has "on probation"'
+  check "core installs the guard hook and the boot check" \
+    'run_aw --dry-run enable core && has "00-alwayswork-guard.hook" && has "alwayswork-boot-check.service"'
+fi
+
 echo "== node UI gate (SYSTEM_SPEC §10 B) =="
 check "gate ships in the image"       'grep -q "COPY gate.mjs /usr/local/bin/alwayswork-gate" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
 if have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)" 2>/dev/null; then

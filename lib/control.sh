@@ -657,6 +657,9 @@ control_apply_delivery() {
   # The SSH access CA (policy `tunnel`) arrives the same way, as a top-level
   # "access" object. Absent or null: the CA file is left alone.
   control_apply_access "$json"
+  # A rollout wave (lib/updates.sh): `update: { rolloutId }` asks this node
+  # to run `aw update` now, detached; the result rides the heartbeat.
+  upd_apply_from_delivery "$json"
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.

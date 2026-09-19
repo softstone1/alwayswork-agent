@@ -40,7 +40,7 @@ APPS
   app install <id>...       Install tools on demand
   app remove <id>...        Uninstall tools
   doctor                    Scored security + health audit
-  update                    Snapshot, upgrade, roll back on failure
+  update                    Snapshot, upgrade, health gate, boot probation; --guard, --boot-check
   snapshot <list|create|rollback> [arg]
   secrets <init|set|get|list|env>
 

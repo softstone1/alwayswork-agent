@@ -103,6 +103,8 @@ _distro_apt_update() {
 pkg_install() {
   local -a pkgs=() p
   (( $# > 0 )) || return 0
+  # The agent's own installs pass the package-manager guard (lib/updates.sh).
+  export AW_PKG_GUARD_OK=1
   # Footprint ledger: which of these were already here (lib/ledger.sh).
   if have ledger_pkg_before; then
     ledger_pkg_before "$@" || warn "ledger: could not record packages: $*"
@@ -140,6 +142,7 @@ pkg_is_installed() {
 
 # pkg_upgrade — full system upgrade (paru first on Arch, like before).
 pkg_upgrade() {
+  export AW_PKG_GUARD_OK=1
   case "$(distro_family)" in
     arch)
       if have paru; then run_paru -Syu --noconfirm
