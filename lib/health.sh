@@ -115,8 +115,12 @@ control_health_json() {
       kind=opencode
     fi
   fi
+  # Container mode runs the harness as alwayswork-dsh.service; the legacy
+  # host install as alwayswork-webui.service. "up" is whichever exists.
+  local agent_unit=alwayswork-webui.service
+  { have systemctl && systemctl list-unit-files alwayswork-dsh.service 2>/dev/null | grep -q '^alwayswork-dsh.service'; } && agent_unit=alwayswork-dsh.service
   _health_raw agent "$(jq -nc --arg k "$kind" --arg v "$v" \
-    --argjson up "$(_health_bool _health_unit_active alwayswork-webui.service)" \
+    --argjson up "$(_health_bool _health_unit_active "$agent_unit")" \
     '{kind:$k, up:$up} + (if $v == "" then {} else {version:$v} end)')"
 
   if have systemctl; then
