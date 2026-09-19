@@ -29,11 +29,15 @@ cmd_bootstrap() {
     *)      warn "unsupported distribution '$(distro_id)'; continuing with care" ;;
   esac
 
+  # Footprint ledger (docs/DECOMMISSION.md): the firewall and sshd as they
+  # were before bootstrap hardens them, so decommission can hand them back.
   if cfg_bool '.hardening.firewall' true; then
+    ledger_firewall_before || warn "ledger: could not record the firewall state"
     log "Configuring firewall (default deny inbound)"
     fw_ensure || warn "firewall was not configured"
   fi
 
+  ledger_ssh_before || warn "ledger: could not record the ssh state"
   apply_ssh_policy
 
   if [[ "$(sec_backend)" == "sops" ]]; then

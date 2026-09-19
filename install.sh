@@ -12,6 +12,7 @@ VERSION="0.1.0"
 REPO_SLUG="${REPO_SLUG:-softstone1/alwayswork-agent}"
 REPO_REF="${REPO_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/alwayswork}"
+STATE_DIR="${STATE_DIR:-/var/lib/alwayswork}"
 BIN_LINK="${BIN_LINK:-/usr/local/bin/alwayswork}"
 ALIAS="${ALIAS:-aw}"
 DRY_RUN=0
@@ -31,6 +32,52 @@ warn() { printf '  %swarn%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 die()  { printf ' %serror%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] %s\n' "$*"; else "$@"; fi; }
+
+# --- footprint ledger --------------------------------------------------------
+# `aw` does not exist yet, so the installer appends its own entries, in the
+# format lib/ledger.sh writes (docs/DECOMMISSION.md), BEFORE each change:
+# `aw decommission` replays them last and the machine ends up as it was
+# before this script ran. One entry per (kind, name/path): a re-run never
+# records a second, contradictory entry, so the first — the pristine state
+# — is what restore returns to. No jq yet: the values are plain paths and
+# package names, escaped by hand.
+ledger_str() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; printf '%s' "$s"; }
+ledger_append() { # <kind> <ident-field> <ident-value> [extra-json-fields]
+  local kind="$1" field="$2" value="$3" extra="${4:-}" key line
+  key="\"kind\":\"$kind\",\"$field\":\"$(ledger_str "$value")\""
+  line="{\"t\":$(date +%s),\"by\":\"install\",$key${extra:+,$extra}}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    [dry-run] ledger %s %s=%s\n' "$kind" "$field" "$value"
+    return 0
+  fi
+  if [[ -f "$STATE_DIR/ledger.jsonl" ]] && grep -qF -- "$key" "$STATE_DIR/ledger.jsonl"; then
+    return 0
+  fi
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$line" >> "$STATE_DIR/ledger.jsonl"
+}
+pkg_installed() {
+  case "${INSTALL_FAMILY:-unknown}" in
+    arch)   pacman -Qi "$1" >/dev/null 2>&1 ;;
+    debian) dpkg-query -s "$1" >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+# ledger_pkg <pkg...> — packages about to be installed, with whether each
+# was already here (those are never removed by restore).
+ledger_pkg() {
+  local p prior
+  for p in "$@"; do
+    if pkg_installed "$p"; then prior=true; else prior=false; fi
+    ledger_append pkg name "$p" "\"priorInstalled\":$prior"
+  done
+}
+# ledger_path <file|dir> <path> — a file or directory about to be created.
+ledger_path() {
+  local kind="$1" path="$2" existed=false
+  [[ -e "$path" || -L "$path" ]] && existed=true
+  ledger_append "$kind" path "$path" "\"existed\":$existed"
+}
 
 usage() {
   cat <<EOF
@@ -130,8 +177,10 @@ install_deps() {
   local -a pkgs=(git curl jq openssl age restic ufw)
   log "Installing base dependencies: ${pkgs[*]} sops"
   case "${INSTALL_FAMILY:-unknown}" in
-    arch)   run pacman -Syu --needed --noconfirm "${pkgs[@]}" sops ;;
-    debian) run apt-get update
+    arch)   ledger_pkg "${pkgs[@]}" sops
+            run pacman -Syu --needed --noconfirm "${pkgs[@]}" sops ;;
+    debian) ledger_pkg "${pkgs[@]}"
+            run apt-get update
             run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}"
             install_sops_debian ;;
     *)      warn "no package manager for this distribution; install manually: ${pkgs[*]} sops" ;;
@@ -186,6 +235,7 @@ install_sops_debian() {
     return 0
   fi
   ok "sops ${SOPS_VERSION} (sha256 verified)"
+  ledger_pkg sops
   if ! run dpkg -i "$deb"; then
     warn "dpkg reported missing dependencies; attempting to fix"
     run env DEBIAN_FRONTEND=noninteractive apt-get install -f -y
@@ -206,6 +256,7 @@ install_alias() {
     warn "alias ${ALIAS} already exists and is not a symlink; skipping"
     return 0
   fi
+  ledger_path file "$alias_path"
   run ln -sf "$INSTALL_DIR/bin/alwayswork" "$alias_path"
   ok "Alias ${ALIAS} -> alwayswork"
 }
@@ -213,11 +264,14 @@ install_alias() {
 install_files() {
   local src="$1"
   log "Installing runtime to ${INSTALL_DIR}"
+  ledger_path dir "$INSTALL_DIR"
   run mkdir -p "$INSTALL_DIR"
   run cp -a "$src/." "$INSTALL_DIR/"
   run chmod +x "$INSTALL_DIR/bin/alwayswork" "$INSTALL_DIR/install.sh"
   run find "$INSTALL_DIR" -name '*.sh' -exec chmod +x {} +
+  ledger_path dir /etc/alwayswork
   run mkdir -p /etc/alwayswork
+  ledger_path file "$BIN_LINK"
   run ln -sf "$INSTALL_DIR/bin/alwayswork" "$BIN_LINK"
   ok "CLI linked at ${BIN_LINK}"
   install_alias
@@ -256,6 +310,7 @@ bundle_yq() {
     ok "bundled yq present"
     return 0
   fi
+  ledger_path file "$target"
   if have yq && yq --version 2>/dev/null | grep -qi mikefarah; then
     run cp "$(command -v yq)" "$target"
     run chmod 755 "$target"

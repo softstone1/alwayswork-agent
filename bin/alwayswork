@@ -18,6 +18,8 @@ export PATH="$AW_ROOT/bin:$PATH"
 source "$AW_ROOT/lib/core.sh"
 # shellcheck source=../lib/distro.sh
 source "$AW_ROOT/lib/distro.sh"
+# shellcheck source=../lib/ledger.sh
+source "$AW_ROOT/lib/ledger.sh"
 # shellcheck source=../lib/config.sh
 source "$AW_ROOT/lib/config.sh"
 # shellcheck source=../lib/hardware.sh
@@ -63,6 +65,9 @@ done
 
 cmd="${1:-help}"
 [[ $# -gt 0 ]] && shift
+# Footprint ledger attribution: entries name the command that made the
+# change unless a caller (cap_install) narrows it further.
+AW_LEDGER_BY="${AW_LEDGER_BY:-$cmd}"
 
 case "$cmd" in
   init|bootstrap|apply|enable|disable|list|status|doctor|update|snapshot|secrets|capability|power|app|clean|enroll|reset|agent|decommission|provision|help)

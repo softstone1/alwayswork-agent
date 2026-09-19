@@ -11,6 +11,10 @@
 
 apply_ssh_policy() {
   local policy="${1:-$(cfg_get '.hardening.ssh' disabled)}"
+  # Footprint ledger: sshd as it was before the first policy was applied.
+  if have ledger_ssh_before; then
+    ledger_ssh_before || warn "ledger: could not record the ssh state"
+  fi
   case "$policy" in
     disabled)
       # A previous 'lan' policy may have left a subnet-scoped SSH rule behind.

@@ -18,7 +18,9 @@ cmd_provision() {
   #    is half-removed.
   if decommission_in_progress; then
     log "provision: resuming an interrupted decommission"
-    decommission_run 0 || die "provision: decommission resume failed; will retry next boot"
+    # The marker pins the restore mode chosen when the run started; a marker
+    # without one predates the ledger, and its run keeps the old behaviour.
+    decommission_run 0 keep-agent || die "provision: decommission resume failed; will retry next boot"
     run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
     return 0
   fi

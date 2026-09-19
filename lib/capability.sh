@@ -104,11 +104,16 @@ cap_preflight() {
 }
 
 cap_install() {
-  local id="$1"
+  local id="$1" by="${AW_LEDGER_BY:-aw}"
   log "Installing capability: $id"
   cap_preflight "$id"
-  cap_run_hook "$id" preflight
-  cap_run_hook "$id" install
+  # Ledger entries made by the hooks are attributed to the capability.
+  AW_LEDGER_BY="$id"
+  if ! cap_run_hook "$id" preflight || ! cap_run_hook "$id" install; then
+    AW_LEDGER_BY="$by"
+    return 1
+  fi
+  AW_LEDGER_BY="$by"
   ok "$id installed"
 }
 

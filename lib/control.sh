@@ -337,7 +337,7 @@ control_verified_delivery() {
 # fetched or verified (transient) so the tick retries instead of wiping or
 # stopping on a network blip.
 control_maybe_drain() {
-  local hdr body out rc seq applied state
+  local hdr body out rc seq applied state mode
   hdr="$(mktemp "${TMPDIR:-/tmp}/aw-hdr.XXXXXX")" || return 1
   body="$(mktemp "${TMPDIR:-/tmp}/aw-body.XXXXXX")" || { rm -f "$hdr"; return 1; }
   # shellcheck disable=SC2064
@@ -373,9 +373,12 @@ control_maybe_drain() {
     rm -f "$hdr" "$body"; trap - EXIT
     control_handle_revoked
   fi
+  # "restore": false keeps alwayswork installed (--keep-agent); the default
+  # is the full restore (docs/DECOMMISSION.md).
+  mode="$(jq -r 'if .restore == false then "keep-agent" else "full" end' "$body" 2>/dev/null || echo full)"
   rm -f "$hdr" "$body"; trap - EXIT
-  log "control: verified signed drain order (sequence $seq); decommissioning"
-  if decommission_run 0; then
+  log "control: verified signed drain order (sequence $seq); decommissioning ($mode)"
+  if decommission_run 0 "$mode"; then
     ok "control: decommission complete"
   else
     warn "control: decommission incomplete; will retry on the next tick"
@@ -1007,6 +1010,7 @@ control_usb_apply() {
   host="$(usb_toml_get "$toml" hostname)"
   prof="$(usb_toml_get "$toml" profile)"
   [[ -n "$url" ]] && cfg_set_str '.control.url' "$url"
+  [[ -n "$host" ]] && { ledger_hostname_before || warn "ledger: could not record the hostname"; }
   [[ -n "$host" ]] && run hostnamectl set-hostname "$host"
   [[ -n "$prof" ]] && cfg_set_str '.profile' "$prof"
   if [[ -z "$(cfg_get '.agent.user' '')" ]]; then
@@ -1071,6 +1075,26 @@ decommission_set_plane() {
   jq --arg v "$1" '.plane = $v' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
 }
 
+# The restore choice (full | keep-foundation | keep-agent) is pinned in the
+# marker when a run starts, so a resumed run (next boot, next tick) keeps
+# the choice the operator or the drain order made.
+decommission_set_mode() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local m; m="$(decommission_marker)"
+  [[ -f "$m" ]] || return 0
+  jq -e '.mode // "" | length > 0' "$m" >/dev/null 2>&1 && return 0
+  jq --arg v "$1" '.mode = $v' "$m" > "$m.tmp" && mv "$m.tmp" "$m"
+}
+
+decommission_mode() {
+  local m v=""
+  m="$(decommission_marker)"
+  if [[ "$DRY_RUN" != "1" && -f "$m" ]]; then
+    v="$(jq -r '.mode // ""' "$m" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "${v:-${_DECOM_MODE:-full}}"
+}
+
 decommission_in_progress() {
   [[ "$DRY_RUN" == "1" ]] && return 1
   [[ -f "$(decommission_marker)" ]] || return 1
@@ -1082,16 +1106,37 @@ decommission_completed() {
   jq -e '.complete == true' "$(decommission_marker)" >/dev/null 2>&1
 }
 
-# decommission_run <local_only> — all phases, non-interactive. Safe to call
-# from `aw decommission`, the agent tick, or first-boot provisioning.
+# decommission_run <local_only> [mode] — all phases, non-interactive. Safe
+# to call from `aw decommission`, the agent tick, or first-boot provisioning.
+# mode: full (default; the machine is restored from the ledger and aw removes
+# itself), keep-foundation (firewall, ssh, the core capability and aw stay)
+# or keep-agent (no restore at all: unenrolled, ready to re-join). A marker
+# from an earlier, interrupted run wins over the argument.
 decommission_run() {
   local local_only="${1:-0}"
+  _DECOM_MODE="${2:-full}"
+  case "$_DECOM_MODE" in
+    full|keep-foundation|keep-agent) : ;;
+    *) err "decommission: unknown mode '$_DECOM_MODE'"; return 1 ;;
+  esac
   _DECOM_DEVICE_ID="$(control_device_id)"
   _DECOM_HOSTNAME="$(hostname)"
   decommission_phase_drain || return 1
+  decommission_set_mode "$_DECOM_MODE"
+  _DECOM_MODE="$(decommission_mode)"
   decommission_phase_revoke "$local_only" || return 1
   decommission_phase_wipe || return 1
+  if ! decommission_phase_restore; then
+    decommission_phase_report partial
+    return 1
+  fi
   decommission_phase_report
+  if [[ "$_DECOM_MODE" == "full" ]]; then
+    # Self last: everything else is undone and reported; this process keeps
+    # running from the code it already loaded while its files disappear.
+    ledger_self_remove || warn "decommission: alwayswork was not removed; delete $AW_ROOT by hand"
+  fi
+  return 0
 }
 
 decommission_phase_drain() {
@@ -1201,16 +1246,78 @@ decommission_phase_wipe() {
   decommission_mark_phase wipe
 }
 
+# Restore: hand the machine back (docs/DECOMMISSION.md). The capabilities
+# drain kept (core, control.join, access.*) come down first, then the ledger
+# is replayed in reverse. control.join is never hook-uninstalled here: its
+# uninstall stops the agent service, which may be the very process running
+# this; its units are in the ledger, which knows how to stop itself safely.
+decommission_phase_restore() {
+  local mode; mode="$(decommission_mode)"
+  decommission_phase_done restore && { info "decommission: restore already done"; return 0; }
+  if [[ "$mode" == "keep-agent" ]]; then
+    info "decommission: keeping alwayswork installed (keep-agent); nothing restored"
+    decommission_mark_phase restore
+    return 0
+  fi
+  log "decommission: restoring the machine ($mode)"
+  local -a keep=(control.join) targets=() known=() ordered=()
+  [[ "$mode" == "keep-foundation" ]] && keep+=(core)
+  local c k skip
+  while IFS= read -r c; do
+    [[ -z "$c" ]] && continue
+    skip=0
+    for k in "${keep[@]}"; do [[ "$c" == "$k" ]] && { skip=1; break; }; done
+    (( skip )) && continue
+    targets+=("$c")
+  done < <(cfg_list '.capabilities.enabled')
+  if (( "${#targets[@]}" > 0 )); then
+    for c in "${targets[@]}"; do
+      cap_valid_id "$c" && cap_exists "$c" 2>/dev/null && known+=("$c")
+    done
+    if (( "${#known[@]}" > 0 )); then
+      mapfile -t ordered < <(cap_resolve "${known[@]}" 2>/dev/null) || ordered=("${targets[@]}")
+    else
+      ordered=("${targets[@]}")
+    fi
+    local i cap
+    for (( i = "${#ordered[@]}" - 1; i >= 0; i-- )); do
+      cap="${ordered[i]}"
+      cap_is_enabled "$cap" || continue
+      log "decommission: removing $cap"
+      cap_uninstall "$cap" || warn "decommission: uninstall of $cap reported an error; continuing"
+      cfg_list_remove '.capabilities.enabled' "$cap"
+    done
+  fi
+  local -a opts=()
+  [[ "$mode" == "keep-foundation" ]] && opts+=(--keep-foundation)
+  _LEDGER_RESTORE_FAILED=0
+  if ! ledger_restore "${opts[@]}"; then
+    err "decommission: ${_LEDGER_RESTORE_FAILED:-some} ledger entr(ies) could not be restored; re-run 'aw decommission' to retry them"
+    if [[ "$DRY_RUN" != "1" ]]; then
+      local m; m="$(decommission_marker)"
+      [[ -f "$m" ]] && jq --argjson n "${_LEDGER_RESTORE_FAILED:-0}" '.restore_failed = $n' "$m" > "$m.tmp" \
+        && mv "$m.tmp" "$m"
+    fi
+    return 1
+  fi
+  decommission_mark_phase restore
+}
+
+# decommission_phase_report [partial] — print the outcome. Without
+# `partial` the marker is sealed (complete = true).
 decommission_phase_report() {
-  local m plane="unknown"
+  local partial="${1:-}" m plane="unknown" mode failed=0
   m="$(decommission_marker)"
+  mode="$(decommission_mode)"
   [[ -f "$m" ]] && plane="$(jq -r '.plane // "unknown"' "$m" 2>/dev/null)"
-  if [[ "$DRY_RUN" != "1" ]]; then
+  [[ -f "$m" ]] && failed="$(jq -r '.restore_failed // 0' "$m" 2>/dev/null)"
+  if [[ "$DRY_RUN" != "1" && -z "$partial" && -f "$m" ]]; then
     local t; t="$(date +%s)"
-    jq --argjson t "$t" '.complete = true | .completed_at = $t' "$m" > "$m.tmp" \
+    jq --argjson t "$t" '.complete = true | .completed_at = $t | del(.restore_failed)' "$m" > "$m.tmp" \
       && mv "$m.tmp" "$m"
   fi
-  section "node decommissioned"
+  if [[ -n "$partial" ]]; then section "node decommissioned (restore incomplete)"
+  else section "node decommissioned"; fi
   kv "node" "${_DECOM_HOSTNAME:-$(hostname)}"
   kv "device" "${_DECOM_DEVICE_ID:-never enrolled}"
   case "$plane" in
@@ -1220,7 +1327,26 @@ decommission_phase_report() {
     *)         kv "control plane" "$plane" ;;
   esac
   kv "wiped" "device key, age key, secret store, tunnel token, control.json"
-  info "rejoin with: aw enroll --control <url> [--token TOKEN] [--usb]"
+  case "$mode" in
+    full)
+      if [[ -n "$partial" ]]; then
+        kv "restore" "INCOMPLETE: ${failed:-0} entr(ies) failed; alwayswork kept for a retry"
+        info "retry with: aw decommission (only the failed entries are attempted)"
+      else
+        kv "restore" "full: firewall, ssh, packages, units and files as before; alwayswork removed"
+        info "this machine is no longer managed; reinstall to rejoin"
+      fi ;;
+    keep-foundation)
+      if [[ -n "$partial" ]]; then
+        kv "restore" "INCOMPLETE: ${failed:-0} entr(ies) failed; re-run 'aw decommission' to retry"
+      else
+        kv "restore" "kept the hardened base (firewall, ssh, core) and alwayswork"
+      fi
+      info "rejoin with: aw enroll --control <url> [--token TOKEN] [--usb]" ;;
+    *)
+      kv "restore" "none (keep-agent): alwayswork stays installed, unenrolled"
+      info "rejoin with: aw enroll --control <url> [--token TOKEN] [--usb]" ;;
+  esac
 }
 
 # --- enrollment status -----------------------------------------------------------
