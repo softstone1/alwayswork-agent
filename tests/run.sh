@@ -1463,6 +1463,8 @@ check "health disk pct is 0-100"        'jq -e "(.diskRootUsedPct // 0) >= 0 and
 check "health uses only spec field names" \
   '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb")" ]]'
 check "health probes stay quiet"        '[[ ! -s "$TMP/health.err" ]]'
+check "gpus json is one value even when lspci finds nothing (pipefail)" \
+  '[[ "$(bash -c "set -o pipefail; AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/hardware.sh\"; lspci() { echo \"00:00.0 Host bridge: none\"; }; nvidia-smi() { false; }; export -f lspci; hw_gpus_json")" == "[]" ]]'
 check "health carries inventory (cpu model, gpus, virt, free disk)" 'jq -e ".cpuModel | type == \"string\"" "$TMP/health.out" >/dev/null && jq -e ".gpus | type == \"array\"" "$TMP/health.out" >/dev/null && jq -e ".diskRootFreeGb | type == \"number\"" "$TMP/health.out" >/dev/null'
 check "tick sends typed health"         'grep -q "health:\$h" "$ROOT/lib/control.sh" && ! grep -q "health:{}" "$ROOT/lib/control.sh"'
 check "doctor caches its score"         'grep -q "health_doctor_record" "$ROOT/commands/doctor.sh"'
