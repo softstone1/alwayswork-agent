@@ -937,6 +937,40 @@ check "tunnel policy drops the lan drop-in"      'grep -q "rm -f /etc/ssh/sshd_c
 check "tunnel policy documented"                 'grep -q "| \`tunnel\` |" "$ROOT/docs/SECURITY.md" && grep -q "lan | tunnel" "$ROOT/config/defaults.yaml"'
 check "doctor grades tunnel via loopback check"  'grep -q "ssh_loopback_only" "$ROOT/commands/doctor.sh"'
 
+echo "== health =="
+# control_health_json must be valid JSON with the SYSTEM_SPEC §6 names even
+# with no config, no state and whatever tools this host happens to lack.
+cat > "$TMP/health.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"
+export AW_ROOT="$ROOT" AW_ETC="$2/etc" AW_STATE="$2/state" AW_CONFIG="$2/etc/worker.yaml" AW_TEST=1
+for l in core distro config hardware engine firewall hardening secrets capability tunnel control health; do
+  source "$ROOT/lib/$l.sh"
+done
+mkdir -p "$AW_STATE"
+printf '{"score":88,"at":1789776000000}' > "$AW_STATE/doctor.json"
+control_health_json
+EOS
+run_health() { bash "$TMP/health.sh" "$ROOT" "$TMP/health" > "$TMP/health.out" 2>"$TMP/health.err"; }
+check "health json is valid"            'run_health && jq -e . "$TMP/health.out" >/dev/null'
+check "health json is a single line"    '[[ "$(wc -l < "$TMP/health.out")" == "1" ]]'
+check "health has agentVersion"         'jq -e ".agentVersion | type == \"string\"" "$TMP/health.out" >/dev/null'
+check "health has uptimeSec"            'jq -e ".uptimeSec | type == \"number\"" "$TMP/health.out" >/dev/null'
+check "health has clockSynced"          'jq -e ".clockSynced | type == \"boolean\"" "$TMP/health.out" >/dev/null'
+check "health engine is typed"          'jq -e ".engine.kind == \"none\" and .engine.state == \"inactive\"" "$TMP/health.out" >/dev/null'
+check "health agent is typed"           'jq -e ".agent.kind == \"none\" and (.agent.up | type == \"boolean\")" "$TMP/health.out" >/dev/null'
+check "health reads the doctor cache"   'jq -e ".doctorScore == 88 and .doctorAt == 1789776000000" "$TMP/health.out" >/dev/null'
+check "health disk pct is 0-100"        'jq -e "(.diskRootUsedPct // 0) >= 0 and (.diskRootUsedPct // 0) <= 100" "$TMP/health.out" >/dev/null'
+check "health uses only spec field names" \
+  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced")" ]]'
+check "health probes stay quiet"        '[[ ! -s "$TMP/health.err" ]]'
+check "tick sends typed health"         'grep -q "health:\$h" "$ROOT/lib/control.sh" && ! grep -q "health:{}" "$ROOT/lib/control.sh"'
+check "doctor caches its score"         'grep -q "health_doctor_record" "$ROOT/commands/doctor.sh"'
+if have yq; then
+  check "status --json carries health"  'run_aw --json status && jq -e ".health.agentVersion" "$TMP/out" >/dev/null'
+  check "status --json lists capabilities in health" 'jq -e ".health.capabilities | index(\"core\") != null" "$TMP/out" >/dev/null'
+fi
+
 echo "== clock guard =="
 # timedatectl is stubbed so the host's own NTP state cannot leak into the
 # assertions; AW_CLOCK_FLOOR moves the plausibility floor around "now".

@@ -76,6 +76,8 @@ _status_json() {
   printf '"limits":"%s",' "$(json_escape "$mode")"
   printf '"firewall":"%s",' "$(json_escape "$(fw_backend)")"
   printf '"secrets":"%s",' "$(json_escape "$(sec_backend)")"
+  # The same typed object the agent sends on heartbeat (SYSTEM_SPEC §6).
+  printf '"health":%s,' "$(control_health_json)"
   printf '"capabilities":['
   local id first=1
   while IFS= read -r id; do

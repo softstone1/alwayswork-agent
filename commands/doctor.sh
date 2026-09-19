@@ -132,6 +132,9 @@ cmd_doctor() {
   kv "warnings" "$_DOCTOR_WARN"
   kv "failed" "$_DOCTOR_FAIL"
   kv "score" "${score}%"
+  # Cached for the heartbeat (health.doctorScore / doctorAt); the agent
+  # refreshes it by re-running doctor at most hourly.
+  health_doctor_record "$score"
 
   if (( _DOCTOR_FAIL > 0 )); then
     err "doctor found $_DOCTOR_FAIL critical issue(s)"

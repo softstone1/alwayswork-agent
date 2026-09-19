@@ -759,7 +759,7 @@ control_agent() {
 }
 
 control_agent_tick() {
-  local applied body resp desired delivery ver rc webui
+  local applied body resp desired delivery ver rc webui health
   # Nothing is signed against an untrusted clock: the control plane would
   # reject the timestamp anyway, and a delivery expiry check would be
   # meaningless. The tick backs off and retries once NTP has synced.
@@ -772,8 +772,12 @@ control_agent_tick() {
   control_ensure_pubkey || return 1
   applied="$(cfg_get '.control.appliedVersion' 0)"
   webui="$(control_webui_json)"
-  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" \
-    '{appliedVersion:$v, health:{}} + (if $ui == null then {} else {webUi:$ui} end)')"
+  # Typed health (docs/SYSTEM_SPEC.md §6); the doctor score inside it is
+  # refreshed at most hourly.
+  health_doctor_refresh
+  health="$(control_health_json)"
+  body="$(jq -n --argjson v "$applied" --argjson ui "$webui" --argjson h "$health" \
+    '{appliedVersion:$v, health:$h} + (if $ui == null then {} else {webUi:$ui} end)')"
   resp=""; rc=1
   if resp="$(control_call POST /v1/device/heartbeat "$body")"; then
     rc=0
