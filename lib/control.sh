@@ -840,6 +840,9 @@ control_agent() {
     return $?
   fi
   log "control agent: heartbeat every ${interval}s, long-polling for desired state in between"
+  # The sampler is a sibling process: it posts per-workload usage every few
+  # seconds while an operator watches, and sleeps otherwise (no network).
+  control_sampler "$$" &
   local fails=0 pause i deadline
   while :; do
     if control_agent_tick; then
@@ -933,6 +936,9 @@ control_agent_tick() {
     warn "control: heartbeat response was not JSON; skipping delivery check"
     return 1
   fi
+  # Live samples (SYSTEM_SPEC §14): an operator is watching this node, so
+  # the sampler posts usage every few seconds until nobody is.
+  control_watch_set "$(jq -r '.watching // false' <<<"$resp" 2>/dev/null)"
   if [[ "$desired" != "$applied" ]]; then
     log "control: desired version $desired (applied $applied)"
     delivery=""; rc=1
@@ -1526,4 +1532,48 @@ control_enroll_status() {
   if [[ -z "${AW_TEST:-}" ]] && systemctl list-unit-files alwayswork-agent.service >/dev/null 2>&1; then
     kv "agent" "$(systemctl is-active alwayswork-agent.service 2>/dev/null || echo unknown)"
   fi
+}
+
+# --- live samples (SYSTEM_SPEC §14) ---------------------------------------------
+# The heartbeat (and every sample response) says whether an operator has this
+# node's live stream open; the flag lives in a file so the sampler needs no
+# network to find out. A flag older than 90 s means "nobody is watching".
+control_watch_file() { printf '%s/watching' "$AW_STATE"; }
+control_watch_set() {
+  if [[ "$1" == "true" ]]; then date +%s > "$(control_watch_file)" 2>/dev/null || true
+  else rm -f "$(control_watch_file)" 2>/dev/null || true; fi
+}
+control_watching() {
+  local f at; f="$(control_watch_file)"
+  [[ -f "$f" ]] || return 1
+  at="$(cat "$f" 2>/dev/null)"; [[ "$at" =~ ^[0-9]+$ ]] || return 1
+  (( $(date +%s) - at < 90 ))
+}
+
+# One sample: usage only (the heartbeat carries inventory). Node load and
+# memory, then every workload's CPU %, memory and PIDs.
+control_sample_json() {
+  local wl load mem
+  wl="$(wl_workloads_json 2>/dev/null || printf '[]')"
+  load="$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)"
+  mem="$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{printf "%d", (t-a)/1024}' /proc/meminfo 2>/dev/null || echo 0)"
+  jq -nc --argjson w "$wl" --argjson l "${load:-0}" --argjson m "${mem:-0}" \
+    '{node:{load1:$l, memUsedMb:$m}, workloads:($w | map({id, state} + (if .cpuPct != null then {cpuPct} else {} end) + (if .memMb != null then {memMb} else {} end) + (if .memLimitMb != null then {memLimitMb} else {} end) + (if .pids != null then {pids} else {} end)))}'
+}
+
+# The sampler loop. Every AW_SAMPLE_INTERVAL (5) s while watched; a cheap
+# file check every 5 s otherwise. The sample response refreshes the flag, so
+# posting stops within one interval of the last watcher leaving. It follows
+# the agent process it was started from and exits when that is gone (other
+# code in this file resets the EXIT trap, so a trap could not be relied on).
+control_sampler() {
+  local parent="$1" every="${AW_SAMPLE_INTERVAL:-5}" resp
+  while kill -0 "$parent" 2>/dev/null; do
+    if control_watching && control_clock_trusted 2>/dev/null; then
+      if resp="$(control_call POST /v1/device/samples "$(control_sample_json)" 2>/dev/null)"; then
+        control_watch_set "$(jq -r '.watching // false' <<<"$resp" 2>/dev/null)"
+      fi
+    fi
+    sleep "$every"
+  done
 }
