@@ -862,8 +862,10 @@ check "pinned node sha256 are 64 hex chars" \
 # No dsh on the box: dry-run must print the plan, not die or download.
 # Needs yq like the other enable/dry-run tests above (config rendering).
 if have yq; then
+# Container mode (the default) never installs node on the host: the dry run
+# plans an image pull/build and a unit, and writes nothing.
 check "dry-run enable without dsh prints plan, changes nothing" \
-  'rm -f "$TMP/dsh"; PATH="$(printf "%s" "$PATH" | tr ":" "\n" | grep -v "^$TMP$" | paste -sd: -)" run_aw --dry-run enable agents.dsh && has "would install node" && [[ ! -e "$AW_STATE/webui.json" ]]'
+  'rm -f "$TMP/dsh"; PATH="$(printf "%s" "$PATH" | tr ":" "\n" | grep -v "^$TMP$" | paste -sd: -)" run_aw --dry-run enable agents.dsh && has "would pull ghcr.io/softstone1/alwayswork-dsh" && ! has "would install node" && [[ ! -e "$AW_STATE/webui.json" ]]'
 fi
 
 echo "== agents.dsh container (SYSTEM_SPEC §12) =="
