@@ -7,5 +7,5 @@ wl_subvolume "$(br_profile)"
 br_render_env
 WL_PULL="$(cap_config pull)" WL_BUILD="$(cap_config build)" wl_ensure_image "$(br_image)" "$CAP_DIR"
 br_apply_unit
-wl_report_surface "$BR_ID" "$BR_ID" vnc "$(br_port)" "/vnc.html?autoconnect=1&resize=scale" "Agent browser (noVNC)"
+wl_report_manifest_surfaces tools.browser
 ok "agent browser ready: watch at 127.0.0.1:$(br_port)/vnc.html; harness uses BROWSER_CDP_URL=http://alwayswork-browser:9222"

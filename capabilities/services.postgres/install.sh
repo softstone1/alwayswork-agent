@@ -14,6 +14,6 @@ pg_render_env
 pg_render_init
 WL_PULL="$(cap_config pull)" wl_ensure_image "$(pg_image)"
 pg_apply_unit
-wl_report_service "$PG_ID" "PostgreSQL" tcp "$(pg_port)"
+wl_report_manifest_surfaces services.postgres
 pg_admin_apply
 ok "postgres ready on 127.0.0.1:$(pg_port) (db $(pg_db), role $(pg_user))$( [[ "$(pg_admin)" == "off" ]] || printf '; web admin on 127.0.0.1:%s' "$(pg_admin_port)" )"

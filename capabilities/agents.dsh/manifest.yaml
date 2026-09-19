@@ -4,3 +4,22 @@ description: The node's agent harness as a standard workload container on loopba
 version: 2
 requires: [core, runtime.podman]
 profiles: [agent, full]
+# What this capability deploys (SYSTEM_SPEC §12.3/§12.8). The agent reports
+# surfaces from here; the control plane shows this in its catalog.
+workload:
+  id: dsh
+  kind: harness
+  image:
+    repo: ghcr.io/softstone1/alwayswork-dsh
+    # The tag is the harness version. `pinned` is the fallback when the
+    # control plane has not resolved the channel yet (first boot, offline).
+    version:
+      source: npm            # npm dist-tags of `package` decide the channel versions
+      package: "@deepseek-ai/dsh"
+      channel: latest        # latest | next | pinned  (config key: channel)
+      config: dsh_version    # the config key that pins an explicit version
+      pinned: "0.1.5-rc.2"
+  surfaces:
+    - { id: dsh, kind: http, port: 3080, port_config: port, path: /, name: DeepSeek Harness, primary: true }
+  config: [dsh_version, channel, port, image, mode, dsh]
+  workspace: subvolume

@@ -161,6 +161,9 @@ control_health_json() {
   fi
   local wl; wl="$(declare -F wl_workloads_json >/dev/null && wl_workloads_json || printf '[]')"
   [[ "$wl" != "[]" ]] && _health_raw workloads "$wl"
+  # Workload images this node is behind on (channel moved): `aw update` applies them.
+  local iu; iu="$(declare -F wl_image_updates_json >/dev/null && wl_image_updates_json 2>/dev/null || printf '[]')"
+  [[ "$iu" == \[* && "$iu" != "[]" ]] && _health_raw imageUpdates "$iu"
   # Packages as installed (lib/packages.sh), digest included.
   local pk; pk="$(declare -F pkg_reports_json >/dev/null && pkg_reports_json || printf '[]')"
   [[ "$pk" != "[]" ]] && _health_raw packages "$pk"

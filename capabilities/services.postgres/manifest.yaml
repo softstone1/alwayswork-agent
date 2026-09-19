@@ -4,3 +4,20 @@ description: PostgreSQL as a workload container on the node (data subvolume, hea
 version: 1
 requires: [core, runtime.podman]
 profiles: [full]
+workload:
+  id: postgres
+  kind: service
+  image:
+    repo: docker.io/library/postgres
+    version: { source: pinned, pinned: "16" }   # config key: version (major), image (override)
+  surfaces:
+    - { id: postgres, kind: tcp, port: 5432, port_config: port, name: PostgreSQL }
+  sidecars:
+    - id: postgres-admin
+      name: PostgreSQL admin (pgweb)
+      image: { repo: docker.io/sosedoff/pgweb, version: { source: pinned, pinned: "0.16.2" } }  # config: admin_image
+      enabled_config: admin        # admin: pgweb (default) | off
+      surfaces:
+        - { id: postgres-admin, kind: http, port: 8081, port_config: admin_port, path: /, name: PostgreSQL admin (pgweb) }
+  config: [version, image, port, db, user, memory_mb, network, pull, admin, admin_port, admin_image]
+  data: [data, backups]

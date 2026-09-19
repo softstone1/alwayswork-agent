@@ -37,12 +37,18 @@ ds_dsh_bin() {
   return 1
 }
 
-# Effective harness version: explicit dsh_version wins, else the pin.
+# Effective harness version (SYSTEM_SPEC §12.4): explicit dsh_version wins,
+# else the channel the manifest names (dsh_channel overrides: latest | next |
+# pinned) resolved by the control plane, else the pin above.
 ds_want_version() {
   local v
   v="$(cap_config dsh_version)"
-  [[ -n "$v" ]] || v="$DSH_NPM_VERSION_DEFAULT"
-  printf '%s' "$v"
+  [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+  if declare -F wl_want_version >/dev/null; then
+    v="$(CAP_ID="${CAP_ID:-agents.dsh}" wl_want_version agents.dsh 2>/dev/null)"
+    [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+  fi
+  printf '%s' "$DSH_NPM_VERSION_DEFAULT"
 }
 
 # --- node.js -----------------------------------------------------------------

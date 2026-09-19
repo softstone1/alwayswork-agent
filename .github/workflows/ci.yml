@@ -26,5 +26,8 @@ jobs:
           install.sh bin/alwayswork
           lib/*.sh commands/*.sh capabilities/*/*.sh
 
+      - name: Catalog is generated from the manifests
+        run: bash scripts/catalog.sh --check
+
       - name: Tests
         run: bash tests/run.sh

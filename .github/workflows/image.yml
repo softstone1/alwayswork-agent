@@ -19,14 +19,51 @@ on:
       dsh_version:
         description: "@deepseek-ai/dsh version to bake (default: the pinned one)"
         required: false
+  # Supply (SYSTEM_SPEC §12.4): every day, bake an image for whatever npm's
+  # `latest` and `next` dist-tags point at, if GHCR does not have it yet.
+  # Nodes never pull these on their own; the control plane resolves a channel
+  # to a version that has an image, and `aw update` moves a node to it.
+  schedule:
+    - cron: "17 4 * * *"
 
 permissions:
   contents: read
   packages: write
 
 jobs:
-  dsh:
+  # Which DSH versions to bake this run: the explicit input, the pin (on a
+  # push), or — on the schedule — every channel version GHCR is missing.
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.p.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: p
+        run: |
+          pinned="$(sed -n 's/^DSH_NPM_VERSION_DEFAULT="\([^"]*\)".*/\1/p' capabilities/agents.dsh/ensure.sh | head -1)"
+          repo="${GITHUB_REPOSITORY_OWNER,,}/alwayswork-dsh"
+          if [ -n "${{ github.event.inputs.dsh_version }}" ]; then
+            versions='["${{ github.event.inputs.dsh_version }}"]'
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            tags="$(curl -fsSL 'https://registry.npmjs.org/@deepseek-ai%2fdsh' | jq -r '."dist-tags" | [.latest, .next] | map(select(. != null)) | unique | .[]')"
+            tok="$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)"
+            have="$(curl -fsSL -H "Authorization: Bearer $tok" "https://ghcr.io/v2/${repo}/tags/list" | jq -r '.tags[]?')"
+            versions="$(for v in $tags; do grep -qx "$v" <<<"$have" || echo "$v"; done | jq -R . | jq -sc .)"
+          else
+            versions="[\"$pinned\"]"
+          fi
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+          echo "plan: $versions"
+
+  dsh:
+    needs: plan
+    if: ${{ needs.plan.outputs.versions != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: ${{ fromJson(needs.plan.outputs.versions) }}
+      fail-fast: false
     steps:
       - uses: actions/checkout@v5
 
@@ -35,8 +72,9 @@ jobs:
         run: |
           pinned="$(sed -n 's/^DSH_NPM_VERSION_DEFAULT="\([^"]*\)".*/\1/p' capabilities/agents.dsh/ensure.sh | head -1)"
           pin_sha="$(sed -n 's/^DSH_NPM_SHA512_DEFAULT="\([^"]*\)".*/\1/p' capabilities/agents.dsh/ensure.sh | head -1)"
-          version="${{ github.event.inputs.dsh_version }}"
-          [ -n "$version" ] || version="$pinned"
+          version="${{ matrix.version }}"
+          # An unpinned version is verified against the integrity the registry
+          # advertises (see the Containerfile); the pin gets the stronger check.
           sha=""; [ "$version" = "$pinned" ] && sha="$pin_sha"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha512=$sha" >> "$GITHUB_OUTPUT"
@@ -69,12 +107,13 @@ jobs:
       - name: Push
         run: |
           podman push "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}"
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "${{ github.ref }}" = "refs/heads/main" ] && [ "${{ github.event_name }}" = "push" ]; then
             podman tag "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}" "${{ steps.v.outputs.repo }}:latest"
             podman push "${{ steps.v.outputs.repo }}:latest"
           fi
 
   browser:
+    if: ${{ github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

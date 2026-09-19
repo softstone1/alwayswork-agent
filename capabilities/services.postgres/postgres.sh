@@ -17,7 +17,7 @@
 PG_ID="postgres"
 PG_IMAGE_REPO_DEFAULT="docker.io/library/postgres"
 
-pg_version() { local v; v="$(cap_config version)"; [[ -n "$v" ]] || v=16; [[ "$v" =~ ^[0-9]{2}(\.[0-9]+)?$ ]] || die "services.postgres: bad version '$v'"; printf '%s' "$v"; }
+pg_version() { local v; v="$(cap_config version)"; [[ -n "$v" ]] || v="$(wl_manifest_get services.postgres '.workload.image.version.pinned')"; [[ -n "$v" ]] || v=16; [[ "$v" =~ ^[0-9]{2}(\.[0-9]+)?$ ]] || die "services.postgres: bad version '$v'"; printf '%s' "$v"; }
 pg_image()   { local i; i="$(cap_config image)"; [[ -n "$i" ]] || i="${PG_IMAGE_REPO_DEFAULT}:$(pg_version)"; printf '%s' "$i"; }
 pg_port()    { local p; p="$(cap_config port)"; [[ -n "$p" ]] || p=5432; [[ "$p" =~ ^[0-9]{2,5}$ ]] || die "services.postgres: bad port '$p'"; printf '%s' "$p"; }
 pg_db()      { local d; d="$(cap_config db)"; [[ -n "$d" ]] || d=app; [[ "$d" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || die "services.postgres: bad db name '$d'"; printf '%s' "$d"; }
@@ -34,7 +34,7 @@ pg_unit()    { wl_unit_name "$PG_ID"; }
 # network, read-only rootfs, published to loopback, reached through the
 # tunnel as <node>-postgres-admin.<base> behind Access. Off with admin=off.
 PG_ADMIN_ID="postgres-admin"
-PG_ADMIN_IMAGE_DEFAULT="docker.io/sosedoff/pgweb:0.16.2"
+PG_ADMIN_IMAGE_DEFAULT="$(wl_want_image services.postgres postgres-admin 2>/dev/null || printf 'docker.io/sosedoff/pgweb:0.16.2')"
 pg_admin()       { local a; a="$(cap_config admin)"; [[ -n "$a" ]] || a=pgweb; case "$a" in pgweb|off) printf '%s' "$a" ;; *) die "services.postgres: bad admin '$a' (pgweb|off)" ;; esac; }
 pg_admin_port()  { local p; p="$(cap_config admin_port)"; [[ -n "$p" ]] || p=8081; [[ "$p" =~ ^[0-9]{2,5}$ ]] || die "services.postgres: bad admin_port '$p'"; printf '%s' "$p"; }
 pg_admin_image() { local i; i="$(cap_config admin_image)"; [[ -n "$i" ]] || i="$PG_ADMIN_IMAGE_DEFAULT"; printf '%s' "$i"; }
@@ -78,7 +78,7 @@ pg_admin_apply() {
   pg_admin_render_env
   WL_PULL="$(cap_config pull)" wl_ensure_image "$(pg_admin_image)"
   pg_admin_workload_vars; wl_apply_unit
-  wl_report_surface "$PG_ID" "$PG_ADMIN_ID" http "$(pg_admin_port)" "/" "PostgreSQL admin (pgweb)"
+  wl_report_manifest_surfaces services.postgres "$PG_ADMIN_ID"
 }
 pg_container(){ wl_container "$PG_ID"; }
 

@@ -154,3 +154,33 @@ each with `wl_report_surface <workload> <id> <kind> <port> [path] [name] [primar
 `expose.services`, and the control plane routes `<node>-<id>.<base>` to
 each — the harness's primary UI stays `<node>.<base>`. The console shows
 one Open / Watch / Connect per workload row.
+
+## Images, versions and channels
+
+Every workload capability declares in its `manifest.yaml` where its image
+comes from and how its version is chosen:
+
+```yaml
+workload:
+  image:
+    repo: ghcr.io/softstone1/alwayswork-dsh
+    version: { source: npm, package: "@deepseek-ai/dsh", channel: latest, config: dsh_version, pinned: "0.1.5-rc.2" }
+```
+
+- `source: npm` — the package's npm dist-tags (`latest`, `next`) name the
+  channel versions; CI bakes an image for each one every day (`image.yml`
+  schedule), verified against the registry's integrity, so a channel only
+  ever points at a version that has an image.
+- `source: ghcr` — the image's own tags (the browser: build dates).
+- `source: pinned` — the pin only (Postgres major, a side-car).
+
+The control plane resolves each repo's channels and tells every node in the
+heartbeat answer (`images`); the node keeps that as `image-targets.json`.
+`wl_want_version`: explicit config (`dsh_version`) → the channel
+(`channel: latest | next | pinned`, per capability config) → the pin.
+A node never pulls on its own clock: it reports `health.imageUpdates`
+(running vs wanted) and the console shows *image update*; **Update** (or a
+wave) runs `aw update`, which upgrades the agent, packages, then
+re-converges workloads — only the containers whose unit changed restart —
+and gates on health. A failed gate reverts to the previous channel versions
+first, then to the file snapshot.

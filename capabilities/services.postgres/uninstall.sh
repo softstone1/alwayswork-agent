@@ -4,10 +4,9 @@
 # shellcheck disable=SC1090
 source "${CAP_DIR}/postgres.sh"
 wl_remove_unit "$PG_ADMIN_ID"
-wl_unreport_service "$PG_ADMIN_ID"
+wl_unreport_manifest_surfaces services.postgres
 run rm -f "$(pg_admin_env_file)"
 wl_remove_unit "$PG_ID"
-wl_unreport_service "$PG_ID"
 run rm -f "$(pg_env_file)"
 if [[ "${AW_PURGE:-0}" == "1" ]]; then
   warn "services.postgres: purging $(pg_root) (data, snapshots, backups)"

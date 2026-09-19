@@ -1,0 +1,336 @@
+{
+  "capabilities": [
+    {
+      "description": "Private encrypted network for administration and break-glass access.",
+      "id": "access.tailscale",
+      "name": "Tailscale admin plane",
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Outbound-only secure public access. Opens no inbound ports.",
+      "id": "access.tunnel",
+      "name": "Cloudflare Tunnel",
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Workspace layout, hardened agent runner and a systemd task template.",
+      "id": "agents.core",
+      "name": "Agent control plane",
+      "profiles": [
+        "agent",
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "The node's agent harness as a standard workload container on loopback, published through its tunnel.",
+      "id": "agents.dsh",
+      "name": "Node web UI (DeepSeek Harness)",
+      "profiles": [
+        "agent",
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 2,
+      "workload": {
+        "config": [
+          "dsh_version",
+          "channel",
+          "port",
+          "image",
+          "mode",
+          "dsh"
+        ],
+        "id": "dsh",
+        "image": {
+          "repo": "ghcr.io/softstone1/alwayswork-dsh",
+          "version": {
+            "channel": "latest",
+            "config": "dsh_version",
+            "package": "@deepseek-ai/dsh",
+            "pinned": "0.1.5-rc.2",
+            "source": "npm"
+          }
+        },
+        "kind": "harness",
+        "surfaces": [
+          {
+            "id": "dsh",
+            "kind": "http",
+            "name": "DeepSeek Harness",
+            "path": "/",
+            "port": 3080,
+            "port_config": "port",
+            "primary": true
+          }
+        ],
+        "workspace": "subvolume"
+      }
+    },
+    {
+      "description": "Self-hosted workflow automation on localhost, for assistant tasks.",
+      "id": "assistant.n8n",
+      "name": "Automation hub (n8n)",
+      "profiles": [
+        "assistant",
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "restic snapshots of config, state and agent workspaces on a timer.",
+      "id": "backup.restic",
+      "name": "Encrypted offsite backups",
+      "profiles": [
+        "worker",
+        "agent",
+        "assistant",
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Runs the worker agent so the AlwaysWork console can manage this box.",
+      "id": "control.join",
+      "name": "Control-plane agent",
+      "profiles": [
+        "worker",
+        "agent",
+        "assistant",
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Base packages, firewall, kernel hardening, secret store, update timer.",
+      "id": "core",
+      "name": "Core foundation",
+      "profiles": [
+        "foundation",
+        "worker",
+        "agent",
+        "assistant",
+        "full"
+      ],
+      "requires": [],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Node, Python and pnpm for building and testing on the box.",
+      "id": "dev.toolchain",
+      "name": "Development toolchain",
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Uptime Kuma bound to localhost; front it with access.tunnel.",
+      "id": "obs.uptime",
+      "name": "Uptime monitoring",
+      "profiles": [
+        "worker",
+        "agent",
+        "assistant",
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Docker engine with hardened defaults and no socket exposure to workers.",
+      "id": "runtime.docker",
+      "name": "Docker runtime",
+      "profiles": [
+        "worker",
+        "agent",
+        "assistant",
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Daemonless, rootless container runtime. Best isolation, no root daemon.",
+      "id": "runtime.podman",
+      "name": "Podman runtime",
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps), exposed through the tunnel for Hyperdrive.",
+      "id": "services.postgres",
+      "name": "PostgreSQL",
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 1,
+      "workload": {
+        "config": [
+          "version",
+          "image",
+          "port",
+          "db",
+          "user",
+          "memory_mb",
+          "network",
+          "pull",
+          "admin",
+          "admin_port",
+          "admin_image"
+        ],
+        "data": [
+          "data",
+          "backups"
+        ],
+        "id": "postgres",
+        "image": {
+          "repo": "docker.io/library/postgres",
+          "version": {
+            "pinned": "16",
+            "source": "pinned"
+          }
+        },
+        "kind": "service",
+        "sidecars": [
+          {
+            "enabled_config": "admin",
+            "id": "postgres-admin",
+            "image": {
+              "repo": "docker.io/sosedoff/pgweb",
+              "version": {
+                "pinned": "0.16.2",
+                "source": "pinned"
+              }
+            },
+            "name": "PostgreSQL admin (pgweb)",
+            "surfaces": [
+              {
+                "id": "postgres-admin",
+                "kind": "http",
+                "name": "PostgreSQL admin (pgweb)",
+                "path": "/",
+                "port": 8081,
+                "port_config": "admin_port"
+              }
+            ]
+          }
+        ],
+        "surfaces": [
+          {
+            "id": "postgres",
+            "kind": "tcp",
+            "name": "PostgreSQL",
+            "port": 5432,
+            "port_config": "port"
+          }
+        ]
+      }
+    },
+    {
+      "description": "Chromium on the node for the agent (CDP for the harness, noVNC for a human), a persistent profile, published through the tunnel.",
+      "id": "tools.browser",
+      "name": "Agent browser",
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 1,
+      "workload": {
+        "config": [
+          "image",
+          "port",
+          "pull",
+          "memory_mb"
+        ],
+        "id": "browser",
+        "image": {
+          "repo": "ghcr.io/softstone1/alwayswork-browser",
+          "version": {
+            "channel": "latest",
+            "pinned": "20260919",
+            "source": "ghcr"
+          }
+        },
+        "internal": [
+          {
+            "id": "cdp",
+            "kind": "cdp",
+            "name": "Chrome DevTools (alwayswork-browser:9222 on the workload network)",
+            "port": 9222
+          }
+        ],
+        "kind": "tool",
+        "surfaces": [
+          {
+            "id": "browser",
+            "kind": "vnc",
+            "name": "Agent browser (noVNC)",
+            "path": "/vnc.html?autoconnect=1&resize=scale",
+            "port": 6080,
+            "port_config": "port"
+          }
+        ],
+        "workspace": "subvolume"
+      }
+    }
+  ],
+  "generatedFrom": "capabilities/*/manifest.yaml"
+}

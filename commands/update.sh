@@ -69,9 +69,26 @@ cmd_update() {
   fi
   state_set last_update "$(date -Iseconds)"
 
+  # Workloads follow their channels (SYSTEM_SPEC §12.4): re-converge so a
+  # moved channel pulls the new image and restarts that container — only
+  # units whose file changed restart.
+  log "Re-converging workloads"
+  "$AW_ROOT/bin/alwayswork" apply >>"$AW_LOG_DIR/update.log" 2>&1 || warn "update: apply reported a problem (see $AW_LOG_DIR/update.log)"
+
   # The gate: a node that upgraded but cannot heartbeat, lost its tunnel or
   # fails doctor is not "updated", it is broken. Undo and try the gate again.
   if ! upd_health_gate; then
+    # A bad image on a channel is the likeliest cause: go back to the
+    # previous channel versions and re-converge before undoing files.
+    if declare -F wl_targets_rollback >/dev/null && wl_targets_rollback; then
+      warn "update: gate failed; reverting workload images to the previous channel versions"
+      "$AW_ROOT/bin/alwayswork" apply >>"$AW_LOG_DIR/update.log" 2>&1 || true
+      if upd_health_gate; then
+        upd_record_result rolled_back "unhealthy with the new workload images; reverted to the previous versions"
+        warn "update: rolled back workload images; the channel move is NOT applied"
+        return 1
+      fi
+    fi
     if upd_undo_to_snapshot "$snap_id" && upd_health_gate; then
       upd_record_result rolled_back "unhealthy after upgrade; files restored from snapshot $snap_id"
       warn "update: rolled back to snapshot $snap_id (files); the upgrade is NOT applied"

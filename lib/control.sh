@@ -941,6 +941,9 @@ control_agent_tick() {
   control_watch_set "$(jq -r '.watching // false' <<<"$resp" 2>/dev/null)"
   # The agent the control plane ships; `aw update` upgrades when behind.
   declare -F upd_agent_note_target >/dev/null && upd_agent_note_target "$(jq -r '.agent.commit // ""' <<<"$resp" 2>/dev/null)"
+  # Image versions per repo and channel (SYSTEM_SPEC §12.4): what `latest`
+  # and `next` mean today for the harness, the browser, …; applied by `aw update`.
+  declare -F wl_note_image_targets >/dev/null && wl_note_image_targets "$(jq -c '.images // {}' <<<"$resp" 2>/dev/null)"
   if [[ "$desired" != "$applied" ]]; then
     log "control: desired version $desired (applied $applied)"
     delivery=""; rc=1
@@ -1576,6 +1579,9 @@ control_sampler() {
         control_watch_set "$(jq -r '.watching // false' <<<"$resp" 2>/dev/null)"
   # The agent the control plane ships; `aw update` upgrades when behind.
   declare -F upd_agent_note_target >/dev/null && upd_agent_note_target "$(jq -r '.agent.commit // ""' <<<"$resp" 2>/dev/null)"
+  # Image versions per repo and channel (SYSTEM_SPEC §12.4): what `latest`
+  # and `next` mean today for the harness, the browser, …; applied by `aw update`.
+  declare -F wl_note_image_targets >/dev/null && wl_note_image_targets "$(jq -c '.images // {}' <<<"$resp" 2>/dev/null)"
       fi
     fi
     sleep "$every"

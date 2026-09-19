@@ -39,8 +39,7 @@ dsc_retire_legacy_unit
 dsc_apply_unit
 
 dsc_report_webui "$host" "$port"
-# The harness is the node's primary UI: surface "dsh" of workload "dsh",
-# reached at <node>.<base> (not <node>-dsh), gated by the node gate.
-wl_report_surface dsh dsh http "$port" "/" "DeepSeek Harness" 1
+# Surfaces come from the manifest (the harness is the node's primary UI).
+wl_report_manifest_surfaces agents.dsh
 cfg_set_str '.agents.dsh.mode' container 2>/dev/null || true
 ok "node web ui (container): https://$host/ -> 127.0.0.1:$port"

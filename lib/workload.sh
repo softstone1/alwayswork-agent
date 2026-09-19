@@ -286,3 +286,99 @@ wl_surfaces_json() {
   (( ${#files[@]} )) || { printf '[]'; return 0; }
   jq -sc '[.[] | . + {workload: (.workload // .id), kind: (.kind // (if .protocol == "http" then "http" else "tcp" end))}]' "${files[@]}" 2>/dev/null || printf '[]'
 }
+
+# --- manifests: image versions and surfaces ------------------------------------------------
+# A capability's manifest.yaml `workload:` section says what it deploys
+# (SYSTEM_SPEC §12.3): the image repo, how its version is chosen, and its
+# surfaces (§12.8). Nothing below is capability-specific.
+
+wl_manifest_get() { yq -r "$2 // \"\"" "$(cap_manifest "$1")" 2>/dev/null || true; }
+
+# Image versions the control plane resolved per repo and channel (delivered
+# in every heartbeat answer as `images`), kept for the node's decisions.
+wl_targets_file()      { printf '%s/image-targets.json' "$AW_STATE"; }
+wl_targets_prev_file() { printf '%s/image-targets.prev.json' "$AW_STATE"; }
+wl_note_image_targets() {
+  local json="$1"
+  jq -e 'type == "object" and length > 0' >/dev/null 2>&1 <<<"$json" || return 0
+  ensure_dir "$AW_STATE"
+  if [[ -s "$(wl_targets_file)" ]] && ! cmp -s <(jq -cS . "$(wl_targets_file)" 2>/dev/null) <(jq -cS . <<<"$json"); then
+    cp -f "$(wl_targets_file)" "$(wl_targets_prev_file)" 2>/dev/null || true
+  fi
+  jq -cS . <<<"$json" > "$(wl_targets_file)" 2>/dev/null || true
+}
+wl_targets_rollback() {
+  [[ -s "$(wl_targets_prev_file)" ]] || return 1
+  mv -f "$(wl_targets_prev_file)" "$(wl_targets_file)"
+}
+# wl_channel_version <repo> <channel>: what the control plane says is on that channel.
+wl_channel_version() {
+  [[ -s "$(wl_targets_file)" ]] || return 1
+  local v; v="$(jq -r --arg r "$1" --arg c "$2" '.[$r][$c] // ""' "$(wl_targets_file)" 2>/dev/null)"
+  [[ "$v" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] && printf '%s' "$v"
+}
+
+# wl_want_version <cap>: the version this node should run for the
+# capability's workload image — explicit config beats the channel, the
+# channel's resolved version beats the pin, the pin is the floor.
+#   config <version_config> (manifest .workload.image.version.config, default
+#   `version`) → channel (config `channel`, else manifest channel) → pinned.
+wl_want_version() {
+  local cap="$1" v cfgkey channel repo
+  cfgkey="$(wl_manifest_get "$cap" '.workload.image.version.config')"; [[ -n "$cfgkey" ]] || cfgkey=version
+  v="$(CAP_ID="$cap" cap_config "$cfgkey")"
+  [[ -n "$v" ]] && { printf '%s' "$v"; return 0; }
+  channel="$(CAP_ID="$cap" cap_config channel)"; [[ -n "$channel" ]] || channel="$(wl_manifest_get "$cap" '.workload.image.version.channel')"
+  repo="$(wl_manifest_get "$cap" '.workload.image.repo')"
+  if [[ -n "$channel" && "$channel" != "pinned" && -n "$repo" ]] && v="$(wl_channel_version "$repo" "$channel")"; then printf '%s' "$v"; return 0; fi
+  wl_manifest_get "$cap" '.workload.image.version.pinned'
+}
+# wl_want_image <cap> [sidecar-id]: <repo>:<version>, or the config `image` override.
+wl_want_image() {
+  local cap="$1" side="${2:-}" img repo
+  if [[ -n "$side" ]]; then
+    repo="$(wl_manifest_get "$cap" ".workload.sidecars[] | select(.id == \"$side\") | .image.repo")"
+    img="${repo}:$(wl_manifest_get "$cap" ".workload.sidecars[] | select(.id == \"$side\") | .image.version.pinned")"
+  else
+    img="$(CAP_ID="$cap" cap_config image)"
+    if [[ -z "$img" ]]; then repo="$(wl_manifest_get "$cap" '.workload.image.repo')"; img="${repo}:$(wl_want_version "$cap")"; fi
+  fi
+  [[ "$img" =~ ^[A-Za-z0-9._/:@-]+$ ]] || die "workload: refusing suspicious image '$img'"
+  printf '%s' "$img"
+}
+
+# wl_report_manifest_surfaces <cap> [sidecar-id]: report every surface the
+# manifest declares for the workload (or one of its sidecars); a surface's
+# port may be moved by the config key it names (`port_config`).
+wl_report_manifest_surfaces() {
+  local cap="$1" side="${2:-}" wl sel id kind port pcfg path name primary
+  wl="$(wl_manifest_get "$cap" '.workload.id')"; [[ -n "$wl" ]] || return 0
+  if [[ -n "$side" ]]; then sel=".workload.sidecars[] | select(.id == \"$side\") | .surfaces[]?"; else sel='.workload.surfaces[]?'; fi
+  while IFS=$'\t' read -r id kind port pcfg path name primary; do
+    [[ -n "$id" ]] || continue
+    if [[ -n "$pcfg" ]]; then local p; p="$(CAP_ID="$cap" cap_config "$pcfg")"; [[ "$p" =~ ^[0-9]{2,5}$ ]] && port="$p"; fi
+    wl_report_surface "$wl" "$id" "$kind" "$port" "$path" "${name:-$id}" "$([[ "$primary" == "true" ]] && echo 1 || echo 0)"
+  done < <(yq -r "$sel | [.id, .kind, (.port|tostring), (.port_config // \"\"), (.path // \"\"), (.name // \"\"), ((.primary // false)|tostring)] | @tsv" "$(cap_manifest "$cap")" 2>/dev/null)
+}
+wl_unreport_manifest_surfaces() {
+  local cap="$1" id
+  while IFS= read -r id; do [[ -n "$id" ]] && wl_unreport_service "$id"; done \
+    < <(yq -r '(.workload.surfaces[]?, .workload.sidecars[]?.surfaces[]?) | .id' "$(cap_manifest "$cap")" 2>/dev/null)
+}
+
+# Image updates this node is behind on: enabled capabilities whose wanted
+# image differs from the one their container runs. Reported in health.
+wl_image_updates_json() {
+  local cap running want wl out='[]'
+  local ps='[]'
+  if have podman && [[ -z "${AW_TEST:-}" || -n "${AW_TEST_PODMAN:-}" ]]; then ps="$(podman ps -a --filter label=alwayswork=true --format json 2>/dev/null)"; [[ "$ps" == \[* ]] || ps='[]'; fi
+  while IFS= read -r cap; do
+    [[ -n "$cap" ]] || continue
+    wl="$(wl_manifest_get "$cap" '.workload.id')"; [[ -n "$wl" ]] || continue
+    want="$(wl_want_image "$cap" 2>/dev/null)" || continue
+    running="$(jq -r --arg n "alwayswork-$wl" '[.[] | select((if (.Names|type)=="array" then .Names[0] else .Names end) == $n)][0].Image // ""' <<<"$ps" 2>/dev/null)"
+    [[ -n "$running" && "$running" != "$want" ]] || continue
+    out="$(jq -c --arg w "$wl" --arg c "$cap" --arg r "$running" --arg t "$want" '. + [{workload:$w, capability:$c, running:$r, want:$t}]' <<<"$out")"
+  done < <(cfg_list '.capabilities.enabled' 2>/dev/null)
+  printf '%s' "$out"
+}

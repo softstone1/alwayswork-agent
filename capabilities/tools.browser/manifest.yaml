@@ -4,3 +4,17 @@ description: Chromium on the node for the agent (CDP for the harness, noVNC for 
 version: 1
 requires: [core, runtime.podman]
 profiles: [full]
+workload:
+  id: browser
+  kind: tool
+  image:
+    repo: ghcr.io/softstone1/alwayswork-browser
+    # Tags are build dates on GHCR; `latest` follows the newest one the
+    # control plane sees there. config keys: image (override), channel
+    version: { source: ghcr, channel: latest, pinned: "20260919" }
+  surfaces:
+    - { id: browser, kind: vnc, port: 6080, port_config: port, path: "/vnc.html?autoconnect=1&resize=scale", name: Agent browser (noVNC) }
+  internal:
+    - { id: cdp, kind: cdp, port: 9222, name: Chrome DevTools (alwayswork-browser:9222 on the workload network) }
+  config: [image, port, pull, memory_mb]
+  workspace: subvolume
