@@ -143,3 +143,14 @@ published to the host except what each workload puts on `127.0.0.1`.
   `network: egress-proxy`, `credentials: ai-gateway`) and sibling images for
   other engines.
 - Per-task btrfs snapshots of `/workspace`.
+
+## Surfaces
+
+How a workload is reached (`SYSTEM_SPEC.md` §12.8). A capability declares
+each with `wl_report_surface <workload> <id> <kind> <port> [path] [name] [primary]`
+(`kind`: `http` | `vnc` | `tcp` | `cdp` | `ssh`); a package with
+`publish[].kind` / `publish[].name`. Files land in
+`/var/lib/alwayswork/services/<id>.json`, ride the heartbeat as
+`expose.services`, and the control plane routes `<node>-<id>.<base>` to
+each — the harness's primary UI stays `<node>.<base>`. The console shows
+one Open / Watch / Connect per workload row.

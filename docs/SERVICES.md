@@ -1,4 +1,11 @@
-# Services as workloads
+# Services
+
+**Web admin.** `services.postgres` runs a `pgweb` side-car by default
+(`alwayswork-postgres-admin`: pinned image, read-only, loopback port 8081,
+connects as the application role over the workload network). It is the
+service's `http` surface, reached as `<node>-postgres-admin.<base>` behind
+Access — **Open** on the postgres row in the console. `aw enable
+services.postgres --admin off` removes it; `--admin_port` moves it. as workloads
 
 The node side of `docs/SYSTEM_SPEC.md` §12.7 (control repo). A node's
 capacity is for agents *and* for the traditional services an application

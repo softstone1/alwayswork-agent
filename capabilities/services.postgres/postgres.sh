@@ -9,6 +9,8 @@
 #   db        database created on first start (default app)
 #   user      role created on first start (default app)
 #   memory_mb container memory budget (default: .limits.defaults.memory_mb)
+#   admin     web admin side-car: pgweb (default) | off
+#   admin_port loopback port of the admin UI (default 8081)
 # The superuser password is POSTGRES_PASSWORD in the sealed store, generated
 # on first enable if absent; the app role's password is POSTGRES_APP_PASSWORD.
 
@@ -25,6 +27,59 @@ pg_data()    { printf '%s' "$(pg_root)/data"; }
 pg_backups() { printf '%s' "$(pg_root)/backups"; }
 pg_env_file(){ printf '%s' "$AW_ETC/postgres.env"; }
 pg_unit()    { wl_unit_name "$PG_ID"; }
+
+# --- the web admin (SYSTEM_SPEC §12.8: a service's http surface) --------------
+# pgweb: one static binary, browses and queries the database over a URL.
+# Runs as its own workload container beside postgres on the alwayswork
+# network, read-only rootfs, published to loopback, reached through the
+# tunnel as <node>-postgres-admin.<base> behind Access. Off with admin=off.
+PG_ADMIN_ID="postgres-admin"
+PG_ADMIN_IMAGE_DEFAULT="docker.io/sosedoff/pgweb:0.16.2"
+pg_admin()       { local a; a="$(cap_config admin)"; [[ -n "$a" ]] || a=pgweb; case "$a" in pgweb|off) printf '%s' "$a" ;; *) die "services.postgres: bad admin '$a' (pgweb|off)" ;; esac; }
+pg_admin_port()  { local p; p="$(cap_config admin_port)"; [[ -n "$p" ]] || p=8081; [[ "$p" =~ ^[0-9]{2,5}$ ]] || die "services.postgres: bad admin_port '$p'"; printf '%s' "$p"; }
+pg_admin_image() { local i; i="$(cap_config admin_image)"; [[ -n "$i" ]] || i="$PG_ADMIN_IMAGE_DEFAULT"; printf '%s' "$i"; }
+pg_admin_env_file() { printf '%s' "$AW_ETC/postgres-admin.env"; }
+
+# The admin connects as the application role over the container network;
+# its credentials live only in a 0600 env file.
+pg_admin_render_env() {
+  local dest tmp
+  dest="$(pg_admin_env_file)"
+  if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] render %s\n' "$dest" >&2; return 0; fi
+  tmp="$(mktemp "${dest}.XXXXXX")" || die "services.postgres: cannot stage admin env file"
+  chmod 600 "$tmp"
+  printf 'PGWEB_DATABASE_URL=postgres://%s:%s@%s:5432/%s?sslmode=disable\n' "$(pg_user)" "$(sec_get POSTGRES_APP_PASSWORD)" "$(pg_container)" "$(pg_db)" > "$tmp"
+  mv -f "$tmp" "$dest"; chmod 600 "$dest"
+}
+
+# shellcheck disable=SC2034  # WL_* are read by lib/workload.sh
+pg_admin_workload_vars() {
+  WL_NAME="$PG_ADMIN_ID"
+  WL_IMAGE="$(pg_admin_image)"
+  WL_DESC="PostgreSQL web admin (pgweb)"
+  WL_PUBLISH=("$(pg_admin_port):8081")
+  WL_VOLUMES=()
+  WL_ENV_FILE="$(pg_admin_env_file)"
+  WL_LABELS=("dev.alwayswork.workload=$PG_ADMIN_ID" "dev.alwayswork.service=postgres" "dev.alwayswork.sidecar_of=$PG_ID")
+  WL_READ_ONLY=1
+  WL_TMPFS=()
+  WL_HEALTH="wget -q -O /dev/null http://127.0.0.1:8081/ || curl -sf -o /dev/null http://127.0.0.1:8081/"
+  WL_EXTRA=(--memory 256m --user 65534:65534)
+  WL_NETWORK="$(cap_config network)"
+  WL_ARGS=(--bind 0.0.0.0 --listen 8081 --skip-open)
+}
+pg_admin_write_unit() { pg_admin_workload_vars; wl_write_unit; }
+pg_admin_apply() {
+  if [[ "$(pg_admin)" == "off" ]]; then
+    [[ -f "$WL_UNIT_DIR/$(wl_unit_name "$PG_ADMIN_ID")" ]] && wl_remove_unit "$PG_ADMIN_ID"
+    wl_unreport_service "$PG_ADMIN_ID"
+    return 0
+  fi
+  pg_admin_render_env
+  WL_PULL="$(cap_config pull)" wl_ensure_image "$(pg_admin_image)"
+  pg_admin_workload_vars; wl_apply_unit
+  wl_report_surface "$PG_ID" "$PG_ADMIN_ID" http "$(pg_admin_port)" "/" "PostgreSQL admin (pgweb)"
+}
 pg_container(){ wl_container "$PG_ID"; }
 
 # Passwords live only in the sealed store; generated once, never printed.

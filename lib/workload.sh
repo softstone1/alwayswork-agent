@@ -178,21 +178,35 @@ wl_remove_unit() {
   if have podman; then run podman rm -f "$(wl_container "$1")" 2>/dev/null || true; fi
 }
 
-# --- reporting ------------------------------------------------------------------------------
-# Each exposed service writes $AW_STATE/services/<id>.json:
-#   {"id","name","protocol":"http"|"tcp","port",("path")}
-# The control agent sends the set on heartbeat as expose.services (§5.2); the
-# control plane adds <id>-<node>.<base> to the node's tunnel.
+# --- surfaces ------------------------------------------------------------------------------
+# A surface is how a workload is reached (SYSTEM_SPEC §12.8): one file per
+# surface in $AW_STATE/services/<id>.json —
+#   {"id","workload","kind":"http"|"vnc"|"tcp"|"cdp"|"ssh","protocol","port",("path"),"name",("primary":true)}
+# `protocol` is what the tunnel speaks (http or tcp); `kind` is what a human
+# or a tool does with it. The control agent sends the set on heartbeat as
+# expose.services; the control plane routes <node>-<id>.<base> to each one,
+# except the node's primary UI (`primary`), which is <node>.<base> itself.
 wl_services_dir() { printf '%s' "$AW_STATE/services"; }
 
-wl_report_service() {
-  local id="$1" name="$2" protocol="$3" port="$4" path="${5:-}"
-  [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "workload: bad service id '$id'"
+# wl_report_surface <workload> <surface-id> <kind> <port> [path] [name] [primary]
+wl_report_surface() {
+  local workload="$1" id="$2" kind="$3" port="$4" path="${5:-}" name="${6:-$2}" primary="${7:-0}" protocol
+  [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "workload: bad surface id '$id'"
+  [[ "$workload" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "workload: bad workload id '$workload'"
+  case "$kind" in http|vnc) protocol=http ;; tcp|cdp|ssh) protocol=tcp ;; *) die "workload: bad surface kind '$kind' (http|vnc|tcp|cdp|ssh)" ;; esac
   ensure_dir "$(wl_services_dir)"
-  jq -n --arg id "$id" --arg name "$name" --arg proto "$protocol" --argjson port "$port" --arg path "$path" \
-    '{id:$id, name:$name, protocol:$proto, port:$port} + (if $path == "" then {} else {path:$path} end)' \
+  jq -n --arg id "$id" --arg wl "$workload" --arg kind "$kind" --arg name "$name" --arg proto "$protocol" --argjson port "$port" --arg path "$path" --argjson primary "$([[ "$primary" == "1" ]] && echo true || echo false)" \
+    '{id:$id, workload:$wl, kind:$kind, name:$name, protocol:$proto, port:$port} + (if $path == "" then {} else {path:$path} end) + (if $primary then {primary:true} else {} end)' \
     | aw_write "$(wl_services_dir)/$id.json"
   chmod 644 "$(wl_services_dir)/$id.json" 2>/dev/null || true
+}
+
+# wl_report_service <id> <name> <protocol> <port> [path] — a service workload's
+# main surface (the workload and the surface share the id).
+wl_report_service() {
+  local id="$1" name="$2" protocol="$3" port="$4" path="${5:-}" kind
+  case "$protocol" in http) kind=http ;; tcp) kind=tcp ;; *) die "workload: bad protocol '$protocol'" ;; esac
+  wl_report_surface "$id" "$id" "$kind" "$port" "$path" "$name"
 }
 
 wl_unreport_service() { run rm -f "$(wl_services_dir)/$1.json"; }
@@ -227,7 +241,9 @@ wl_workloads_json() {
   # podman stats JSON differs by version: 5.x gives {Name, CPU (number),
   # MemUsage/MemLimit (bytes), PIDs}; 4.x gives {name, cpu_percent: "3.6%",
   # mem_usage: "273MB / 3.1GB", pids: "20"}. Normalise both.
-  jq -nc --argjson ps "$ps" --argjson st "$stats" '
+  local surfaces='[]'
+  surfaces="$(wl_surfaces_json 2>/dev/null || printf '[]')"; [[ "$surfaces" == \[* ]] || surfaces='[]'
+  jq -nc --argjson ps "$ps" --argjson st "$stats" --argjson sf "$surfaces" '
     def mb: if type == "number" then . / 1048576
             else (capture("(?<n>[0-9.]+)\\s*(?<u>[kKMGT]?i?B)") // null) as $m
                  | if $m == null then null else ($m.n | tonumber) * ({"B":0.000001,"kB":0.001,"KB":0.001,"KiB":0.001,"MB":1,"MiB":1,"GB":1024,"GiB":1024,"TB":1048576,"TiB":1048576}[$m.u] // 1) end end;
@@ -256,6 +272,17 @@ wl_workloads_json() {
           cpuPct: (if $x.cpu == null then null else ($x.cpu * 100 | round / 100) end),
           memMb: (if $x.mem == null then null else ($x.mem | floor) end),
           memLimitMb: (if $x.memLimit == null or $x.memLimit == 0 then null else ($x.memLimit | floor) end),
-          pids: $x.pids }
+          pids: $x.pids,
+          surfaces: ([$sf[] | select(.workload == ($n | sub("^alwayswork-"; ""))) | {id, kind, port} + (if .path then {path} else {} end) + (if .primary then {primary:true} else {} end)] | if length == 0 then null else . end) }
       | with_entries(select(.value != null)))' 2>/dev/null || printf '[]'
+}
+
+# Every surface file, raw (no podman): what the workloads list joins on.
+wl_surfaces_json() {
+  local d f; d="$(wl_services_dir)"
+  [[ -d "$d" ]] || { printf '[]'; return 0; }
+  local -a files=()
+  for f in "$d"/*.json; do [[ -f "$f" ]] && files+=("$f"); done
+  (( ${#files[@]} )) || { printf '[]'; return 0; }
+  jq -sc '[.[] | . + {workload: (.workload // .id), kind: (.kind // (if .protocol == "http" then "http" else "tcp" end))}]' "${files[@]}" 2>/dev/null || printf '[]'
 }

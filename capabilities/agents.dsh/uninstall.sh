@@ -23,3 +23,4 @@ else
   info "agents.dsh: kept $(dsc_workspace) and $(dsc_home) (AW_PURGE=1 removes them)"
 fi
 ok "node web ui removed"
+wl_unreport_service dsh 2>/dev/null || true

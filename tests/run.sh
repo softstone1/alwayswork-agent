@@ -964,6 +964,12 @@ if have yq; then
   check "pg: service is reported for the heartbeat as tcp 5432" \
     'pg_probe wl_report_service postgres PostgreSQL tcp 5432 >/dev/null 2>&1 && [[ "$(pg_probe wl_services_json | jq -r ".[0] | .id + \" \" + .protocol + \" \" + (.port|tostring) + \" \" + .health")" == "postgres tcp 5432 unknown" ]]'
   check "pg: unreport removes it"     'pg_probe wl_unreport_service postgres >/dev/null 2>&1 && [[ "$(pg_probe wl_services_json)" == "[]" ]]'
+  check "pg: the web admin side-car is an http surface of the postgres workload (pgweb, read-only, loopback)" \
+    'pg_probe pg_admin_write_unit >/dev/null 2>&1 && u="$TMP/pg/systemd/alwayswork-postgres-admin.service" && grep -q "sosedoff/pgweb" "$u" && grep -q -- "--read-only" "$u" && grep -q -- "--publish 127.0.0.1:8081:8081" "$u" && grep -q -- "--user 65534:65534" "$u" && grep -q -- "--env-file $TMP/pg/etc/postgres-admin.env" "$u" && pg_probe wl_report_surface postgres postgres-admin http 8081 / "PostgreSQL admin" >/dev/null 2>&1 && [[ "$(pg_probe wl_services_json | jq -r ".[0] | .id + \" \" + .workload + \" \" + .kind + \" \" + .protocol")" == "postgres-admin postgres http http" ]]'
+  check "pg: admin=off removes the side-car and its surface" \
+    'yq -i ".capabilities.config.services.postgres.admin = \"off\"" "$TMP/pg/etc/worker.yaml" && pg_probe pg_admin_apply >/dev/null 2>&1; yq -i "del(.capabilities.config.services.postgres.admin)" "$TMP/pg/etc/worker.yaml"; [[ ! -e "$TMP/pg/systemd/alwayswork-postgres-admin.service" ]] && [[ "$(pg_probe wl_services_json)" == "[]" ]]'
+  check "surfaces: the primary http surface is flagged, workloads list carries its surfaces" \
+    'pg_probe wl_report_surface dsh dsh http 3080 / "DSH" 1 >/dev/null 2>&1 && [[ "$(pg_probe wl_services_json | jq -r ".[0] | (.primary|tostring) + \" \" + .kind")" == "true http" ]] && [[ "$(pg_probe wl_surfaces_json | jq -r ".[0].workload")" == "dsh" ]] && pg_probe wl_unreport_service dsh >/dev/null 2>&1'
   check "workload: subvolume falls back to a directory off btrfs; snapshot warns" \
     'pg_probe wl_subvolume "$TMP/pg/state/x/data" >/dev/null 2>&1 && [[ -d "$TMP/pg/state/x/data" ]] && ! pg_probe wl_snapshot "$TMP/pg/state/x/data" >/dev/null 2>&1'
   check "workload: systemd quoting of arguments with spaces and quotes" \
@@ -1002,6 +1008,8 @@ check "packages: an oci package becomes a workload unit on the contract" \
   'pkg_probe pkg_apply_from_delivery "$N8N" >/dev/null 2>&1 && u="$TMP/pkg/systemd/alwayswork-n8n.service" && grep -q -- "--userns=auto" "$u" && grep -q -- "--publish 127.0.0.1:5678:5678" "$u" && grep -q -- "--publish 127.0.0.1:5679:80" "$u" && grep -q -- "--volume $TMP/pkg/state/workloads/n8n/data:/home/node/.n8n:U" "$u" && grep -q -- "--memory 2048m" "$u" && grep -q -- "--cpus 1.5" "$u" && grep -q -- "--user 1000:1000" "$u" && grep -q -- "--health-cmd" "$u" && grep -q "healthz" "$u" && grep -q -- "--env-file $TMP/pkg/etc/pkg-n8n.env" "$u" && grep -q "docker.io/n8nio/n8n:1.80.0 start" "$u"'
 check "packages: env file is 0600 with the plain env; a missing secret is a warning, not a value" \
   'f="$TMP/pkg/etc/pkg-n8n.env" && [[ "$(stat -c %a "$f")" == "600" ]] && grep -qx "GENERIC_TIMEZONE=UTC" "$f" && ! grep -q "N8N_ENCRYPTION_KEY" "$f"'
+check "packages: every published port is a surface with kind and name" \
+  '[[ "$(pkg_probe wl_services_json | jq -r "sort_by(.port) | map(.id + \" \" + .workload + \" \" + .kind) | join(\",\")")" == "n8n n8n http,n8n-5679 n8n tcp" ]]'
 check "packages: every published port is reported as a service" \
   '[[ "$(pkg_probe wl_services_json | jq -r "sort_by(.port) | map(.id + \" \" + .protocol + \" \" + (.port|tostring)) | join(\",\")")" == "n8n http 5678,n8n-5679 tcp 5679" ]]'
 check "packages: installed state carries the digest for the heartbeat" \

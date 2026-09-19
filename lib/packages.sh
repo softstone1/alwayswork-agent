@@ -147,16 +147,17 @@ pkg_oci_apply() {
   WL_ENV_FILE="$(pkg_env_file "$name")"
   wl_ensure_image "$image" || { err "packages: $name: image pull failed"; return 1; }
   wl_apply_unit
-  # Reported as services: the first published port under the package name,
-  # any other as <name>-<port>, so the tunnel reaches every one.
-  local i=0 proto path id
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    port="${line%%|*}"; line="${line#*|}"; proto="${line%%|*}"; path="${line#*|}"
+  # Every published port is a surface (SYSTEM_SPEC §12.8): the first under
+  # the package name, the others as <name>-<port>; `kind` says what it is
+  # for (http UI, vnc, tcp, cdp), `name` what to call it.
+  local i=0 proto path id kind sname
+  while IFS=$'\t' read -r port proto kind path sname; do
+    [[ -n "$port" ]] || continue
     id="$name"; (( i > 0 )) && id="${name:0:25}-$port"
-    wl_report_service "$id" "$name" "$proto" "$port" "$path"
+    [[ -n "$kind" ]] || kind="$proto"
+    wl_report_surface "$name" "$id" "$kind" "$port" "$path" "${sname:-$name}"
     i=$((i + 1))
-  done < <(jq -r '.manifest.publish[]? | "\(.port)|\(.protocol // "http")|\(.path // "")"' <<<"$p")
+  done < <(jq -r '.manifest.publish[]? | [(.port|tostring), (.protocol // "http"), (.kind // ""), (.path // ""), (.name // "")] | @tsv' <<<"$p")
 }
 
 # The env file: plain env from the manifest, secrets by name from the sealed
