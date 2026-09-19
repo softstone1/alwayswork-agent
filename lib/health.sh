@@ -156,7 +156,12 @@ control_health_json() {
   # A field that jq rejects must be visible, not a silent empty heartbeat.
   local jqerr; jqerr="$(mktemp)"
   if ! jq -nc "${_HEALTH_ARGS[@]}" "{${_HEALTH_FIELDS%,}}" 2>"$jqerr"; then
-    warn "health: could not assemble the report: $(head -c 300 "$jqerr" | tr '\n' ' ') (fields: ${_HEALTH_FIELDS%,})"
+    warn "health: could not assemble the report: $(head -c 300 "$jqerr" | tr '\n' ' ')"
+    # Name the offending value so a report from the field is actionable.
+    local i; for ((i = 0; i < ${#_HEALTH_ARGS[@]}; i += 3)); do
+      [[ "${_HEALTH_ARGS[i]}" == "--argjson" ]] || continue
+      if [[ "$(jq -c . <<<"${_HEALTH_ARGS[i + 2]}" 2>/dev/null | wc -l)" != "1" ]]; then warn "health: field ${_HEALTH_ARGS[i + 1]} is not one JSON value: $(printf '%s' "${_HEALTH_ARGS[i + 2]}" | head -c 200 | tr '\n' '|')"; fi
+    done
     printf '{}'
   fi
   rm -f "$jqerr"
