@@ -1018,6 +1018,8 @@ check "samples: the watch flag is fresh for 90 s, then nobody is watching" \
   'd="$TMP/smp"; rm -rf "$d"; mkdir -p "$d"; AW_STATE="$d" bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/control.sh\"; control_watch_set true; control_watching || exit 1; echo \$(( \$(date +%s) - 100 )) > \"\$AW_STATE/watching\"; ! control_watching || exit 1; control_watch_set false; [[ ! -e \"\$AW_STATE/watching\" ]]"'
 check "samples: a sample carries node load and per-workload usage only" \
   'out="$(PATH="$TMP/wlbin:$PATH" AW_TEST_PODMAN=1 bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/workload.sh\"; source \"$ROOT/lib/control.sh\"; control_sample_json")" && [[ "$(jq -r ".node.load1 | type" <<<"$out")" == "number" ]] && [[ "$(jq -r ".workloads | length" <<<"$out")" == "3" ]] && [[ "$(jq -r ".workloads[0] | keys | join(\",\")" <<<"$out")" == "cpuPct,id,memLimitMb,memMb,pids,state" ]] && [[ "$(jq -r ".workloads[0] | has(\"image\")" <<<"$out")" == "false" ]]'
+check "packages: an empty installed dir reports [] exactly once (a doubled value breaks health --argjson)" \
+  'mkdir -p "$PKGD/installed" && rm -f "$PKGD"/installed/*.json && [[ "$(pkg_probe pkg_reports_json)" == "[]" ]] && [[ "$(pkg_probe pkg_reports_json | wc -c)" == "2" ]]'
 check "packages: bridge allows the packages op" 'grep -q "packages)" "$ROOT/lib/objectives.sh"'
 check "packages: aw package is a command"        'grep -q "|package|" "$ROOT/bin/alwayswork" && [[ -f "$ROOT/commands/package.sh" ]]'
 

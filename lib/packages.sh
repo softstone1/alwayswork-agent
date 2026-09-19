@@ -230,9 +230,14 @@ pkg_remove_one() {
 
 # --- reporting --------------------------------------------------------------------------
 pkg_reports_json() {
-  local d; d="$(pkg_installed_dir)"
-  [[ -d "$d" ]] || { printf '[]'; return 0; }
-  jq -sc '[.[] | {name, version, digest, state} + (if .error then {error} else {} end)]' "$d"/*.json 2>/dev/null || printf '[]'
+  local d out; d="$(pkg_installed_dir)"
+  local -a files=()
+  [[ -d "$d" ]] && for f in "$d"/*.json; do [[ -f "$f" ]] && files+=("$f"); done
+  (( ${#files[@]} )) || { printf '[]'; return 0; }
+  # Capture, then print once: jq -s prints [] before failing on a bad file,
+  # and a doubled value breaks the whole health report (--argjson).
+  out="$(jq -sc '[.[] | {name, version, digest, state} + (if .error then {error} else {} end)]' "${files[@]}" 2>/dev/null)" || out=""
+  [[ "$out" == \[* ]] && printf '%s' "$out" || printf '[]'
 }
 
 pkg_status() {
