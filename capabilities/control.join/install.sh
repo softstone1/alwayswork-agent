@@ -9,8 +9,10 @@ fi
 aw_write /etc/systemd/system/alwayswork-agent.service <<'UNIT'
 [Unit]
 Description=AlwaysWork control agent
-After=network-online.target
-Wants=network-online.target
+# time-sync: the agent signs timestamped requests and refuses to until the
+# clock is trusted, so let NTP settle first where the target exists.
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 
 [Service]
 Type=simple

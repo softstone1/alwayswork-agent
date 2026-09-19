@@ -937,6 +937,46 @@ check "tunnel policy drops the lan drop-in"      'grep -q "rm -f /etc/ssh/sshd_c
 check "tunnel policy documented"                 'grep -q "| \`tunnel\` |" "$ROOT/docs/SECURITY.md" && grep -q "lan | tunnel" "$ROOT/config/defaults.yaml"'
 check "doctor grades tunnel via loopback check"  'grep -q "ssh_loopback_only" "$ROOT/commands/doctor.sh"'
 
+echo "== clock guard =="
+# timedatectl is stubbed so the host's own NTP state cannot leak into the
+# assertions; AW_CLOCK_FLOOR moves the plausibility floor around "now".
+cat > "$TMP/clock.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; SCENARIO="$2"
+export AW_ROOT="$ROOT" AW_ETC="$3/etc" AW_STATE="$3/state" AW_CONFIG="$3/etc/worker.yaml" AW_TEST=1
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/control.sh"
+timedatectl() { printf '%s\n' "${NTP:-no}"; }
+mkdir -p "$3"
+FUTURE=$(( $(date +%s) + 86400 * 365 ))
+PAST=$(( $(date +%s) - 86400 ))
+case "$SCENARIO" in
+  floor-past)     NTP=no  AW_CLOCK_FLOOR="$PAST"   control_clock_trusted ;;
+  floor-future)   ! NTP=no AW_CLOCK_FLOOR="$FUTURE" control_clock_trusted ;;
+  ntp-wins)       NTP=yes AW_CLOCK_FLOOR="$FUTURE" control_clock_trusted ;;
+  default-floor)  NTP=no  control_clock_trusted ;;
+  tick-refuses)
+    # An untrusted clock must stop the tick before anything is signed.
+    control_sign() { printf 'SIGNED\n' >&2; printf 'sig'; }
+    curl()         { printf 'CURL\n' >&2; }
+    control_ensure_pubkey() { printf 'PUBKEY\n' >&2; return 0; }
+    export NTP=no AW_CLOCK_FLOOR="$FUTURE"
+    control_agent_tick > "$3/tick.out" 2>&1
+    rc=$?
+    [[ "$rc" == "1" ]] || exit 1
+    grep -q "clock not trusted" "$3/tick.out" || exit 1
+    ! grep -q "SIGNED\|CURL\|PUBKEY" "$3/tick.out" || exit 1 ;;
+  *) exit 2 ;;
+esac
+EOS
+run_clock() { bash "$TMP/clock.sh" "$ROOT" "$1" "$TMP/clock" > "$TMP/clock.out" 2>&1; }
+check "clock trusted past the floor"          'run_clock floor-past'
+check "clock untrusted before the floor"      'run_clock floor-future'
+check "ntp sync trusts the clock regardless"  'run_clock ntp-wins'
+check "default floor trusts a current clock"  'run_clock default-floor'
+check "tick refuses to sign on a bad clock"   'run_clock tick-refuses'
+check "enroll refuses on a bad clock"         'grep -q "control_clock_trusted" "$ROOT/lib/control.sh" && grep -q "before enrolling" "$ROOT/lib/control.sh"'
+check "agent unit waits for time-sync"        'grep -q "After=network-online.target time-sync.target" "$ROOT/capabilities/control.join/install.sh" && grep -q "Wants=network-online.target time-sync.target" "$ROOT/capabilities/control.join/install.sh"'
 
 echo "== zero-touch install =="
 check "auto-enroll env is documented"  'grep -q "ALWAYSWORK_AUTO_ENROLL" "$ROOT/install.sh"'

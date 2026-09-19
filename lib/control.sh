@@ -42,6 +42,30 @@ control_macs_json() {
 }
 
 control_dmi() { cat "/sys/class/dmi/id/$1" 2>/dev/null || true; }
+
+# --- clock guard ---------------------------------------------------------------
+# Every signed request carries a timestamp the control plane checks against a
+# 300 s window, so a box whose clock is wrong after a power loss would sign
+# requests that are rejected anyway — and a delivery expiry check against a
+# bogus clock is meaningless. The clock is trusted when systemd-timesyncd (or
+# any NTP client timedatectl knows about) reports it synced, OR when the wall
+# clock is later than the floor below: this code did not exist before that
+# date, so an earlier reading is provably wrong. The second rule covers boxes
+# without timedatectl. AW_CLOCK_FLOOR overrides the floor (tests).
+AW_CLOCK_FLOOR_DEFAULT=1789776000   # 2026-09-19T00:00:00Z, the date of this change
+
+control_clock_trusted() {
+  local synced floor now
+  if have timedatectl; then
+    synced="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+    [[ "$synced" == "yes" ]] && return 0
+  fi
+  floor="${AW_CLOCK_FLOOR:-$AW_CLOCK_FLOOR_DEFAULT}"
+  now="$(date +%s 2>/dev/null || true)"
+  [[ "$now" =~ ^[0-9]+$ && "$floor" =~ ^[0-9]+$ ]] || return 1
+  [[ "$now" -gt "$floor" ]]
+}
+
 control_sign() {
   local msg sig
   msg="$(mktemp)"
@@ -384,6 +408,11 @@ control_enroll() {
   require_root enroll
   cfg_require
   cfg_need
+  # Enrollment mints and pins keys and starts signing timestamped requests: a
+  # box with a wrong clock would fail every one of them. Refuse until NTP
+  # syncs (or the clock is at least plausible) rather than enroll into a loop.
+  control_clock_trusted \
+    || die "clock not trusted (NTP not synced and the wall clock reads $(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)); set the time or wait for time-sync before enrolling"
   [[ -n "$url" ]] && cfg_set_str '.control.url' "$url"
   # Record the account agent work runs as while we still know who invoked us;
   # capabilities like agents.dsh need it to serve that account's sessions.
@@ -731,6 +760,13 @@ control_agent() {
 
 control_agent_tick() {
   local applied body resp desired delivery ver rc webui
+  # Nothing is signed against an untrusted clock: the control plane would
+  # reject the timestamp anyway, and a delivery expiry check would be
+  # meaningless. The tick backs off and retries once NTP has synced.
+  if ! control_clock_trusted; then
+    warn "control: clock not trusted; skipping signed calls until NTP syncs"
+    return 1
+  fi
   # The pinned key must exist before any delivery is trusted. Nodes that
   # enrolled before pinning existed fetch it once here (TOFU over TLS).
   control_ensure_pubkey || return 1

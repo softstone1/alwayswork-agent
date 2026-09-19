@@ -36,6 +36,16 @@ leaves the file alone, and anything that is not a single
 No `authorized_keys` are ever written. `aw doctor` grades `tunnel` as
 passing when every port-22 listener is bound to loopback.
 
+## Clock guard
+
+Signed device requests carry a timestamp the control plane checks against a
+300 s window, so the agent refuses to sign anything until the clock is
+trusted: `timedatectl` reports NTP synchronised, or the wall clock is later
+than a floor baked into the agent (the date the guard shipped; a reading
+before it is provably wrong). `aw enroll` refuses with the same rule, the
+agent unit orders itself after `time-sync.target`, and the heartbeat reports
+`health.clockSynced`.
+
 ## Control-plane trust boundary
 
 The agent talks to the control plane over mutually authenticated HTTPS
