@@ -1059,6 +1059,10 @@ if have yq; then
   check "heartbeat notes the shipped agent commit"  'grep -q "upd_agent_note_target" "$ROOT/lib/control.sh" && grep -q "agentOutdated" "$ROOT/lib/health.sh"'
   check "aw update: agent step runs before packages and can be skipped" \
     'grep -q "upd_agent_upgrade" "$ROOT/commands/update.sh" && grep -q -- "--no-agent" "$ROOT/commands/update.sh" && grep -q -- "--agent)" "$ROOT/commands/update.sh"'
+  check "aw update accepts --yes after the command (what a rollout unit runs)" \
+    'grep -q -- "--yes|-y)" "$ROOT/commands/update.sh" && ! run_aw --dry-run update --yes --no-agent 2>&1 | grep -q "unknown option"'
+  check "rollout unit settles a process that died without a result" \
+    'grep -q "ExecStopPost=/usr/local/bin/alwayswork update --settle" "$ROOT/lib/updates.sh" && printf "{\"rolloutId\":\"ro_dead\",\"state\":\"running\",\"summary\":\"update started\",\"at\":1}" > "$TMP/upd/state/update-result.json" && upd_probe upd_settle ro_dead exit-code 1 >/dev/null 2>&1 && [[ "$(jq -r .state "$TMP/upd/state/update-result.json")" == "failed" ]] && printf "{\"rolloutId\":\"ro_ok\",\"state\":\"ok\",\"summary\":\"x\",\"at\":1}" > "$TMP/upd/state/update-result.json" && upd_probe upd_settle ro_ok >/dev/null 2>&1 && [[ "$(jq -r .state "$TMP/upd/state/update-result.json")" == "ok" ]]'
   check "aw update --dry-run: snapshot, upgrade, gate, probation" \
     'run_aw --dry-run update && has "pre-update" && has "update gate: dry-run" && has "on probation"'
   check "core installs the guard hook and the boot check" \

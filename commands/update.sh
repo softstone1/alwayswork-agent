@@ -16,8 +16,10 @@ cmd_update() {
       --boot-check) mode="boot-check" ;;
       --agent)      mode="agent"; agent="force" ;;
       --no-agent)   agent="off" ;;
+      --yes|-y)     export ASSUME_YES=1 ;;  # the global flag, accepted here too (rollouts pass it after the command)
+      --settle)     [[ -n "${2-}" ]] || die "missing value for --settle"; mode="settle"; rollout="$2"; shift ;;
       --rollout)    [[ -n "${2-}" ]] || die "missing value for --rollout"; rollout="$2"; shift ;;
-      -h|--help)    info "usage: aw update [--yes] [--rollout <id>] [--no-agent] | --agent | --guard | --boot-check"; return 0 ;;
+          -h|--help)    info "usage: aw update [--yes] [--rollout <id>] [--no-agent] | --agent | --guard | --boot-check"; return 0 ;;
       *) die "unknown option: $1" ;;
     esac
     shift
@@ -26,6 +28,9 @@ cmd_update() {
     guard)      upd_guard; return $? ;;
     boot-check) require_root update; cfg_require; cfg_need; aw_state_init; upd_boot_check; return $? ;;
     agent)      require_root update; cfg_require; cfg_need; aw_state_init; AW_AGENT_FORCE=1 upd_agent_upgrade; return $? ;;
+    # ExecStopPost of the rollout unit: a process that died before recording
+    # an outcome must not leave the control plane waiting for the wave timeout.
+    settle)     require_root update; upd_settle "$rollout" "${SERVICE_RESULT:-}" "${EXIT_STATUS:-}"; return 0 ;;
   esac
 
   require_root update

@@ -233,6 +233,17 @@ upd_record_result() {
   jq -n --arg r "$rollout" --arg s "$state" --arg m "$summary" --argjson at "$(( $(date +%s) * 1000 ))" \
     '{state:$s, summary:$m, at:$at} + (if $r == "" then {} else {rolloutId:$r} end)' > "$(upd_result_file)"
 }
+# upd_settle <rollout-id> [service-result] [exit-status]: still "running" for
+# this rollout after the unit ended = it died early; record that.
+upd_settle() {
+  local id="$1" res="${2:-}" rc="${3:-}" f cur state
+  f="$(upd_result_file)"
+  [[ -s "$f" ]] || return 0
+  cur="$(jq -r '.rolloutId // ""' "$f" 2>/dev/null)"; state="$(jq -r '.state // ""' "$f" 2>/dev/null)"
+  [[ "$cur" == "$id" && "$state" == "running" ]] || return 0
+  upd_record_result failed "update process ended without a result${res:+ ($res${rc:+, exit $rc})}; see journalctl -u alwayswork-update-$id"
+}
+
 upd_result_json() { [[ -s "$(upd_result_file)" ]] && jq -c . "$(upd_result_file)" 2>/dev/null || printf 'null'; }
 
 # Units: the boot check after the agent, and a weekly timer only when the
@@ -274,7 +285,9 @@ upd_apply_from_delivery() {
   jq -n --arg r "$id" --argjson at "$(( $(date +%s) * 1000 ))" '{rolloutId:$r, state:"running", summary:"update started", at:$at}' > "$(upd_result_file)"
   [[ "${AW_TEST:-0}" == "1" ]] && { info "control: (test) update not spawned"; return 0; }
   if have systemd-run; then
+    # ExecStopPost settles the result when the process dies without one.
     systemd-run --unit "alwayswork-update-$id" --collect --quiet \
+      -p "ExecStopPost=/usr/local/bin/alwayswork update --settle $id" \
       /usr/local/bin/alwayswork update --yes --rollout "$id" \
       || { warn "control: could not start the update unit"; upd_record_result failed "could not start update"; }
   else
