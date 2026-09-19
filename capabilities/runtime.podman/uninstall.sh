@@ -8,6 +8,7 @@ if declare -F fw_close_subnet_port >/dev/null; then
   if [[ "$subnet" =~ ^[0-9./]+$ ]]; then
     fw_close_subnet_port runtime.podman "$subnet" 53 udp >/dev/null 2>&1 || true
     fw_close_subnet_port runtime.podman "$subnet" 53 tcp >/dev/null 2>&1 || true
+    fw_close_forward_from runtime.podman "$subnet" >/dev/null 2>&1 || true
   fi
 fi
 warn "removing runtime.podman leaves images and volumes in place"

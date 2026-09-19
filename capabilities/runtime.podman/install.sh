@@ -53,6 +53,12 @@ podman_allow_workload_dns() {
     fw_allow_subnet_port runtime.podman "$subnet" 53 udp >/dev/null 2>&1 || true
     fw_allow_subnet_port runtime.podman "$subnet" 53 tcp >/dev/null 2>&1 || true
     ok "workload DNS allowed from $subnet"
+    # Egress: ufw's forward policy is DROP, which silently cuts every
+    # container off from the internet (LLM APIs, Access JWKS, image pulls
+    # from inside). `network: full` (§12.3) means the workload subnet may
+    # go out; nothing is routed in.
+    fw_allow_forward_from runtime.podman "$subnet" >/dev/null 2>&1 || true
+    ok "workload egress allowed from $subnet"
   fi
 }
 podman_allow_workload_dns

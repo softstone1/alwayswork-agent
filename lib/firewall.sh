@@ -117,6 +117,28 @@ fw_allow_subnet_port() {
   fw_rule_track "$cap" "from:${subnet}:${port}" "$proto"
 }
 
+# fw_allow_forward_from CAP SUBNET — let a container/VM subnet reach the
+# world through this host (ufw routes are DROP by default). Outbound only:
+# the reverse direction stays whatever the default policy says.
+fw_allow_forward_from() {
+  local cap="$1" subnet="$2"
+  case "$(fw_backend)" in
+    ufw)       run ufw route allow from "$subnet" comment "alwayswork:${cap}" ;;
+    firewalld) run firewall-cmd --permanent --zone=trusted --add-source="$subnet" 2>/dev/null; run firewall-cmd --reload ;;
+    *)         warn "cannot allow forwarding from ${subnet}: no firewall backend"; return 1 ;;
+  esac
+  fw_rule_track "$cap" "route:${subnet}" "-"
+}
+fw_close_forward_from() {
+  local cap="$1" subnet="$2"
+  case "$(fw_backend)" in
+    ufw)       run ufw route delete allow from "$subnet" ;;
+    firewalld) run firewall-cmd --permanent --zone=trusted --remove-source="$subnet" 2>/dev/null; run firewall-cmd --reload ;;
+    *)         return 1 ;;
+  esac
+  fw_rule_untrack "$cap" "route:${subnet}" "-"
+}
+
 fw_close_subnet_port() {
   local cap="$1" subnet="$2" port="$3" proto="${4:-tcp}"
   case "$(fw_backend)" in
