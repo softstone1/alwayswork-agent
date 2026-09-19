@@ -33,6 +33,7 @@ OPERATIONS
   agent [interval]          Report state and reconcile (run as a service)
   service list              Service workloads on this node (postgres, ...)
   service <action> <id>     status|logs|snapshot|backup|restore|upgrade|psql
+  package [list|reapply]    Packages delivered by the control plane (oci, capability, distro)
   bridge --once             Serve the harness's allowlisted requests (path unit)
 
 APPS

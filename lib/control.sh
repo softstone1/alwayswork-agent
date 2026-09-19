@@ -663,6 +663,10 @@ control_apply_delivery() {
   # Objectives (lib/objectives.sh): intent for the harness, materialised in
   # its workspace; results ride the heartbeat.
   obj_apply_from_delivery "$json"
+  # Packages (lib/packages.sh): approved manifests — oci workloads,
+  # capabilities with config, catalog apps. Before `apply`, so a capability
+  # package is installed by the same reconcile.
+  pkg_apply_from_delivery "$json"
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.

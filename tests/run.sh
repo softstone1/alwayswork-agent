@@ -965,6 +965,52 @@ fi
 check "heartbeat carries expose.services when present" 'grep -q "expose:{services:" "$ROOT/lib/control.sh" && grep -q "wl_services_json" "$ROOT/lib/control.sh"'
 check "service command is dispatched and documented" 'grep -q "|service|" "$ROOT/bin/alwayswork" && run_aw help && has "service <action> <id>"'
 
+echo "== packages (SYSTEM_SPEC §9) =="
+cat > "$TMP/pkg-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"; shift 2
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml"
+export AW_SYSTEMD_DIR="$D/systemd" AW_OS_RELEASE="$D/../os/arch" AW_TEST=1
+mkdir -p "$AW_ETC" "$AW_STATE" "$AW_SYSTEMD_DIR" "$D/bin"
+# A podman stub: `image exists` says yes, everything else is a no-op.
+printf '#!/bin/sh\ncase "$1 $2" in "image exists") exit 0;; esac\nexit 0\n' > "$D/bin/podman"; chmod +x "$D/bin/podman"
+printf '#!/bin/sh\nexit 0\n' > "$D/bin/systemctl"; chmod +x "$D/bin/systemctl"
+export PATH="$D/bin:$PATH"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"
+source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
+source "$ROOT/lib/capability.sh"; source "$ROOT/lib/apps.sh"; source "$ROOT/lib/workload.sh"; source "$ROOT/lib/packages.sh"
+DRY_RUN=0
+[[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
+"$@"
+EOS
+pkg_probe() { bash "$TMP/pkg-probe.sh" "$ROOT" "$TMP/pkg" "$@"; }
+rm -rf "$TMP/pkg"; PKGD="$TMP/pkg/state/packages"
+N8N='{"packages":[{"id":"pkg_1","name":"n8n","version":"1.80.0","kind":"oci","digest":"sha256:aaaa","manifest":{"kind":"oci","image":"docker.io/n8nio/n8n:1.80.0","env":{"GENERIC_TIMEZONE":"UTC"},"secrets":["N8N_ENCRYPTION_KEY"],"publish":[{"port":5678,"protocol":"http"},{"port":5679,"containerPort":80,"protocol":"tcp"}],"volumes":[{"name":"data","path":"/home/node/.n8n"}],"resources":{"memoryMb":2048,"cpu":1.5},"network":"full","readOnly":false,"health":["wget","-q","-O-","http://127.0.0.1:5678/healthz"],"user":"1000:1000","args":["start"]}}]}'
+if have yq; then
+check "packages: an oci package becomes a workload unit on the contract" \
+  'pkg_probe pkg_apply_from_delivery "$N8N" >/dev/null 2>&1 && u="$TMP/pkg/systemd/alwayswork-n8n.service" && grep -q -- "--userns=auto" "$u" && grep -q -- "--publish 127.0.0.1:5678:5678" "$u" && grep -q -- "--publish 127.0.0.1:5679:80" "$u" && grep -q -- "--volume $TMP/pkg/state/workloads/n8n/data:/home/node/.n8n:U" "$u" && grep -q -- "--memory 2048m" "$u" && grep -q -- "--cpus 1.5" "$u" && grep -q -- "--user 1000:1000" "$u" && grep -q -- "--health-cmd" "$u" && grep -q "healthz" "$u" && grep -q -- "--env-file $TMP/pkg/etc/pkg-n8n.env" "$u" && grep -q "docker.io/n8nio/n8n:1.80.0 start" "$u"'
+check "packages: env file is 0600 with the plain env; a missing secret is a warning, not a value" \
+  'f="$TMP/pkg/etc/pkg-n8n.env" && [[ "$(stat -c %a "$f")" == "600" ]] && grep -qx "GENERIC_TIMEZONE=UTC" "$f" && ! grep -q "N8N_ENCRYPTION_KEY" "$f"'
+check "packages: every published port is reported as a service" \
+  '[[ "$(pkg_probe wl_services_json | jq -r "sort_by(.port) | map(.id + \" \" + .protocol + \" \" + (.port|tostring)) | join(\",\")")" == "n8n http 5678,n8n-5679 tcp 5679" ]]'
+check "packages: installed state carries the digest for the heartbeat" \
+  '[[ "$(pkg_probe pkg_reports_json | jq -r ".[0] | .name + \" \" + .version + \" \" + .digest + \" \" + .state")" == "n8n 1.80.0 sha256:aaaa installed" ]]'
+check "packages: same digest again is a no-op (unit unchanged)" \
+  'b="$(sha256sum "$TMP/pkg/systemd/alwayswork-n8n.service")" && pkg_probe pkg_apply_from_delivery "$N8N" >/dev/null 2>&1 && [[ "$(sha256sum "$TMP/pkg/systemd/alwayswork-n8n.service")" == "$b" ]]'
+check "packages: a bad image is recorded as failed, never installed, and does not abort the delivery" \
+  'pkg_probe pkg_apply_from_delivery "{\"packages\":[{\"name\":\"evil\",\"version\":\"1\",\"kind\":\"oci\",\"digest\":\"sha256:bb\",\"manifest\":{\"kind\":\"oci\",\"image\":\"x; rm -rf /\"}},$(jq -c ".packages[0]" <<<"$N8N")]}" >/dev/null 2>&1 && [[ "$(jq -r .state "$PKGD/installed/evil.json")" == "failed" ]] && [[ ! -e "$TMP/pkg/systemd/alwayswork-evil.service" ]] && [[ -e "$PKGD/installed/n8n.json" ]]'
+check "packages: a capability package enables the capability with its config" \
+  'pkg_probe pkg_apply_from_delivery "{\"packages\":[{\"name\":\"pg\",\"version\":\"16\",\"kind\":\"capability\",\"digest\":\"sha256:cc\",\"manifest\":{\"kind\":\"capability\",\"capability\":\"services.postgres\",\"config\":{\"version\":\"16\",\"port\":\"5433\"}}}]}" >/dev/null 2>&1 && [[ "$(yq -r ".capabilities.config.services.postgres.port" "$TMP/pkg/etc/worker.yaml")" == "5433" ]] && yq -r ".capabilities.enabled[]" "$TMP/pkg/etc/worker.yaml" | grep -qx services.postgres'
+check "packages: dropped from desired state -> unit and service report removed, data kept" \
+  '[[ ! -e "$TMP/pkg/systemd/alwayswork-n8n.service" && ! -e "$PKGD/installed/n8n.json" && -d "$TMP/pkg/state/workloads/n8n/data" ]] && [[ "$(pkg_probe wl_services_json)" == "[]" ]]'
+check "packages: a bad package name is ignored" \
+  'pkg_probe pkg_apply_from_delivery "{\"packages\":[{\"name\":\"../x\",\"version\":\"1\",\"kind\":\"oci\",\"manifest\":{}}]}" >/dev/null 2>&1 && [[ ! -e "$PKGD/installed/../x.json" ]]'
+check "packages: a distro package adds catalog apps to the desired list" \
+  'pkg_probe pkg_apply_from_delivery "{\"packages\":[{\"name\":\"tools\",\"version\":\"1\",\"kind\":\"distro\",\"digest\":\"sha256:dd\",\"manifest\":{\"kind\":\"distro\",\"apps\":[\"ripgrep\"]}}]}" >/dev/null 2>&1 && yq -r ".capabilities.apps[]" "$TMP/pkg/etc/worker.yaml" | grep -qx ripgrep && [[ "$(jq -r .state "$PKGD/installed/tools.json")" == "installed" ]]'
+fi
+check "packages: bridge allows the packages op" 'grep -q "packages)" "$ROOT/lib/objectives.sh"'
+check "packages: aw package is a command"        'grep -q "|package|" "$ROOT/bin/alwayswork" && [[ -f "$ROOT/commands/package.sh" ]]'
+
 echo "== safe unattended updates (SYSTEM_SPEC §13.1) =="
 cat > "$TMP/upd-probe.sh" <<'EOS'
 set -u

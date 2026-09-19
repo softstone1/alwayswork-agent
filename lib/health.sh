@@ -146,6 +146,9 @@ control_health_json() {
   _health_raw gpus "$(hw_gpus_json 2>/dev/null)"
   _health_str virt "$(hw_virt 2>/dev/null | head -c 32)"
   _health_num diskRootFreeGb "$(hw_free_disk_gb 2>/dev/null || true)"
+  # Packages as installed (lib/packages.sh), digest included.
+  local pk; pk="$(declare -F pkg_reports_json >/dev/null && pkg_reports_json || printf '[]')"
+  [[ "$pk" != "[]" ]] && _health_raw packages "$pk"
   # Last update result (lib/updates.sh): what a rollout wave waits for.
   local upd; upd="$(declare -F upd_result_json >/dev/null && upd_result_json || printf null)"
   [[ "$upd" != "null" ]] && _health_raw update "$upd"

@@ -102,12 +102,13 @@ obj_bridge_serve_once() {
       status)           out="$(NO_COLOR=1 "$AW_ROOT/bin/alwayswork" --json status 2>&1)" || rc=$? ;;
       doctor)           out="$(ASSUME_YES=1 NO_COLOR=1 "$AW_ROOT/bin/alwayswork" doctor 2>&1)" || rc=$? ;;
       services)         out="$(NO_COLOR=1 "$AW_ROOT/bin/alwayswork" service list 2>&1)" || rc=$? ;;
+      packages)         out="$(NO_COLOR=1 "$AW_ROOT/bin/alwayswork" package list 2>&1)" || rc=$? ;;
       service.status|service.logs|service.snapshot|service.backup)
         local svc; svc="$(jq -r '.args[0] // ""' "$f" 2>/dev/null)"
         if [[ "$svc" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
           out="$(NO_COLOR=1 "$AW_ROOT/bin/alwayswork" service "${op#service.}" "$svc" 2>&1)" || rc=$?
         else out="bad service id"; rc=2; fi ;;
-      *) out="unknown op: $op (allowed: status, doctor, services, service.status|logs|snapshot|backup <id>)"; rc=2 ;;
+      *) out="unknown op: $op (allowed: status, doctor, services, packages, service.status|logs|snapshot|backup <id>)"; rc=2 ;;
     esac
     log "bridge: $op -> rc $rc"
     jq -nc --argjson ok "$([[ $rc -eq 0 ]] && echo true || echo false)" --arg out "$(printf '%s' "$out" | head -c 20000)" --argjson rc "$rc" \
