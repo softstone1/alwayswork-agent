@@ -24,7 +24,9 @@ OPERATIONS
   power <status|apply|off>  Headless / always-on power policy
   clean                     Remove orphans, caches and junk
   enroll --control URL [--token T|--usb]  Announce this worker; USB or console approval
+  enroll                    Resume a pending enrolment or claim (after the console click)
   enroll --status           Show enrollment / claim / decommission state
+  provision                 First-boot/hotplug entry point: USB stick, pending claim/enrolment
   decommission [--local]    Leave the fleet: drain, tombstone, wipe, restore the machine
       [--keep-foundation|--keep-agent]   ... but keep the hardening / keep alwayswork
   reset [--purge]           Forget this identity so the node can re-join

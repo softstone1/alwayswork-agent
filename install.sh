@@ -22,6 +22,11 @@ NO_ALIAS=0
 FORCE=0
 SRC_DIR=""
 INSTALL_FAMILY=""
+# Zero-touch enrol inputs: flags win over the ALWAYSWORK_* env equivalents.
+ENROLL_TOKEN="${ALWAYSWORK_JOIN_TOKEN:-}"
+ENROLL_HOSTNAME="${ALWAYSWORK_HOSTNAME:-}"
+ENROLL_CONTROL="${ALWAYSWORK_CONTROL_URL:-}"
+ENROLL_PROFILE="${ALWAYSWORK_PROFILE:-}"
 
 C_CYAN=$'\033[1;36m'; C_GREEN=$'\033[1;32m'; C_YELLOW=$'\033[1;33m'
 C_RED=$'\033[1;31m'; C_RESET=$'\033[0m'
@@ -95,18 +100,23 @@ Usage: install.sh [options]
   --from <path>    Install from a local checkout
   -h, --help       Show this help
 
-Zero-touch (the platform bootstrapper at https://alwayswork.space/install.sh
-sets these; not for hand use):
+Zero-touch (what the platform bootstrapper at https://alwayswork.space/install.sh
+runs; also usable by hand on a box you already have a shell on):
 
-  curl -fsSL https://alwayswork.space/install.sh | sudo bash
+  curl -fsSL https://alwayswork.space/install.sh | sudo bash -s -- --token <t>
 
-  ALWAYSWORK_AUTO_ENROLL=1   Enroll only: no bootstrap, no SSH lockdown at
-                             install time. The node registers a pending claim
-                             and waits for console approval; the lockdown
-                             happens later, automatically, when signed
-                             desired-state marks the node active.
-  ALWAYSWORK_CONTROL_URL     Control plane URL (default: https://alwayswork.space)
-  ALWAYSWORK_PROFILE         Starting profile (default: worker)
+  --control <url>  Control plane URL          (env ALWAYSWORK_CONTROL_URL; default https://alwayswork.space)
+  --token <t>      Join token from the console (env ALWAYSWORK_JOIN_TOKEN). Enrols directly:
+                   active at once if the group auto-approves, else pending one approval.
+                   Without a token the node registers a pending claim instead.
+  --hostname <h>   Set the machine hostname first (env ALWAYSWORK_HOSTNAME); becomes <h>.<base>
+  --profile <p>    Starting profile            (env ALWAYSWORK_PROFILE; default worker)
+
+  ALWAYSWORK_AUTO_ENROLL=1   Required with --yes for the zero-touch path: enrol only,
+                             no bootstrap, no firewall and no SSH lockdown at install
+                             time. The lockdown happens later, automatically, once
+                             signed desired state marks the node active and its
+                             tunnel is verified.
 EOF
 }
 
@@ -120,6 +130,14 @@ while [[ $# -gt 0 ]]; do
     --dir)       [[ -n "${2-}" ]] || die "missing value for --dir";  INSTALL_DIR="$2"; shift ;;
     --ref)       [[ -n "${2-}" ]] || die "missing value for --ref";  REPO_REF="$2"; shift ;;
     --from)      [[ -n "${2-}" ]] || die "missing value for --from"; SRC_DIR="$2"; shift ;;
+    --token)     [[ -n "${2-}" ]] || die "missing value for --token";    ENROLL_TOKEN="$2"; shift ;;
+    --token=*)   ENROLL_TOKEN="${1#--token=}" ;;
+    --hostname)  [[ -n "${2-}" ]] || die "missing value for --hostname"; ENROLL_HOSTNAME="$2"; shift ;;
+    --hostname=*) ENROLL_HOSTNAME="${1#--hostname=}" ;;
+    --control)   [[ -n "${2-}" ]] || die "missing value for --control";  ENROLL_CONTROL="$2"; shift ;;
+    --control=*) ENROLL_CONTROL="${1#--control=}" ;;
+    --profile)   [[ -n "${2-}" ]] || die "missing value for --profile";  ENROLL_PROFILE="$2"; shift ;;
+    --profile=*) ENROLL_PROFILE="${1#--profile=}" ;;
     -h|--help)   usage; exit 0 ;;
     *)           die "unknown option: $1" ;;
   esac
@@ -335,23 +353,44 @@ bundle_yq() {
   fi
 }
 
-# Zero-touch enrollment (the platform bootstrapper sets ALWAYSWORK_AUTO_ENROLL=1).
+# Zero-touch enrollment (the platform bootstrapper sets ALWAYSWORK_AUTO_ENROLL=1
+# and passes --control/--token/--hostname/--profile; env equivalents work too).
 #
-# Enrolls ONLY: init, secret store, the control.join capability (agent units +
-# provision timer), and one non-blocking provision run that registers the
-# pending claim. No bootstrap, no firewall, no SSH lockdown at install time —
-# cutting SSH here would strand the box before the tunnel is verified.
+# Enrols ONLY: hostname, init, secret store, the control.join capability
+# (agent unit + provision timer + USB hotplug rule), then either a direct
+# token enrolment or a pending claim. No bootstrap, no firewall, no SSH
+# lockdown at install time — cutting SSH here would strand the box before
+# the tunnel is verified.
 #
-# After the console approves the claim, the provision timer completes
-# enrollment, the agent starts, and the first signed desired-state delivery
-# applies everything automatically: tunnel token -> cloudflared up, config,
-# then the deferred lockdown (public SSH off). Ordering:
-#   install -> pending -> (console approval) -> active -> lockdown.
+# With a token: `aw enroll --token` announces the node and waits a bounded
+# time for approval (immediate when the group auto-approves). If the group
+# needs a human, the wait ends cleanly, the node stays "pending" on disk and
+# the provision timer completes enrolment on its own after the console click
+# — so cloud-init and the USB stick never hang.
+#
+# Without a token: `aw provision` registers a pending claim; the timer polls
+# it and completes enrolment on approval.
+#
+# Either way the first signed desired-state delivery applies everything:
+# tunnel token -> cloudflared up, config, then the deferred lockdown.
+# Ordering: install -> pending -> (approval) -> active -> lockdown.
 auto_enroll() {
-  local url="${ALWAYSWORK_CONTROL_URL:-https://alwayswork.space}"
-  local profile="${ALWAYSWORK_PROFILE:-worker}"
+  local url="${ENROLL_CONTROL:-https://alwayswork.space}"
+  local profile="${ENROLL_PROFILE:-worker}"
+  url="${url%/}"
   log "Zero-touch install: enrolling against ${url} (profile: ${profile})"
   info "no lockdown at install time — SSH stays up until the tunnel is verified"
+  if [[ -n "$ENROLL_HOSTNAME" ]]; then
+    [[ "$ENROLL_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] \
+      || die "--hostname must be one DNS label (letters, digits, dashes): ${ENROLL_HOSTNAME}"
+    log "Setting hostname to ${ENROLL_HOSTNAME}"
+    if have hostnamectl; then
+      run hostnamectl set-hostname "$ENROLL_HOSTNAME"
+    else
+      run sh -c "printf '%s\\n' '$ENROLL_HOSTNAME' > /etc/hostname"
+      run hostname "$ENROLL_HOSTNAME"
+    fi
+  fi
   run "$BIN_LINK" init --profile "$profile"
   # The secret store must exist before the control plane can deliver the
   # tunnel token into it. Non-fatal: on distros where sops is not yet
@@ -360,16 +399,25 @@ auto_enroll() {
   run "$BIN_LINK" secrets init \
     || warn "secret store not initialised; run 'sudo aw secrets init' once sops/age are present"
   # --url lands in .capabilities.config.control.join.url; the capability's
-  # install script persists it as .control.url and installs the agent unit
-  # plus the provision timer.
+  # install script persists it as .control.url and installs the agent unit,
+  # the provision timer and the USB hotplug rule.
   run "$BIN_LINK" enable control.join --url "$url"
   # The agent must not run before enrollment completes: with no identity it
-  # would only crash-loop. The provision timer registers the pending claim
-  # now; claim completion starts the agent on approval.
+  # would only crash-loop. Enrolment (below) or the provision timer starts it.
   run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
-  run "$BIN_LINK" provision
-  ok "enrollment started: approve the pending claim in the console"
-  info "after approval the node configures itself: tunnel, capabilities, lockdown"
+  if [[ -n "$ENROLL_TOKEN" ]]; then
+    # Bounded wait: auto-approve groups answer at once; otherwise the timer
+    # resumes the pending enrolment after the operator approves.
+    if AW_ENROLL_WAIT="${AW_ENROLL_WAIT:-90}" run "$BIN_LINK" enroll --control "$url" --token "$ENROLL_TOKEN"; then
+      ok "enrolled: the node configures itself (tunnel, capabilities, web UI) and appears in the console"
+    else
+      die "enrolment with the join token failed (expired, revoked or wrong control plane?)"
+    fi
+  else
+    run "$BIN_LINK" provision
+    ok "enrollment started: approve the pending claim in the console"
+    info "after approval the node configures itself: tunnel, capabilities, lockdown"
+  fi
 }
 
 main() {
@@ -381,7 +429,8 @@ main() {
   install_files "$src"
 
   if [[ "$ASSUME_YES" == "1" ]]; then
-    if [[ "${ALWAYSWORK_AUTO_ENROLL:-0}" == "1" ]]; then
+    # A token or a control URL on the command line is the zero-touch path too.
+    if [[ "${ALWAYSWORK_AUTO_ENROLL:-0}" == "1" || -n "$ENROLL_TOKEN" || -n "$ENROLL_CONTROL" ]]; then
       auto_enroll
     else
       log "Bootstrapping foundation profile"

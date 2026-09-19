@@ -280,6 +280,51 @@ EOF
 rm -f /tmp/aw-pwned /tmp/aw-pwned2
 check "usb toml parser strict" 'bash "$TMP/usb-parse.sh" "$ROOT" "$TMP/usb" && [[ ! -e /tmp/aw-pwned && ! -e /tmp/aw-pwned2 ]]'
 
+# The stick layout the console generates (alwayswork/provision.toml) is found
+# first; the legacy top-level alwayswork.toml still works. Only already-
+# mounted locations are scanned in a dry run (no block devices touched).
+cat > "$TMP/usb-find.sh" <<'EOS'
+set -u
+ROOT="$1"; VOL="$2"
+export AW_ROOT="$ROOT" AW_ETC="$3/etc" AW_STATE="$3/state" AW_LOG_DIR="$3/log" AW_CONFIG="$3/etc/worker.yaml"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/control.sh"
+DRY_RUN=1
+_usb_toml_in "$VOL"
+EOS
+mkdir -p "$TMP/vol1/alwayswork" "$TMP/vol2"
+printf 'join_token = "aj_x"\n' > "$TMP/vol1/alwayswork/provision.toml"
+printf 'join_token = "aj_legacy"\n' > "$TMP/vol1/alwayswork.toml"
+printf 'join_token = "aj_legacy"\n' > "$TMP/vol2/alwayswork.toml"
+check "usb finder prefers alwayswork/provision.toml" '[[ "$(bash "$TMP/usb-find.sh" "$ROOT" "$TMP/vol1" "$TMP/usb")" == "$TMP/vol1/alwayswork/provision.toml" ]]'
+check "usb finder still accepts alwayswork.toml"     '[[ "$(bash "$TMP/usb-find.sh" "$ROOT" "$TMP/vol2" "$TMP/usb")" == "$TMP/vol2/alwayswork.toml" ]]'
+check "usb finder ignores an empty volume"          '! bash "$TMP/usb-find.sh" "$ROOT" "$TMP/usb" "$TMP/usb" >/dev/null'
+check "control.join installs the USB hotplug rule"  'grep -q "90-alwayswork-provision.rules" "$ROOT/capabilities/control.join/install.sh" && grep -q "SYSTEMD_WANTS.*alwayswork-provision.service" "$ROOT/capabilities/control.join/install.sh"'
+check "control.join uninstall removes timer + rule"  'grep -q "alwayswork-provision.timer" "$ROOT/capabilities/control.join/uninstall.sh" && grep -q "90-alwayswork-provision.rules" "$ROOT/capabilities/control.join/uninstall.sh"'
+
+# Pending token enrolment: the flag on disk, the agent's clean exit, and the
+# single place enrolment finishes.
+cat > "$TMP/pending.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml"
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/control.sh"
+DRY_RUN=0
+mkdir -p "$AW_ETC"
+printf '{"deviceId":"w_1","pollSecret":"ps_1","controlUrl":"https://c","pending":true}' > "$AW_ETC/control.json"
+control_enrolled || exit 1
+control_pending || exit 2
+control_set_pending false || exit 3
+control_pending && exit 4
+[[ "$(jq -r .deviceId "$AW_ETC/control.json")" == "w_1" ]] || exit 5
+exit 0
+EOS
+check "pending enrolment flag round-trips" 'bash "$TMP/pending.sh" "$ROOT" "$TMP/pend"'
+check "agent exits cleanly while pending"  'grep -q "control_pending" "$ROOT/lib/control.sh" && grep -B1 -A3 "still pending approval" "$ROOT/lib/control.sh" | grep -q "return 0"'
+check "every enrol path finishes in one place" '[[ "$(grep -c "control_finish_enrolled" "$ROOT/lib/control.sh")" -ge 3 ]] && grep -q "control_enroll_resume_once" "$ROOT/commands/provision.sh"'
+check "bounded approval wait is documented"    'grep -q "AW_ENROLL_WAIT" "$ROOT/lib/control.sh" && grep -q "AW_ENROLL_WAIT" "$ROOT/install.sh"'
+
 if have yq; then
   check "decommission dry-run writes nothing" 'run_aw --dry-run --yes decommission >/dev/null && [[ ! -e "$AW_STATE/decommission.json" ]]'
   check "decommission dry-run summarizes"     'run_aw --dry-run --yes decommission && has "decommissioned"'
@@ -1198,6 +1243,14 @@ check "auto-enroll enrolls, never bootstraps" \
   'ALWAYSWORK_AUTO_ENROLL=1 bash "$ROOT/install.sh" --dry-run --yes > "$TMP/izt" 2>&1 && grep -q "init --profile" "$TMP/izt" && ! grep -q "bootstrap" "$TMP/izt"'
 check "auto-enroll registers a pending claim" 'grep -q "provision" "$TMP/izt"'
 check "auto-enroll pins the agent until approval" 'grep -q "alwayswork-agent.service" "$TMP/izt"'
+check "auto-enroll --token enrols directly (no claim)" \
+  'ALWAYSWORK_AUTO_ENROLL=1 bash "$ROOT/install.sh" --dry-run --yes --control https://c.example --token aj_t1 --hostname kitchen --profile agent > "$TMP/izt2" 2>&1 && grep -q "enroll --control https://c.example --token aj_t1" "$TMP/izt2" && ! grep -q "alwayswork provision" "$TMP/izt2"'
+check "auto-enroll --hostname is set before enrolling" \
+  'grep -q "hostnamectl set-hostname kitchen" "$TMP/izt2" && [[ "$(grep -n "set-hostname" "$TMP/izt2" | head -1 | cut -d: -f1)" -lt "$(grep -n "enroll --control" "$TMP/izt2" | head -1 | cut -d: -f1)" ]]'
+check "auto-enroll --profile reaches init"          'grep -q "init --profile agent" "$TMP/izt2"'
+check "--token alone implies the zero-touch path"   'bash "$ROOT/install.sh" --dry-run --yes --token aj_t2 > "$TMP/izt3" 2>&1 && grep -q "enroll --control" "$TMP/izt3" && ! grep -q "bootstrap --yes" "$TMP/izt3"'
+check "env equivalents still work"                  'ALWAYSWORK_AUTO_ENROLL=1 ALWAYSWORK_JOIN_TOKEN=aj_env ALWAYSWORK_HOSTNAME=envhost bash "$ROOT/install.sh" --dry-run --yes > "$TMP/izt4" 2>&1 && grep -q -- "--token aj_env" "$TMP/izt4" && grep -q "set-hostname envhost" "$TMP/izt4"'
+check "bad --hostname is refused"                   '! ALWAYSWORK_AUTO_ENROLL=1 bash "$ROOT/install.sh" --dry-run --yes --hostname "bad host" >/dev/null 2>&1'
 check "classic --yes still bootstraps" \
   'bash "$ROOT/install.sh" --dry-run --yes > "$TMP/icl" 2>&1 && grep -q "bootstrap --yes" "$TMP/icl"'
 check "installer pulls openssl for device identity" 'grep -q "openssl" "$ROOT/install.sh"'

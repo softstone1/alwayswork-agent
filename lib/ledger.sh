@@ -522,6 +522,9 @@ ledger_self_remove() {
     run rm -f "/etc/systemd/system/$u"
   done
   _ledger_systemctl daemon-reload || true
+  # The USB hotplug rule is ledgered as a file too; this is the belt for a
+  # ledger that predates it.
+  run rm -f /etc/udev/rules.d/90-alwayswork-provision.rules
   for l in /usr/local/bin/aw /usr/local/bin/alwayswork; do
     if [[ -L "$l" && "$(readlink "$l")" == "$root/"* ]]; then run rm -f "$l"; fi
   done

@@ -7,6 +7,25 @@ control_url()         { cfg_get '.control.url' "${ALWAYSWORK_CONTROL_URL:-}"; }
 control_device_id()   { jq -r '.deviceId // ""' "$(control_config_file)" 2>/dev/null || true; }
 control_poll_secret() { jq -r '.pollSecret // ""' "$(control_config_file)" 2>/dev/null || true; }
 control_enrolled()    { [[ -n "$(control_device_id)" ]]; }
+# Enrolled with a token but not yet approved by the operator: the device row
+# exists (id + poll secret on disk) and the provision timer finishes the job.
+control_pending()     { [[ "$(jq -r '.pending // false' "$(control_config_file)" 2>/dev/null)" == "true" ]]; }
+control_set_pending() {
+  local f; f="$(control_config_file)"
+  [[ -f "$f" && "$DRY_RUN" != "1" ]] || return 0
+  local tmp; tmp="$(mktemp "${f}.XXXXXX")" || return 1
+  if jq --argjson p "$1" '.pending = $p' "$f" > "$tmp" 2>/dev/null; then chmod 600 "$tmp"; mv -f "$tmp" "$f"; else rm -f "$tmp"; fi
+}
+
+# The one place enrolment is finished: whatever path got the node approved
+# (token, USB, claim, resumed pending), the agent starts here and the
+# provisioning timer retires. Idempotent.
+control_finish_enrolled() {
+  control_set_pending false
+  run rm -f "$(control_claim_file)" "$(decommission_marker)"
+  run systemctl enable --now alwayswork-agent.service 2>/dev/null || true
+  run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
+}
 
 control_require() {
   require_cmd curl jq openssl
@@ -400,7 +419,7 @@ control_enroll() {
       --status)        status_only=1 ;;
       -h|--help)       info "usage: aw enroll --control URL [--token TOKEN] [--usb] [--status]"
                        info "  no --token: register a pending claim and wait for console approval (headless-friendly)"
-                       info "  --usb:      provision from a USB stick carrying alwayswork.toml"
+                       info "  --usb:      provision from a USB stick carrying alwayswork/provision.toml"
                        info "  --status:   show enrollment / claim / decommission state"
                        return 0 ;;
       *) die "unknown option: $1" ;;
@@ -424,9 +443,16 @@ control_enroll() {
   fi
   if (( usb )); then
     local toml
-    toml="$(control_usb_find_provision)" || die "no alwayswork.toml found on any USB device"
+    toml="$(control_usb_find_provision)" || die "no alwayswork/provision.toml (or alwayswork.toml) found on any USB device"
     control_usb_apply "$toml" || die "USB provisioning failed"
     control_usb_consume "$toml"
+    return 0
+  fi
+  # A pending enrolment being resumed by hand (`aw enroll` again after the
+  # console click, or before the timer gets to it) needs no new token.
+  if [[ -z "$token" ]] && control_enrolled && control_pending; then
+    info "resuming pending enrolment as $(control_device_id)"
+    control_wait_approval "$(control_device_id)" "$(control_poll_secret)"
     return 0
   fi
   control_require
@@ -437,7 +463,6 @@ control_enroll() {
     return 0
   fi
   control_enroll_with_token "$token"
-  rm -f "$(decommission_marker)"
 }
 
 # control_enroll_with_token <token> — the join-token enrollment path, shared by
@@ -483,7 +508,7 @@ control_enroll_with_token() {
     # umask 077: the poll secret must never be world-readable, even briefly.
     ( umask 077
       jq -n --arg id "$id" --arg secret "$secret" --arg url "$(control_url)" \
-        '{deviceId:$id, pollSecret:$secret, controlUrl:$url}' > "$(control_config_file)" )
+        '{deviceId:$id, pollSecret:$secret, controlUrl:$url, pending:true}' > "$(control_config_file)" )
     chmod 600 "$(control_config_file)"
   fi
   ok "announced as $id"
@@ -501,8 +526,16 @@ control_enroll_with_token() {
 
   control_wait_approval "$id" "$secret"
 }
+# control_wait_approval <id> <poll-secret>
+#
+# Long-polls the enrolment until the operator approves, then verifies and
+# applies the first delivery and starts the agent. AW_ENROLL_WAIT=<seconds>
+# bounds the wait (zero-touch installs use it so cloud-init and the USB
+# provision service never hang): on timeout the node stays "pending" on disk
+# and `aw provision` (the timer) resumes it after the console click.
 control_wait_approval() {
   local id="$1" secret="$2" resp state hdr bodyf cfgf
+  local max="${AW_ENROLL_WAIT:-0}" started; started="$(date +%s)"
   # The poll secret travels in a curl config file, never on the command line:
   # command lines are visible to every local user via /proc.
   cfgf="$(mktemp "${TMPDIR:-/tmp}/aw-cfg.XXXXXX")" || die "control: cannot stage approval poll"
@@ -512,8 +545,17 @@ control_wait_approval() {
   bodyf="$(mktemp "${TMPDIR:-/tmp}/aw-body.XXXXXX")" || die "control: cannot stage approval poll"
   # shellcheck disable=SC2064
   trap "rm -f '$cfgf' '$hdr' '$bodyf'" EXIT
-  info "waiting for approval in the console (Ctrl-C to stop)"
+  if (( max > 0 )); then info "waiting up to ${max}s for approval in the console"
+  else info "waiting for approval in the console (Ctrl-C to stop)"; fi
   while :; do
+    if (( max > 0 )) && (( $(date +%s) - started >= max )); then
+      rm -f "$cfgf" "$hdr" "$bodyf"; trap - EXIT
+      control_set_pending true
+      run systemctl enable --now alwayswork-provision.timer 2>/dev/null || true
+      ok "enrolled as $id, pending approval"
+      info "approve it in the console; this node completes enrolment on its own within a few minutes"
+      return 0
+    fi
     if ! curl -sS --connect-timeout 5 --max-time 30 -D "$hdr" -o "$bodyf" \
          --config "$cfgf" "$(control_url)/v1/enroll/$id" 2>/dev/null; then
       warn "control: approval poll failed (network); retrying"
@@ -536,12 +578,26 @@ control_wait_approval() {
         fi
         rm -f "$cfgf" "$hdr" "$bodyf"; trap - EXIT
         control_apply_delivery "$resp" || die "control: initial apply failed"
+        control_finish_enrolled
         return 0 ;;
       pending)  sleep 3 ;;
       *)        rm -f "$cfgf" "$hdr" "$bodyf"; trap - EXIT
+                control_set_pending false
                 die "enrollment was $state" ;;
     esac
   done
+}
+
+# Single non-blocking check of a pending token enrolment, for the provision
+# timer: approved -> verify, apply, start the agent; pending -> say so;
+# anything else -> loud warning, state kept for the operator to inspect.
+control_enroll_resume_once() {
+  local id secret
+  id="$(control_device_id)"; secret="$(control_poll_secret)"
+  [[ -n "$id" && -n "$secret" ]] || { warn "provision: pending enrolment has no id/secret on disk"; return 1; }
+  # One bounded poll: the server long-polls up to ~25s, which is fine for a
+  # oneshot unit but must never turn into an open-ended wait.
+  AW_ENROLL_WAIT=40 control_wait_approval "$id" "$secret"
 }
 
 # Apply a delivered { state, config, sealedSecrets } document to this box.
@@ -740,6 +796,12 @@ control_agent() {
   cfg_need
   control_require
   control_enrolled || die "this worker is not enrolled; run: aw enroll"
+  # Enrolled but not yet approved: nothing to heartbeat with. The provision
+  # timer completes enrolment; a clean exit keeps the unit from crash-looping.
+  if control_pending; then
+    warn "this worker is still pending approval; the provision timer completes enrolment"
+    return 0
+  fi
   if (( once )); then
     control_agent_tick
     return $?
@@ -934,9 +996,7 @@ control_claim_complete() {
   local api_token="$1"
   log "control: claim approved; completing enrollment"
   control_enroll_with_token "$api_token"
-  run rm -f "$(control_claim_file)" "$(decommission_marker)"
-  run systemctl enable --now alwayswork-agent.service 2>/dev/null || true
-  run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
+  control_finish_enrolled
   ok "enrolled via approved claim"
 }
 
@@ -958,23 +1018,38 @@ control_claim_flow() {
 }
 
 # --- USB provisioning ----------------------------------------------------------
-# A stick carrying alwayswork.toml provisions the node with zero typing:
+# A FAT stick carrying `alwayswork/provision.toml` (what the console's Add-node
+# flow downloads; the legacy top-level `alwayswork.toml` still works)
+# provisions the node with zero typing:
 #
-#   hostname    = "node-01"
-#   profile     = "worker"
-#   control_url = "https://control.example.com"
-#   join_token  = "aj_..."        # single-use, created in the web console
+#   control_url = "https://alwayswork.space"
+#   join_token  = "aj_..."        # from the console; single-use or a fleet token
+#   hostname    = "node-01"       # optional
+#   profile     = "worker"        # optional
+#
+# The provision timer looks on every boot; the udev rule installed by
+# control.join also fires it when a stick is plugged into a running box.
 
 usb_toml_get() {
   sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "$1" 2>/dev/null | head -n1
 }
 
-# Echo the path of a provisioning file, or return 1. Checks already-mounted
-# media first, then read-only mounts removable partitions that aren't mounted.
+# The candidate file names inside a mounted volume, in order of preference.
+USB_TOML_NAMES=(alwayswork/provision.toml alwayswork.toml)
+
+_usb_toml_in() {
+  local root="$1" n
+  for n in "${USB_TOML_NAMES[@]}"; do
+    [[ -f "$root/$n" ]] && { printf '%s\n' "$root/$n"; return 0; }
+  done
+  return 1
+}
+
 control_usb_find_provision() {
-  local d
-  for d in /run/media/*/*/alwayswork.toml /media/*/alwayswork.toml; do
-    [[ -f "$d" ]] && { printf '%s\n' "$d"; return 0; }
+  local d f
+  for d in /run/media/*/* /media/* /mnt/*; do
+    [[ -d "$d" ]] || continue
+    if f="$(_usb_toml_in "$d")"; then printf '%s\n' "$f"; return 0; fi
   done
   # The block-device scan mounts things: never do that in a dry run.
   [[ "$DRY_RUN" == "1" ]] && return 1
@@ -985,9 +1060,9 @@ control_usb_find_provision() {
     findmnt -n "$dev" >/dev/null 2>&1 && continue
     mnt="$(mktemp -d)" || continue
     if mount -o ro "$dev" "$mnt" 2>/dev/null; then
-      if [[ -f "$mnt/alwayswork.toml" ]]; then
+      if f="$(_usb_toml_in "$mnt")"; then
         tmp="$(mktemp)"
-        cp "$mnt/alwayswork.toml" "$tmp"
+        cp "$f" "$tmp"
         umount "$mnt" 2>/dev/null || true
         rmdir "$mnt" 2>/dev/null || true
         printf '%s\n' "$tmp"
@@ -999,7 +1074,6 @@ control_usb_find_provision() {
   done < <(lsblk -rno NAME,RM,TYPE 2>/dev/null | awk '$2==1 && $3=="part" {print "/dev/"$1}')
   return 1
 }
-
 control_usb_apply() {
   local toml="$1" token url host prof
   token="$(usb_toml_get "$toml" join_token)"
@@ -1017,10 +1091,10 @@ control_usb_apply() {
     cfg_set_str '.agent.user' "${SUDO_USER:-$(id -un)}"
   fi
   log "provision: enrolling from USB provisioning file"
-  control_enroll_with_token "$token"
+  # Bounded: a stick for a group that needs a human approval must not hold
+  # the provision service open; the timer resumes the pending enrolment.
+  AW_ENROLL_WAIT="${AW_ENROLL_WAIT:-90}" control_enroll_with_token "$token"
   run rm -f "$(decommission_marker)"
-  run systemctl enable --now alwayswork-agent.service 2>/dev/null || true
-  run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
   ok "provisioned from USB as $(control_device_id)"
 }
 
@@ -1353,7 +1427,12 @@ decommission_phase_report() {
 
 control_enroll_status() {
   section "node enrollment"
-  if control_enrolled; then
+  if control_enrolled && control_pending; then
+    kv "state" "pending approval"
+    kv "device id" "$(control_device_id)"
+    kv "control plane" "$(control_url)"
+    info "approve it in the web console; the provision timer (or 'aw enroll') completes enrolment"
+  elif control_enrolled; then
     kv "state" "active"
     kv "device id" "$(control_device_id)"
     kv "control plane" "$(control_url)"

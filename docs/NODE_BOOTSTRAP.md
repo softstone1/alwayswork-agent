@@ -78,11 +78,23 @@ auto-approve. A group carries `profile`, `capabilities`, `apps`, `secrets`,
 ### Stage 1 — Install (on the box, one command)
 
 ```bash
-curl -fsSL https://alwayswork.space/install.sh | sudo bash -s -- --token aw_…
+curl -fsSL https://alwayswork.space/install.sh | sudo bash -s -- --token aj_… [--hostname kitchen]
 ```
 
-`install.sh` bundles yq, installs the base packages, generates the age key,
-writes `/etc/alwayswork/age.key`, then calls `aw enroll`.
+The served script fetches the agent tarball from the control plane and runs
+the agent's own `install.sh --yes --control <url> --token <t> [--hostname
+<h>] [--profile <p>]` in zero-touch mode. That installer bundles yq, installs
+the base packages, sets the hostname, generates the age key, installs
+`control.join` (agent unit, provision timer, USB hotplug rule) and calls `aw
+enroll --token`. It never bootstraps or hardens: the lockdown is deferred
+until the tunnel is verified.
+
+Every carrier — cloud-init on a VPS, Ubuntu autoinstall on a bare mini PC,
+`alwayswork/provision.toml` on a USB stick — is that same command. With a
+token for a group that needs a human approval the installer waits
+`AW_ENROLL_WAIT` seconds (90) and then returns, leaving the node *pending*
+on disk; `aw provision` (the timer) polls once per run and completes
+enrolment after the console click.
 
 ### Stage 2 — Announce
 
@@ -217,8 +229,9 @@ Working today: install, enrollment, signed requests, sealed secrets, desired
 state, capability/app install, tunnel + cloudflared (provisioned by the
 control plane on approval), deferred lockdown, `agents.dsh` managed web UI
 with `--trusted-host`, `webUi` on heartbeat and the console's Open UI,
-`install.sh` served by the control plane, USB `provision.toml` on first
-boot, drain order → tombstone → wipe, ledger and **restore** on decommission,
+`install.sh` served by the control plane, `--token/--hostname/--profile/
+--control` zero-touch flags with a bounded, resumable approval wait, USB
+`alwayswork/provision.toml` at boot and on hotplug, drain order → tombstone → wipe, ledger and **restore** on decommission,
 typed **health** heartbeat, clock guard, SSH policy `tunnel`.
 
 Gaps, in build order:
@@ -231,8 +244,10 @@ Gaps, in build order:
    hand-edited `wrangler.jsonc`) can be retired. Spec §10, decision B.
 3. **Objectives** — a signed task in desired state, executed by the node's
    agent, reported in heartbeat. Spec §5.5.
-4. **Unattended installer image** with the agent baked in, for blank mini
-   PCs from a USB stick. Spec §4.4.
+4. **Custom installer image** with the agent baked in. Blank mini PCs are
+   covered today by the console's Ubuntu autoinstall carrier (stock Ubuntu
+   Server ISO + a `CIDATA` stick); an Arch/CachyOS archiso profile is the
+   remaining gap. Spec §4.4.
 5. **Control key rotation** without re-enrollment (`nextKey` signed by the
    pinned key). **Reinstall matching** so a rebuilt box replaces its old
    identity instead of appearing twice.

@@ -65,3 +65,13 @@ UNIT
 run systemctl daemon-reload
 run systemctl enable --now alwayswork-provision.timer
 ok "provisioning timer installed"
+
+# USB hotplug: plugging a stick into a running box fires the same oneshot, so
+# a mini PC provisions on the spot instead of at the next boot. The unit is
+# idempotent, so a stick without alwayswork/provision.toml costs one no-op.
+aw_write /etc/udev/rules.d/90-alwayswork-provision.rules <<'RULE'
+# Managed by alwayswork: run provisioning when a USB storage partition appears.
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", TAG+="systemd", ENV{SYSTEMD_WANTS}+="alwayswork-provision.service"
+RULE
+run udevadm control --reload-rules 2>/dev/null || true
+ok "USB provisioning rule installed"

@@ -1,9 +1,11 @@
 # shellcheck shell=bash
 # aw provision — first-boot / headless provisioning entry point.
 # Runs on every boot via alwayswork-provision.timer. Each run is cheap and
-# idempotent: an enrolled node exits immediately, a decommissioned node stays
-# put until explicitly rejoined, otherwise USB provisioning wins and a pending
-# claim is created or checked exactly once (the timer retries).
+# idempotent: an enrolled node exits immediately (a token-enrolled node still
+# awaiting approval polls once), a decommissioned node stays put until
+# explicitly rejoined, otherwise USB provisioning wins and a pending claim is
+# created or checked exactly once (the timer retries; a udev rule also fires
+# it when a USB stick is plugged in).
 
 cmd_provision() {
   local arg
@@ -24,12 +26,19 @@ cmd_provision() {
     run systemctl disable --now alwayswork-agent.service 2>/dev/null || true
     return 0
   fi
-  # 2. Already a node: nothing to do; the timer has served its purpose.
+  # 2. Enrolled with a token but still waiting for the console click: one
+  #    bounded poll; on approval the first delivery is applied and the agent
+  #    starts.
+  if control_enrolled && control_pending; then
+    control_enroll_resume_once || true
+    return 0
+  fi
+  # 3. Already a node: nothing to do; the timer has served its purpose.
   if control_enrolled; then
     run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
     return 0
   fi
-  # 3. USB provisioning wins — also the rejoin path after a decommission.
+  # 4. USB provisioning wins — also the rejoin path after a decommission.
   local toml
   if toml="$(control_usb_find_provision 2>/dev/null)"; then
     log "provision: USB provisioning file found"
@@ -39,11 +48,11 @@ cmd_provision() {
     fi
     die "provision: USB provisioning failed"
   fi
-  # 4. A decommissioned node stays unenrolled until the operator acts.
+  # 5. A decommissioned node stays unenrolled until the operator acts.
   if decommission_completed; then
     info "provision: node was decommissioned; plug a USB provisioning stick or run 'aw enroll' to rejoin"
     return 0
   fi
-  # 5. Pending claim: register if needed, check once, never block.
+  # 6. Pending claim: register if needed, check once, never block.
   control_claim_poll_once || true
 }
