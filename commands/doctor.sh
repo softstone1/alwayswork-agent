@@ -39,8 +39,15 @@ cmd_doctor() {
   esac
 
   # --- ssh ------------------------------------------------------------------
+  local ssh_policy; ssh_policy="$(cfg_get '.hardening.ssh' disabled)"
   if systemctl is-enabled --quiet sshd 2>/dev/null; then
-    _dwarn "sshd is enabled" "set hardening.ssh and re-run bootstrap, or bind SSH to Tailscale"
+    if [[ "$ssh_policy" == "tunnel" ]] && ssh_loopback_only; then
+      _dpass "sshd listens on loopback only (policy: tunnel)"
+    elif [[ "$ssh_policy" == "tunnel" ]]; then
+      _dwarn "sshd is enabled but not proven loopback-only (policy: tunnel)" "run: sudo aw apply, then check: ss -ltn sport = :22"
+    else
+      _dwarn "sshd is enabled" "set hardening.ssh and re-run bootstrap, or bind SSH to Tailscale"
+    fi
   else
     _dpass "sshd is disabled"
   fi

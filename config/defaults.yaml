@@ -8,7 +8,7 @@ timezone: UTC
 hardening:
   firewall: true
   default_deny: true
-  ssh: disabled            # disabled | tailscale | lan
+  ssh: disabled            # disabled | tailscale | lan | tunnel
   auto_snapshots: true
   container_hardening: true
   cve_scan: true

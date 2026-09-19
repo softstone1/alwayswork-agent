@@ -51,6 +51,8 @@ apply_ssh_policy() {
 # managed by alwayswork (hardening.ssh=lan)
 ListenAddress $lan_ip
 EOF
+      # A stale tunnel drop-in would keep loopback bound too; drop it.
+      run rm -f /etc/ssh/sshd_config.d/10-alwayswork-tunnel.conf
       # Close any stale rule first (the LAN subnet may have changed).
       fw_close_cap_subnet_ports "hardening.ssh" 2>/dev/null || true
       if [[ -n "$lan_cidr" ]] && cfg_bool '.hardening.firewall' true; then
@@ -63,8 +65,50 @@ EOF
       run systemctl try-restart sshd 2>/dev/null || run systemctl restart sshd
       ok "SSH bound to $lan_ip"
       ;;
+    tunnel)
+      # Enforced: sshd listens on loopback only, so the sole way in is the
+      # Cloudflare Access SSH ingress (<node>-ssh.<base> -> ssh://127.0.0.1:22)
+      # with short-lived certificates signed by the Access CA. The CA public
+      # key is delivered as access.sshCa and written by the control agent
+      # (control_apply_access); no authorized_keys are ever written. The
+      # firewall never opens 22: any earlier LAN opening is closed here.
+      local ca_file ca_line=""
+      ca_file="$(control_access_ca_file)"
+      if [[ -f "$ca_file" ]]; then
+        ca_line="TrustedUserCAKeys $ca_file"
+      else
+        warn "SSH policy 'tunnel': no access CA at $ca_file yet (delivered as access.sshCa); certificate logins start once it arrives"
+      fi
+      fw_close_cap_subnet_ports "hardening.ssh" 2>/dev/null || true
+      # A stale LAN drop-in would keep a LAN ListenAddress alongside loopback.
+      run rm -f /etc/ssh/sshd_config.d/10-alwayswork-lan.conf
+      log "Binding SSH to loopback (policy: tunnel; reachable via the Access SSH ingress only)"
+      aw_write /etc/ssh/sshd_config.d/10-alwayswork-tunnel.conf <<EOF
+# managed by alwayswork (hardening.ssh=tunnel)
+ListenAddress 127.0.0.1
+ListenAddress ::1
+PasswordAuthentication no
+${ca_line}
+EOF
+      run systemctl enable --now sshd
+      # SIGHUP makes sshd re-exec and rebind, so a reload picks up the new
+      # ListenAddress lines as well as the CA.
+      run systemctl reload-or-restart sshd
+      ok "SSH bound to loopback (policy: tunnel)"
+      ;;
     *)
       warn "unknown hardening.ssh policy: $policy"
       ;;
   esac
+}
+
+# ssh_loopback_only — 0 when every TCP listener on port 22 is bound to a
+# loopback address. Used by doctor to grade policy `tunnel`. Without `ss`
+# (or with no listener at all) the answer is "not proven": returns 1.
+ssh_loopback_only() {
+  have ss || return 1
+  local listeners
+  listeners="$(ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E '(^|:)22$' || true)"
+  [[ -n "$listeners" ]] || return 1
+  ! grep -Ev '^(127\.0\.0\.1|\[::1\]):22$' <<<"$listeners" >/dev/null
 }

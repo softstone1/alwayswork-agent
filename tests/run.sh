@@ -712,6 +712,7 @@ sec_set_stdin() {
 }
 cap_install()      { printf 'cap_install %s\n' "$1" >> "$OUT/calls"; return "${CAP_INSTALL_RC:-0}"; }
 cfg_set_str()      { printf 'cfg_set_str %s\n' "$1" >> "$OUT/calls"; }
+cfg_set_expr()     { printf 'cfg_set_expr %s\n' "$1" >> "$OUT/calls"; }
 cfg_get()          { printf '%s\n' "${CFG_GET:-disabled}"; }
 cfg_bool()         { [[ "${CFG_BOOL:-true}" == "true" ]]; }
 fw_ensure()        { printf 'fw_ensure\n' >> "$OUT/calls"; return "${FW_RC:-0}"; }
@@ -841,10 +842,47 @@ case "$SCENARIO" in
     printf '{"state":"approved","sequence":9,"config":{"configVersion":9}}' > "$D"
     ! control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
     ;;
+  lockdown-tunnel-policy)
+    printf '{"hostname":"n1.alwayswork.space","source":"control-plane","updated_at":1}' > "$AW_STATE/tunnel.json"
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9,"hardening":{"ssh":"tunnel"}}}' > "$D"
+    control_apply_lockdown "$(cat "$D")" >/dev/null 2>&1 || exit 1
+    grep -qx "apply_ssh_policy tunnel" "$OUT/calls" || exit 1
+    ;;
+  access-ca|access-ca-bad|access-ca-multiline|access-null|access-absent)
+    # The SSH access CA arrives as a top-level "access" object. Dry-run: the
+    # whole delivery runs, and the CA write must show up as a dry-run write
+    # (or not at all) without touching the host.
+    DRY_RUN=1; sec_backend() { printf 'none\n'; }
+    case "$SCENARIO" in
+      access-ca)           A='"access":{"sshCa":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeAccessCaKeyForTests test-ca\n"}' ;;
+      access-ca-bad)       A='"access":{"sshCa":"not a key at all"}' ;;
+      access-ca-multiline) A='"access":{"sshCa":"ssh-ed25519 AAAA one\nssh-ed25519 AAAA two"}' ;;
+      access-null)         A='"access":null' ;;
+      access-absent)       A='"ignored":true' ;;
+    esac
+    printf '{"state":"approved","sequence":9,"config":{"configVersion":9},%s}' "$A" > "$D"
+    control_apply_delivery "$(cat "$D")" > "$OUT/apply.log" 2>&1 || exit 1
+    case "$SCENARIO" in
+      access-ca)
+        grep -q "write /etc/ssh/alwayswork_access_ca.pub" "$OUT/apply.log" || exit 1
+        grep -q "chmod 0644 /etc/ssh/alwayswork_access_ca.pub" "$OUT/apply.log" || exit 1 ;;
+      access-ca-bad)
+        grep -q "not an OpenSSH public key" "$OUT/apply.log" || exit 1
+        ! grep -q "write /etc/ssh/alwayswork_access_ca.pub" "$OUT/apply.log" || exit 1 ;;
+      access-ca-multiline)
+        grep -q "single key line" "$OUT/apply.log" || exit 1
+        ! grep -q "write /etc/ssh/alwayswork_access_ca.pub" "$OUT/apply.log" || exit 1 ;;
+      access-null|access-absent)
+        ! grep -q "alwayswork_access_ca.pub" "$OUT/apply.log" || exit 1 ;;
+    esac
+    # The rest of the delivery still applied and was recorded.
+    grep -qx "cfg_set_expr .control.appliedVersion" "$OUT/calls" || exit 1
+    [[ ! -e /etc/ssh/alwayswork_access_ca.pub || "$(stat -c %Y /etc/ssh/alwayswork_access_ca.pub)" -lt "$START" ]] || exit 1
+    ;;
   *) printf 'unknown scenario: %s\n' "$SCENARIO" >&2; exit 2 ;;
 esac
 EOS
-run_tunnel() { rm -rf "$TMP/tout" "$TMP/tetc" "$TMP/tstate"; bash "$TMP/tunnel-apply.sh" "$ROOT" "$TMP/tout" "$TMP/tetc" "$TMP/tstate" "$1" > "$TMP/tunnel.out" 2>&1; }
+run_tunnel() { rm -rf "$TMP/tout" "$TMP/tetc" "$TMP/tstate"; START="$(date +%s)" bash "$TMP/tunnel-apply.sh" "$ROOT" "$TMP/tout" "$TMP/tetc" "$TMP/tstate" "$1" > "$TMP/tunnel.out" 2>&1; }
 check "tunnel token stored 0600 on first delivery" 'run_tunnel tunnel-first'
 check "tunnel token rotates on a new delivery"    'run_tunnel tunnel-rotation'
 check "same token still reconciles the service"   'run_tunnel tunnel-same'
@@ -859,6 +897,46 @@ check "lockdown skips non-tunnel nodes"           'UNIT_RC=1 run_tunnel lockdown
 check "lockdown honors the delivered ssh policy"  'SYS_ACTIVE_RC=0 run_tunnel lockdown-delivered-policy'
 check "lockdown ignores an unknown ssh policy"    'SYS_ACTIVE_RC=0 run_tunnel lockdown-unknown-policy'
 check "lockdown failure stays unacked (retry)"    'SYS_ACTIVE_RC=0 SSH_RC=1 run_tunnel lockdown-ssh-fails'
+check "lockdown accepts the tunnel ssh policy"    'SYS_ACTIVE_RC=0 run_tunnel lockdown-tunnel-policy'
+
+echo "== ssh access ca from desired-state =="
+check "delivery writes access.sshCa (dry-run)"     'run_tunnel access-ca'
+check "delivery refuses a malformed ssh ca"        'run_tunnel access-ca-bad'
+check "delivery refuses a multi-line ssh ca"       'run_tunnel access-ca-multiline'
+check "explicit null access leaves the ca alone"   'run_tunnel access-null'
+check "absent access leaves the ca alone"          'run_tunnel access-absent'
+
+echo "== ssh policy tunnel =="
+# Dry-run the policy with the service manager and firewall openers stubbed:
+# the loopback drop-in must be written and port 22 must never be opened.
+cat > "$TMP/ssh-tunnel.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"
+export AW_ROOT="$ROOT" AW_ETC="$2/etc" AW_STATE="$2/state" AW_CONFIG="$2/etc/worker.yaml" AW_TEST=1 DRY_RUN=1
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/config.sh"
+source "$ROOT/lib/firewall.sh"
+source "$ROOT/lib/hardening.sh"
+source "$ROOT/lib/capability.sh"
+source "$ROOT/lib/control.sh"
+systemctl()           { printf 'systemctl %s\n' "$*" >&2; }
+fw_allow_port()       { printf 'FIREWALL-OPEN %s\n' "$*" >&2; }
+fw_allow_subnet_port(){ printf 'FIREWALL-OPEN %s\n' "$*" >&2; }
+fw_allow_iface()      { printf 'FIREWALL-OPEN %s\n' "$*" >&2; }
+cfg_get()             { printf 'tunnel\n'; }
+cfg_bool()            { return 0; }
+apply_ssh_policy tunnel
+EOS
+run_ssh_tunnel() { bash "$TMP/ssh-tunnel.sh" "$ROOT" "$TMP/sshtun" > "$TMP/sshtun.out" 2>&1; }
+check "tunnel policy exits 0"                    'run_ssh_tunnel'
+check "tunnel policy writes the loopback drop-in" 'grep -q "write /etc/ssh/sshd_config.d/10-alwayswork-tunnel.conf" "$TMP/sshtun.out"'
+check "tunnel policy never opens the firewall"   '! grep -q "FIREWALL-OPEN" "$TMP/sshtun.out" && ! grep -q "ufw allow" "$TMP/sshtun.out"'
+check "tunnel policy enables sshd"               'grep -q "systemctl enable --now sshd" "$TMP/sshtun.out"'
+check "tunnel policy reloads sshd"               'grep -q "systemctl reload-or-restart sshd" "$TMP/sshtun.out"'
+check "tunnel policy drops the lan drop-in"      'grep -q "rm -f /etc/ssh/sshd_config.d/10-alwayswork-lan.conf" "$TMP/sshtun.out"'
+check "tunnel policy documented"                 'grep -q "| \`tunnel\` |" "$ROOT/docs/SECURITY.md" && grep -q "lan | tunnel" "$ROOT/config/defaults.yaml"'
+check "doctor grades tunnel via loopback check"  'grep -q "ssh_loopback_only" "$ROOT/commands/doctor.sh"'
+
 
 echo "== zero-touch install =="
 check "auto-enroll env is documented"  'grep -q "ALWAYSWORK_AUTO_ENROLL" "$ROOT/install.sh"'
