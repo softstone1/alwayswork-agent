@@ -20,7 +20,13 @@ cmd_apply() {
   if (( "${#caps[@]}" > 0 )); then
     mapfile -t ordered < <(cap_resolve "${caps[@]}")
     local c
-    for c in "${ordered[@]}"; do cap_install "$c"; done
+    # Dependencies the desired state did not name explicitly (agents.dsh ->
+    # runtime.podman) are installed and persisted too, the way `aw enable`
+    # does: desired state means "this and whatever it needs".
+    for c in "${ordered[@]}"; do
+      cap_install "$c"
+      cap_is_enabled "$c" || cfg_list_add '.capabilities.enabled' "$c"
+    done
   else
     info "no capabilities enabled"
   fi

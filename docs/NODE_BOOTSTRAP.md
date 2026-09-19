@@ -223,7 +223,7 @@ and why the node's UI cookie is bound to `127.0.0.1:<port>`.
 ## 10. Current state vs. gaps
 
 The system-wide status table lives in the control repo,
-`docs/SYSTEM_SPEC.md` §12. Node-side summary:
+`docs/SYSTEM_SPEC.md` §15. Node-side summary:
 
 Working today: install, enrollment, signed requests, sealed secrets, desired
 state, capability/app install, tunnel + cloudflared (provisioned by the

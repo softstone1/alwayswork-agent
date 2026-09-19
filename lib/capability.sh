@@ -94,12 +94,16 @@ cap_run_hook() {
   )
 }
 
+# Capabilities installed earlier in this same run count as enabled: a dry run
+# never persists the config, and a real run installs deps first anyway.
+_AW_CAP_DONE=" "
 cap_preflight() {
   local id="$1" dep
   cap_exists "$id" || die "unknown capability: $id"
   while IFS= read -r dep; do
     [[ -n "$dep" ]] || continue
-    cap_is_enabled "$dep" || die "capability '$id' requires '$dep' (enable it first)"
+    cap_is_enabled "$dep" || [[ "$_AW_CAP_DONE" == *" $dep "* ]] \
+      || die "capability '$id' requires '$dep' (enable it first)"
   done < <(cap_requires "$id")
 }
 
@@ -114,6 +118,7 @@ cap_install() {
     return 1
   fi
   AW_LEDGER_BY="$by"
+  _AW_CAP_DONE="${_AW_CAP_DONE}${id} "
   ok "$id installed"
 }
 

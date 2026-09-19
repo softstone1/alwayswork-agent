@@ -3,6 +3,21 @@
 log "runtime.podman: installing podman"
 pkg_install podman podman-compose
 
+# userns=auto (the workload isolation contract, SYSTEM_SPEC §12) hands each
+# container a private uid/gid range taken from the `containers` entry in
+# /etc/subuid and /etc/subgid. Neither distro family ships that entry.
+podman_ensure_userns_ranges() {
+  local f
+  for f in /etc/subuid /etc/subgid; do
+    if [[ -f "$f" ]] && grep -q '^containers:' "$f"; then continue; fi
+    if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] append containers:2147483647:2147483648 to %s\n' "$f" >&2; continue; fi
+    if have ledger_file_before; then ledger_file_before "$f" || warn "ledger: could not record $f"; fi
+    printf 'containers:2147483647:2147483648\n' >> "$f"
+  done
+}
+podman_ensure_userns_ranges
+ok "user-namespace ranges for userns=auto present"
+
 if cfg_bool '.engine.rootless' true; then
   log "runtime.podman: enabling rootless socket for ${SUDO_USER:-root}"
   local_user="${SUDO_USER:-}"

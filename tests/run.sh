@@ -866,6 +866,55 @@ check "dry-run enable without dsh prints plan, changes nothing" \
   'rm -f "$TMP/dsh"; PATH="$(printf "%s" "$PATH" | tr ":" "\n" | grep -v "^$TMP$" | paste -sd: -)" run_aw --dry-run enable agents.dsh && has "would install node" && [[ ! -e "$AW_STATE/webui.json" ]]'
 fi
 
+echo "== agents.dsh container (SYSTEM_SPEC §12) =="
+# Render the workload unit into a scratch dir with the real lib helpers and a
+# scratch config; no podman, no systemd, nothing on the host is touched.
+cat > "$TMP/dsc-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"; shift 2
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml"
+export AW_SYSTEMD_DIR="$D/systemd" AW_OS_RELEASE="$D/../os/arch"
+export CAP_ID=agents.dsh CAP_DIR="$ROOT/capabilities/agents.dsh"
+mkdir -p "$AW_ETC" "$AW_STATE" "$AW_SYSTEMD_DIR"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"
+source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
+source "$ROOT/lib/capability.sh"
+source "$CAP_DIR/ensure.sh"; source "$CAP_DIR/container.sh"
+DRY_RUN=0
+[[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
+"$@"
+EOS
+dsc_probe() { bash "$TMP/dsc-probe.sh" "$ROOT" "$TMP/dsc" "$@"; }
+rm -rf "$TMP/dsc"
+if have yq; then
+  check "dsc: default image is the pinned GHCR tag" \
+    '[[ "$(dsc_probe dsc_image)" == "ghcr.io/softstone1/alwayswork-dsh:$(sed -n "s/^DSH_NPM_VERSION_DEFAULT=\"\([^\"]*\)\".*/\1/p" "$ROOT/capabilities/agents.dsh/ensure.sh" | head -1)" ]]'
+  check "dsc: image override wins, suspicious image refused" \
+    'yq -i ".capabilities.config.agents.dsh.image = \"ghcr.io/x/y@sha256:abc\"" "$TMP/dsc/etc/worker.yaml" && [[ "$(dsc_probe dsc_image)" == "ghcr.io/x/y@sha256:abc" ]] && yq -i ".capabilities.config.agents.dsh.image = \"evil;rm -rf /\"" "$TMP/dsc/etc/worker.yaml" && ! dsc_probe dsc_image >/dev/null 2>&1; yq -i "del(.capabilities.config.agents.dsh.image)" "$TMP/dsc/etc/worker.yaml"'
+  check "dsc: default mode is container, host is the escape hatch" \
+    '[[ "$(dsc_probe dsc_mode)" == "container" ]] && yq -i ".capabilities.config.agents.dsh.mode = \"host\"" "$TMP/dsc/etc/worker.yaml" && [[ "$(dsc_probe dsc_mode)" == "host" ]] && yq -i "del(.capabilities.config.agents.dsh.mode)" "$TMP/dsc/etc/worker.yaml"'
+  check "dsc: unit renders the isolation contract" \
+    'dsc_probe dsc_write_unit >/dev/null 2>&1 && u="$TMP/dsc/systemd/alwayswork-dsh.service" && grep -q -- "--userns=auto" "$u" && grep -q -- "--read-only" "$u" && grep -q -- "--cap-drop ALL" "$u" && grep -q -- "no-new-privileges" "$u" && grep -q -- "--pids-limit" "$u" && grep -q -- "--memory" "$u"'
+  check "dsc: unit publishes to loopback only and mounts the two volumes" \
+    'u="$TMP/dsc/systemd/alwayswork-dsh.service"; grep -q -- "--publish 127.0.0.1:3080:3080" "$u" && ! grep -q -- "--publish 0.0.0.0" "$u" && grep -q -- "--volume $TMP/dsc/state/workspaces/dsh:/workspace:U" "$u" && grep -q -- "--volume $TMP/dsc/state/dsh/home:/home/dsh:U" "$u" && grep -q -- "--env-file $TMP/dsc/etc/dsh.env" "$u"'
+  check "dsc: unit is a notify service that systemd restarts" \
+    'u="$TMP/dsc/systemd/alwayswork-dsh.service"; grep -q "^Type=notify" "$u" && grep -q -- "--sdnotify=conmon" "$u" && grep -q "^Restart=always" "$u" && grep -q "^ExecStop=.*podman stop" "$u"'
+  check "dsc: env file carries the trusted host and port, 0600" \
+    'dsc_probe dsc_render_env >/dev/null 2>&1 && f="$TMP/dsc/etc/dsh.env" && grep -q "^DSH_TRUSTED_HOST=$(hostname).alwayswork.space$" "$f" && grep -q "^DSH_PORT=3080$" "$f" && [[ "$(stat -c %a "$f")" == "600" ]]'
+  check "dsc: workspace falls back to a directory off btrfs" \
+    'dsc_probe dsc_ensure_workspace >/dev/null 2>&1 && [[ -d "$TMP/dsc/state/workspaces/dsh" && -d "$TMP/dsc/state/dsh/home" ]]'
+  check "dsc: --network none is honoured" \
+    'yq -i ".capabilities.config.agents.dsh.network = \"none\"" "$TMP/dsc/etc/worker.yaml" && dsc_probe dsc_write_unit >/dev/null 2>&1 && grep -q -- "--network none" "$TMP/dsc/systemd/alwayswork-dsh.service" && yq -i "del(.capabilities.config.agents.dsh.network)" "$TMP/dsc/etc/worker.yaml"'
+  check "dsc: dry-run enable agents.dsh pulls runtime.podman first" \
+    'run_aw --dry-run enable agents.dsh && has "runtime.podman" && has "agents.dsh" && [[ "$(grep -n "runtime.podman" "$TMP/out" | head -1 | cut -d: -f1)" -lt "$(grep -n "Installing capability: agents.dsh" "$TMP/out" | head -1 | cut -d: -f1)" ]]'
+fi
+check "dsc: manifest requires runtime.podman"     'grep -q "requires: \[core, runtime.podman\]" "$ROOT/capabilities/agents.dsh/manifest.yaml"'
+check "dsc: Containerfile verifies the tarball before npm" 'grep -q "openssl dgst -sha512" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "USER dsh" "$ROOT/capabilities/agents.dsh/Containerfile"'
+check "dsc: entrypoint binds loopback and forwards"   'grep -q -- "--host 127.0.0.1" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q "socat" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q -- "--expose-internals" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
+check "dsc: image workflow publishes the pinned tag"  'grep -q "alwayswork-dsh" "$ROOT/.github/workflows/image.yml" && grep -q "DSH_NPM_VERSION_DEFAULT" "$ROOT/.github/workflows/image.yml"'
+check "dsc: runtime.podman provides userns ranges"    'grep -q "containers:2147483647:2147483648" "$ROOT/capabilities/runtime.podman/install.sh"'
+check "apply persists resolved dependencies"          'grep -q "cfg_list_add .\.capabilities\.enabled. \"\$c\"" "$ROOT/commands/apply.sh"'
+
 echo "== secret store =="
 if have sops && have age && yq --version 2>/dev/null | grep -qi mikefarah; then
   cat > "$TMP/store.sh" <<'EOS'

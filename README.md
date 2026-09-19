@@ -61,6 +61,7 @@ install script and an uninstall script. Adding tooling is configuration, not a f
 | Capability | What it adds |
 |------------|--------------|
 | `runtime.docker` / `runtime.podman` | Container runtime with hardened defaults |
+| `agents.dsh` | The node's agent harness (DeepSeek Harness web UI) as a standard workload container: `userns=auto`, read-only rootfs, cgroup budget, loopback only — see `docs/WORKLOADS.md` |
 | `access.tunnel` | Cloudflare Tunnel, outbound-only public access |
 | `access.tailscale` | Private admin plane |
 | `agents.core` | Agent dispatcher + hardened worker pool |
@@ -241,7 +242,7 @@ managed node.
 | **Reversible** | Snapshots before updates; every capability can be cleanly removed. |
 | **Portable** | Bash + a handful of packages. x86_64 or aarch64, Arch- or Debian-family systems. |
 
-See `docs/DESIGN.md`, `docs/CAPABILITIES.md`, `docs/SECURITY.md`,
+See `docs/DESIGN.md`, `docs/CAPABILITIES.md`, `docs/WORKLOADS.md`, `docs/SECURITY.md`,
 `docs/ROLLOUT.md`, `docs/ENROLLMENT.md`, `docs/DECOMMISSION.md` and
 `docs/AGENT_BOOTSTRAP.md`. The system-wide design — node, control plane,
 edge, console — is the control repo's `docs/SYSTEM_SPEC.md`.

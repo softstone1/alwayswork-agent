@@ -1,0 +1,66 @@
+# alwayswork-dsh — the standard workload image for the DeepSeek Harness.
+#
+# Built in CI (.github/workflows/image.yml) and published to
+# ghcr.io/softstone1/alwayswork-dsh:<DSH_VERSION>; a node that cannot pull
+# builds this same file locally, so the image is identical either way.
+#
+# Contract (SYSTEM_SPEC §12.3/§12.4): an unprivileged `dsh` user, /workspace
+# and /home/dsh as volumes, the UI on 0.0.0.0:3080 inside the container
+# (published to loopback only by the node), configuration by environment:
+#   DSH_TRUSTED_HOST   the public hostname the tunnel publishes (required)
+#   DSH_PORT           listen port (default 3080)
+# Provider keys arrive through an env file the node renders from its sealed
+# secret store; nothing secret is ever baked in here.
+FROM docker.io/library/node:22-bookworm-slim
+
+ARG DSH_VERSION=0.1.5-rc.2
+# sha512 (base64) of the npm tarball for DSH_VERSION. Empty means "verify
+# against the integrity the registry advertises" (operator-chosen versions).
+ARG DSH_SHA512=""
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NPM_CONFIG_FUND=false
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git jq openssh-client ripgrep socat tini \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fetch the pinned release tarball and verify it BEFORE npm sees it — the
+# same rule the node-side installer follows (capabilities/agents.dsh/ensure.sh).
+RUN set -eu; \
+    url="https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-${DSH_VERSION}.tgz"; \
+    curl -fsSL "$url" -o /tmp/dsh.tgz; \
+    want="$DSH_SHA512"; \
+    if [ -z "$want" ]; then \
+      integrity="$(curl -fsSL 'https://registry.npmjs.org/@deepseek-ai%2fdsh' | jq -r --arg v "$DSH_VERSION" '.versions[$v].dist.integrity // empty')"; \
+      case "$integrity" in sha512-*) want="${integrity#sha512-}";; *) echo "no sha512 integrity advertised for $DSH_VERSION" >&2; exit 1;; esac; \
+    fi; \
+    got="$(openssl dgst -sha512 -binary /tmp/dsh.tgz | openssl base64 -A)"; \
+    [ "$got" = "$want" ] || { echo "dsh tarball integrity mismatch for $DSH_VERSION" >&2; exit 1; }; \
+    npm install -g --no-audit --no-fund /tmp/dsh.tgz; \
+    rm -f /tmp/dsh.tgz; \
+    dsh --version || true
+
+# Unprivileged runtime user. With userns=auto on the node this uid maps to
+# an otherwise unused host range; the :U volume flag chowns the mounts to it.
+RUN useradd --uid 1000 --user-group --create-home --shell /bin/bash dsh 2>/dev/null \
+ || (usermod -l dsh -d /home/dsh -m node && groupmod -n dsh node) \
+ && mkdir -p /workspace && chown dsh:dsh /workspace
+
+COPY entrypoint.sh /usr/local/bin/alwayswork-entrypoint
+RUN chmod 0755 /usr/local/bin/alwayswork-entrypoint
+
+LABEL org.opencontainers.image.title="alwayswork-dsh" \
+      org.opencontainers.image.description="AlwaysWork standard workload image: DeepSeek Harness web UI" \
+      org.opencontainers.image.source="https://github.com/softstone1/alwayswork-agent" \
+      dev.alwayswork.engine="dsh" \
+      dev.alwayswork.dsh_version="${DSH_VERSION}"
+
+USER dsh
+WORKDIR /workspace
+VOLUME ["/workspace", "/home/dsh"]
+ENV HOME=/home/dsh DSH_PORT=3080
+EXPOSE 3080
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/alwayswork-entrypoint"]

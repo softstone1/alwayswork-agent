@@ -1,0 +1,72 @@
+name: image
+
+# Builds and publishes the standard workload image (SYSTEM_SPEC §12.4):
+# ghcr.io/<owner>/alwayswork-dsh:<dsh version> (+ :latest on main). A node
+# pulls this tag; if it cannot, it builds the same Containerfile locally.
+on:
+  push:
+    branches: [main]
+    paths:
+      - capabilities/agents.dsh/Containerfile
+      - capabilities/agents.dsh/entrypoint.sh
+      - capabilities/agents.dsh/ensure.sh
+      - .github/workflows/image.yml
+  workflow_dispatch:
+    inputs:
+      dsh_version:
+        description: "@deepseek-ai/dsh version to bake (default: the pinned one)"
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  dsh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve version and pin
+        id: v
+        run: |
+          pinned="$(sed -n 's/^DSH_NPM_VERSION_DEFAULT="\([^"]*\)".*/\1/p' capabilities/agents.dsh/ensure.sh | head -1)"
+          pin_sha="$(sed -n 's/^DSH_NPM_SHA512_DEFAULT="\([^"]*\)".*/\1/p' capabilities/agents.dsh/ensure.sh | head -1)"
+          version="${{ github.event.inputs.dsh_version }}"
+          [ -n "$version" ] || version="$pinned"
+          sha=""; [ "$version" = "$pinned" ] && sha="$pin_sha"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha512=$sha" >> "$GITHUB_OUTPUT"
+          echo "repo=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/alwayswork-dsh" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build
+        run: |
+          podman build --pull=newer \
+            --build-arg "DSH_VERSION=${{ steps.v.outputs.version }}" \
+            --build-arg "DSH_SHA512=${{ steps.v.outputs.sha512 }}" \
+            -t "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}" \
+            -f capabilities/agents.dsh/Containerfile capabilities/agents.dsh
+
+      - name: Smoke test (UI answers on 3080)
+        run: |
+          podman run -d --rm --name smoke -e DSH_TRUSTED_HOST=smoke.test -p 127.0.0.1:3080:3080 \
+            "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}"
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: smoke.test' http://127.0.0.1:3080/ || true)"
+            [ "$code" != "000" ] && [ -n "$code" ] && break
+            sleep 2
+          done
+          podman logs smoke | tail -20
+          podman stop smoke
+          [ "$code" != "000" ] && [ -n "$code" ] || { echo "UI never answered"; exit 1; }
+
+      - name: Push
+        run: |
+          podman push "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}"
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            podman tag "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}" "${{ steps.v.outputs.repo }}:latest"
+            podman push "${{ steps.v.outputs.repo }}:latest"
+          fi

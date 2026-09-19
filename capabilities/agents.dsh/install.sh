@@ -1,84 +1,53 @@
 # alwayswork capability: agents.dsh
-# Installs a systemd unit that serves this node's DeepSeek Harness web UI on
-# loopback, trusted for the public hostname the tunnel publishes it under. The
-# host is written to the state file the control agent reports on heartbeat.
+# The node's agent web UI (DeepSeek Harness) as a standard workload
+# container (SYSTEM_SPEC §12): rootful Podman, userns=auto, cgroup budget,
+# read-only rootfs, published to loopback only, secrets via an env file.
+# `mode: host` keeps the legacy on-host install for nodes without podman.
 
 # shellcheck disable=SC1090
 source "${CAP_DIR}/ensure.sh"
+# shellcheck disable=SC1090
+source "${CAP_DIR}/container.sh"
 
-# Zero-touch: the preflight already ensured a binary, but install.sh must
-# also stand alone — find or install the harness the same way.
-dsh_bin="$(ds_ensure_harness)"
-
-# Same account rule as the preflight: explicit, recorded, then the harness owner.
-ds_user="$(cap_config user)"
-[[ -n "$ds_user" ]] || ds_user="$(cfg_get '.agent.user' '')"
-[[ -n "$ds_user" ]] || ds_user="$(stat -Lc %U "$dsh_bin" 2>/dev/null || true)"
-id "$ds_user" >/dev/null 2>&1 || die "no such user: $ds_user"
-ds_home="$(getent passwd "$ds_user" | cut -d: -f6)"
-
-port="$(cap_config port)"
-[[ -n "$port" ]] || port="$(cfg_get '.expose.webUi.port' 3080)"
-port="${port:-3080}"
-
-# The public name: explicit wins, otherwise <hostname>.<base domain>. The
-# control plane can pin it later via .expose.webUi.host.
-host="$(cap_config host)"
-[[ -n "$host" ]] || host="$(cfg_get '.expose.webUi.host' '')"
-if [[ -z "$host" ]]; then
-  base="$(cfg_get '.expose.webUi.baseDomain' 'alwayswork.space')"
-  host="$(hostname).$base"
+if [[ "$(dsc_mode)" == "host" ]]; then
+  # shellcheck disable=SC1090
+  source "${CAP_DIR}/host.sh"
+  dsh_install_host
+  # Hooks are sourced inside a subshell function, so `return` ends the hook.
+  return 0
 fi
 
-# The unit needs node on PATH; the harness CLI is a node script.
-dsh_dir="$(dirname "$dsh_bin")"
-node_dir=""
-for candidate in "$ds_home/.local/node/bin" /usr/local/bin /usr/bin; do
-  if [[ -x "$candidate/node" ]]; then node_dir="$candidate"; break; fi
-done
-svc_path="$dsh_dir:$ds_home/.local/bin:/usr/local/bin:/usr/bin"
-[[ -n "$node_dir" ]] && svc_path="$node_dir:$svc_path"
-
-log "agents.dsh: serving this node's UI on 127.0.0.1:$port for $ds_user"
-aw_write /etc/systemd/system/alwayswork-webui.service <<UNIT
-[Unit]
-Description=AlwaysWork node web UI (DeepSeek Harness)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$ds_user
-WorkingDirectory=$ds_home
-Environment=HOME=$ds_home
-Environment=PATH=$svc_path
-ExecStart=$dsh_bin web --host 127.0.0.1 --port $port --no-open --trusted-host $host
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-# A UI may already be running on this port - an operator's own session, or a
-# previous install. Adopt it: enable the unit so it comes up on boot, but never
-# start a second listener that would fight for the port.
-adopt=0
-if have curl && curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$port/"; then
-  adopt=1
-  warn "127.0.0.1:$port already answers; keeping the running UI and starting the unit on boot"
+if ! have podman; then
+  [[ "$DRY_RUN" == "1" ]] || die "agents.dsh: podman is required for container mode (enable runtime.podman, or set --mode host)"
 fi
+
+port="$(dsc_port)"
+host="$(dsc_host)"
+img="$(dsc_image)"
+
+log "agents.dsh: workload container $img -> 127.0.0.1:$port (trusted host $host)"
+dsc_ensure_workspace
+dsc_render_env
+dsc_ensure_image
+
+# Only restart the container when the unit actually changed: `aw apply` runs
+# this hook on every delivery and must not bounce a working session.
+unit="$DSH_UNIT_DIR/$DSH_UNIT"
+before=""; [[ -f "$unit" ]] && before="$(sha256sum "$unit" | cut -d' ' -f1)"
+dsc_write_unit
+after=""; [[ -f "$unit" && "$DRY_RUN" != "1" ]] && after="$(sha256sum "$unit" | cut -d' ' -f1)"
+
+dsc_retire_legacy_unit
 run systemctl daemon-reload
-run systemctl enable alwayswork-webui.service
-if (( adopt )); then
-  ok "node web ui adopted on 127.0.0.1:$port"
+run systemctl enable "$DSH_UNIT"
+if [[ "$DRY_RUN" == "1" ]]; then
+  info "agents.dsh: dry-run — would (re)start $DSH_UNIT"
+elif [[ "$before" != "$after" ]] || ! systemctl is-active --quiet "$DSH_UNIT"; then
+  run systemctl restart "$DSH_UNIT"
 else
-  run systemctl restart alwayswork-webui.service
+  info "agents.dsh: unit unchanged; container left running"
 fi
 
-# Reported on heartbeat so the console can link straight to it.
-aw_write "$AW_STATE/webui.json" <<JSON
-{"host":"$host","port":$port}
-JSON
-chmod 644 "$AW_STATE/webui.json" 2>/dev/null || true
-ok "node web ui: https://$host/ -> 127.0.0.1:$port"
+dsc_report_webui "$host" "$port"
+cfg_set_str '.agents.dsh.mode' container 2>/dev/null || true
+ok "node web ui (container): https://$host/ -> 127.0.0.1:$port"
