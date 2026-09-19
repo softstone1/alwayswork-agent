@@ -2,7 +2,7 @@
 # PostgreSQL as a workload container (SYSTEM_SPEC §12.7): pinned image,
 # userns=auto, cgroup budget, data on a btrfs subvolume, healthcheck systemd
 # restarts on, loopback publish; reported on heartbeat so the control plane
-# exposes pg-<node>.<base> through the tunnel for Hyperdrive.
+# exposes <node>-postgres.<base> through the tunnel for Hyperdrive.
 # shellcheck disable=SC1090
 source "${CAP_DIR}/postgres.sh"
 

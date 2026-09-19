@@ -120,7 +120,7 @@ pg_status() {
   local n; n="$(find "$(pg_root)/.snapshots" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)"
   kv "snapshots" "$n"
   kv "backups" "$(find "$(pg_backups)" -name '*.sql.gz' 2>/dev/null | wc -l)"
-  info "apps reach it through Hyperdrive at pg-$(hostname).<base> (see docs/SERVICES.md)"
+  info "apps reach it through Hyperdrive at $(hostname)-postgres.<base> (see docs/SERVICES.md)"
 }
 
 pg_backup() {

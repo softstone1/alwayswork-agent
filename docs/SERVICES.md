@@ -21,7 +21,7 @@ What it does:
 | Data | `/var/lib/alwayswork/services/postgres/data` — a btrfs subvolume where the host has btrfs |
 | First start | creates `POSTGRES_DB` and the app role (`user`) as its owner; both passwords generated into the sealed store (`POSTGRES_PASSWORD`, `POSTGRES_APP_PASSWORD`), never printed |
 | Health | `pg_isready` every 30 s; a failing check stops the container and systemd restarts it; reported on heartbeat |
-| Reach | published to `127.0.0.1:5432` only; reported to the control plane as `expose.services`, which adds `pg-<node>.<base>` → `tcp://127.0.0.1:5432` to the node's tunnel |
+| Reach | published to `127.0.0.1:5432` only; reported to the control plane as `expose.services`, which adds `<node>-postgres.<base>` → `tcp://127.0.0.1:5432` to the node's tunnel |
 
 Operations — the same audited path an agent uses through its tools:
 
@@ -42,7 +42,7 @@ the data, snapshots and dumps; `AW_PURGE=1` removes them too.
 ## Reaching it from an application on Cloudflare (Hyperdrive)
 
 1. The node is approved into a group with **public exposure**; the control
-   plane adds `pg-<node>.<base>` to its tunnel and DNS automatically once
+   plane adds `<node>-postgres.<base>` to its tunnel and DNS automatically once
    the node reports the service.
 2. In Zero Trust, add a **service-token policy** to the wildcard node
    application (the same `*.<base>` app that gates node UIs) and create a
@@ -51,7 +51,7 @@ the data, snapshots and dumps; `AW_PURGE=1` removes them too.
 
    ```bash
    npx wrangler hyperdrive create shop-db \
-     --host pg-kitchen.alwayswork.space --port 5432 --database shop --user shop --password '<POSTGRES_APP_PASSWORD>' \
+     --host kitchen-postgres.alwayswork.space --port 5432 --database shop --user shop --password '<POSTGRES_APP_PASSWORD>' \
      --access-client-id '<service token id>' --access-client-secret '<service token secret>'
    ```
 
@@ -61,7 +61,7 @@ the data, snapshots and dumps; `AW_PURGE=1` removes them too.
 Hyperdrive pools connections and caches queries at the edge; the tunnel is
 the only path in; Access is the only thing that opens it. A developer's
 laptop reaches the same hostname with
-`cloudflared access tcp --hostname pg-kitchen.alwayswork.space --url localhost:5432`.
+`cloudflared access tcp --hostname kitchen-postgres.alwayswork.space --url localhost:5432`.
 
 ## Reliability, honestly
 
