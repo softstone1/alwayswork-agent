@@ -85,7 +85,7 @@ wl_ensure_image() {
 #   WL_TMPFS       array of extra tmpfs mounts, e.g. (/run/postgresql)
 #   WL_HEALTH      healthcheck command inside the container (optional)
 #   WL_EXTRA       array of extra podman flags (e.g. --shm-size 256m)
-#   WL_NETWORK     "" (default bridge) | none
+#   WL_NETWORK     "" (the node's `alwayswork` network) | none | <name>
 #   WL_ARGS        array of arguments after the image (optional)
 # systemd quoting, not shell quoting: bare when safe, else double quotes with
 # backslash and double-quote escaped (systemd.syntax(7) "Quoting").
@@ -107,7 +107,11 @@ wl_write_unit() {
   local -a iso=(--userns=auto)
   if [[ "${WL_READ_ONLY:-0}" == "1" ]]; then iso+=(--read-only --tmpfs "/tmp:rw,nosuid,size=512m"); fi
   for v in "${WL_TMPFS[@]:-}"; do [[ -n "$v" ]] && iso+=(--tmpfs "$v"); done
-  [[ "${WL_NETWORK:-}" == "none" ]] && iso+=(--network none)
+  case "${WL_NETWORK:-}" in
+    none) iso+=(--network none) ;;
+    "")   iso+=(--network alwayswork) ;;
+    *)    iso+=(--network "$WL_NETWORK") ;;
+  esac
   if [[ -n "${WL_HEALTH:-}" ]]; then
     iso+=(--health-cmd "$WL_HEALTH" --health-interval 30s --health-retries 3 --health-start-period 60s)
     # A failing healthcheck stops the container; systemd then restarts it.

@@ -1,0 +1,6 @@
+id: tools.browser
+name: Agent browser
+description: Chromium on the node for the agent (CDP for the harness, noVNC for a human), a persistent profile, published through the tunnel.
+version: 1
+requires: [core, runtime.podman]
+profiles: [full]

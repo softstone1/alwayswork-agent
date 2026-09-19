@@ -113,10 +113,32 @@ control plane under `.capabilities.config.agents.dsh`):
 `aw disable agents.dsh` removes the unit and container and keeps the
 workspace, home and image; `AW_PURGE=1 aw disable agents.dsh` removes them.
 
+## `tools.browser`: the agent's browser (spec §12.5)
+
+```bash
+sudo aw enable tools.browser            # Chromium + noVNC, profile kept
+```
+
+The same contract: image `ghcr.io/softstone1/alwayswork-browser`, uid
+1000, `cap-drop ALL`, `userns=auto`, 2 GB budget (`memory_mb`), profile on
+`/var/lib/alwayswork/browser/profile` (a subvolume). Two doors:
+
+| | Where | Who |
+|---|---|---|
+| CDP (`:9222`) | `http://alwayswork-browser:9222` on the node's `alwayswork` podman network; the harness gets `BROWSER_CDP_URL` / `PLAYWRIGHT_CDP_URL` in its env | the agent (Playwright, Puppeteer, any CDP client) |
+| noVNC (`:6080`) | `127.0.0.1:6080/vnc.html` on the node; reported as the `browser` service, so `<node>-browser.<base>` through the tunnel behind Access | a human, to watch or take over |
+
+The container is the sandbox (`userns=auto`), so Chromium runs with
+`--no-sandbox`; nothing on the node is exposed but the two loopback ports.
+Logins persist in the profile; a `start_url` can be pinned in config.
+
+All workloads join the node-local `alwayswork` podman network (created by
+`runtime.podman`): containers resolve each other by name, nothing is
+published to the host except what each workload puts on `127.0.0.1`.
+`network: none` isolates a workload entirely.
+
 ## What is next (spec §12)
 
-- A browser container (`tools.browser`: Chromium + noVNC) next to the
-  harness, on the same contract.
 - Workload specs from the control plane (`kind`, `engine`, `resources`,
   `network: egress-proxy`, `credentials: ai-gateway`) and sibling images for
   other engines.

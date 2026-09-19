@@ -9,7 +9,10 @@ on:
     paths:
       - capabilities/agents.dsh/Containerfile
       - capabilities/agents.dsh/entrypoint.sh
+      - capabilities/agents.dsh/gate.mjs
       - capabilities/agents.dsh/ensure.sh
+      - capabilities/tools.browser/Containerfile
+      - capabilities/tools.browser/entrypoint.sh
       - .github/workflows/image.yml
   workflow_dispatch:
     inputs:
@@ -70,3 +73,31 @@ jobs:
             podman tag "${{ steps.v.outputs.repo }}:${{ steps.v.outputs.version }}" "${{ steps.v.outputs.repo }}:latest"
             podman push "${{ steps.v.outputs.repo }}:latest"
           fi
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/alwayswork-browser"
+          echo "repo=$repo" >> "$GITHUB_ENV"
+          podman build --pull=newer -t "$repo:latest" -t "$repo:$(date -u +%Y%m%d)" \
+            -f capabilities/tools.browser/Containerfile capabilities/tools.browser
+      - name: Smoke test (noVNC + CDP answer)
+        run: |
+          podman run -d --rm --name smoke --shm-size 1g -p 127.0.0.1:6080:6080 "$repo:latest"
+          for i in $(seq 1 45); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6080/vnc.html || true)"
+            [ "$code" = "200" ] && break; sleep 2
+          done
+          podman exec smoke curl -sf http://127.0.0.1:9222/json/version >/dev/null
+          podman stop smoke
+          [ "$code" = "200" ] || { echo "noVNC never answered"; exit 1; }
+      - name: Push
+        if: github.ref == 'refs/heads/main'
+        run: |
+          podman push "$repo:latest"
+          podman push "$repo:$(date -u +%Y%m%d)"

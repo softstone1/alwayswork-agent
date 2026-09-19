@@ -18,6 +18,16 @@ podman_ensure_userns_ranges() {
 podman_ensure_userns_ranges
 ok "user-namespace ranges for userns=auto present"
 
+# One node-local network for workloads: containers resolve each other by
+# name (the harness reaches the browser at alwayswork-browser:9222) while
+# nothing is published to the host except what each workload puts on
+# 127.0.0.1. Idempotent.
+if [[ "$DRY_RUN" == "1" ]]; then
+  info "runtime.podman: dry-run — would create the 'alwayswork' network"
+elif ! podman network exists alwayswork 2>/dev/null; then
+  run podman network create alwayswork >/dev/null && ok "network 'alwayswork' created"
+fi
+
 if cfg_bool '.engine.rootless' true; then
   log "runtime.podman: enabling rootless socket for ${SUDO_USER:-root}"
   local_user="${SUDO_USER:-}"

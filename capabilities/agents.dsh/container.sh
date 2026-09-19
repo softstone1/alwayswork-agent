@@ -99,6 +99,10 @@ dsc_render_env() {
     # without them the gate fails closed and says so.
     [[ -n "$team" ]] && printf 'AW_ACCESS_TEAM_DOMAIN=%s\n' "$team"
     [[ -n "$aud" ]]  && printf 'AW_ACCESS_AUD=%s\n' "$aud"
+    # The agent's browser (tools.browser), by container name on the node network.
+    if cap_is_enabled tools.browser 2>/dev/null; then
+      printf 'BROWSER_CDP_URL=http://alwayswork-browser:9222\nPLAYWRIGHT_CDP_URL=http://alwayswork-browser:9222\n'
+    fi
     # Control-plane tenant sessions verify against the pinned control key.
     [[ -f "$(dsc_control_pubkey)" ]] && printf 'AW_CONTROL_PUBKEY_FILE=/run/alwayswork/control-pubkey.json\n'
     if [[ "$(sec_backend)" == "sops" ]] && sec_exists; then

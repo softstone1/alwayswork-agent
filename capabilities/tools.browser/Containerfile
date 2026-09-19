@@ -1,0 +1,37 @@
+# alwayswork-browser — the agent's browser as a workload (SYSTEM_SPEC §12.5).
+#
+# Chromium on a virtual display (Xvfb), exposed two ways inside the
+# container's network namespace:
+#   :9222  Chrome DevTools Protocol — for the harness (Playwright/Puppeteer
+#          over `BROWSER_CDP_URL`), reachable by container name on the
+#          node's podman network
+#   :6080  noVNC — a human watches or takes over; published to the node's
+#          loopback and reported as the `browser` service, so it appears at
+#          <node>-browser.<base> behind Cloudflare Access
+# The profile (cookies, logins) lives on /profile, a volume: sessions persist
+# across restarts and upgrades. The container is the sandbox (userns=auto on
+# the node), so Chromium runs with --no-sandbox as an unprivileged user.
+FROM docker.io/library/debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      chromium chromium-sandbox fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
+      xvfb x11vnc novnc websockify openbox tini ca-certificates curl procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --uid 1000 --user-group --create-home --shell /bin/bash browser \
+ && mkdir -p /profile && chown browser:browser /profile
+
+COPY entrypoint.sh /usr/local/bin/alwayswork-browser
+RUN chmod 0755 /usr/local/bin/alwayswork-browser
+
+LABEL org.opencontainers.image.title="alwayswork-browser" \
+      org.opencontainers.image.description="AlwaysWork workload: Chromium + noVNC for agents" \
+      org.opencontainers.image.source="https://github.com/softstone1/alwayswork-agent" \
+      dev.alwayswork.workload="browser"
+
+USER browser
+ENV HOME=/home/browser DISPLAY=:99 SCREEN=1440x900x24 CDP_PORT=9222 NOVNC_PORT=6080
+VOLUME ["/profile"]
+EXPOSE 6080 9222
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/alwayswork-browser"]

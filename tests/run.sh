@@ -998,6 +998,40 @@ if have yq; then
     'run_aw --dry-run enable core && has "00-alwayswork-guard.hook" && has "alwayswork-boot-check.service"'
 fi
 
+echo "== tools.browser on the workload contract (SYSTEM_SPEC §12.5) =="
+cat > "$TMP/br-probe.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"; shift 2
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml"
+export AW_SYSTEMD_DIR="$D/systemd" AW_OS_RELEASE="$D/../os/arch" AW_TEST=1
+export CAP_ID=tools.browser CAP_DIR="$ROOT/capabilities/tools.browser"
+mkdir -p "$AW_ETC" "$AW_STATE" "$AW_SYSTEMD_DIR"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"
+source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
+source "$ROOT/lib/capability.sh"; source "$ROOT/lib/workload.sh"
+source "$CAP_DIR/browser.sh"
+DRY_RUN=0
+[[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
+"$@"
+EOS
+br_probe() { bash "$TMP/br-probe.sh" "$ROOT" "$TMP/br" "$@"; }
+rm -rf "$TMP/br"
+if have yq; then
+  check "browser: unit publishes noVNC to loopback, joins the node network, keeps the profile" \
+    'br_probe br_write_unit >/dev/null 2>&1 && u="$TMP/br/systemd/alwayswork-browser.service" && grep -q -- "--publish 127.0.0.1:6080:6080" "$u" && grep -q -- "--network alwayswork" "$u" && grep -q -- "--volume $TMP/br/state/browser/profile:/profile:U" "$u" && grep -q -- "--shm-size 1g" "$u" && grep -q -- "--userns=auto" "$u" && grep -q -- "--health-cmd" "$u"'
+  check "browser: reported as an http service with the noVNC path" \
+    'br_probe wl_report_service browser "Agent browser" http 6080 "/vnc.html?autoconnect=1&resize=scale" >/dev/null 2>&1 && [[ "$(br_probe wl_services_json | jq -r ".[0].protocol + \" \" + .[0].path")" == "http /vnc.html?autoconnect=1&resize=scale" ]]'
+  check "browser: start_url must be a URL"  'yq -i ".capabilities.config.tools.browser.start_url = \"javascript:alert(1)\"" "$TMP/br/etc/worker.yaml" && br_probe br_render_env >/dev/null 2>&1 && ! grep -q BROWSER_START_URL "$TMP/br/etc/browser.env" && yq -i "del(.capabilities.config.tools.browser)" "$TMP/br/etc/worker.yaml"'
+  check "browser: dry-run enable renders the unit" 'run_aw --dry-run enable tools.browser && has "alwayswork-browser.service" && has "agent browser ready"'
+  check "harness env gets BROWSER_CDP_URL when the browser is enabled" \
+    'yq -i ".capabilities.enabled += [\"tools.browser\"]" "$TMP/dsc/etc/worker.yaml" && dsc_probe dsc_render_env >/dev/null 2>&1 && grep -q "^BROWSER_CDP_URL=http://alwayswork-browser:9222$" "$TMP/dsc/etc/dsh.env"'
+  check "workloads join the alwayswork network by default; none isolates" \
+    'grep -q -- "--network alwayswork" "$TMP/dsc/systemd/alwayswork-dsh.service" || dsc_probe dsc_write_unit >/dev/null 2>&1 && grep -q -- "--network alwayswork" "$TMP/dsc/systemd/alwayswork-dsh.service"'
+fi
+check "browser image: chromium with CDP, noVNC, unprivileged user" 'grep -q "remote-debugging-port" "$ROOT/capabilities/tools.browser/entrypoint.sh" && grep -q "websockify" "$ROOT/capabilities/tools.browser/entrypoint.sh" && grep -q "^USER browser" "$ROOT/capabilities/tools.browser/Containerfile"'
+check "runtime.podman creates the node network" 'grep -q "podman network create alwayswork" "$ROOT/capabilities/runtime.podman/install.sh"'
+check "image workflow builds the browser too"   'grep -q "alwayswork-browser" "$ROOT/.github/workflows/image.yml"'
+
 echo "== node UI gate (SYSTEM_SPEC §10 B) =="
 check "gate ships in the image"       'grep -q "COPY gate.mjs /usr/local/bin/alwayswork-gate" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
 if have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)" 2>/dev/null; then
