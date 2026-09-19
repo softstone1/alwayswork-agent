@@ -299,6 +299,8 @@ printf 'join_token = "aj_legacy"\n' > "$TMP/vol2/alwayswork.toml"
 check "usb finder prefers alwayswork/provision.toml" '[[ "$(bash "$TMP/usb-find.sh" "$ROOT" "$TMP/vol1" "$TMP/usb")" == "$TMP/vol1/alwayswork/provision.toml" ]]'
 check "usb finder still accepts alwayswork.toml"     '[[ "$(bash "$TMP/usb-find.sh" "$ROOT" "$TMP/vol2" "$TMP/usb")" == "$TMP/vol2/alwayswork.toml" ]]'
 check "usb finder ignores an empty volume"          '! bash "$TMP/usb-find.sh" "$ROOT" "$TMP/usb" "$TMP/usb" >/dev/null'
+check "unattended image: installer and build script are sound" 'bash -n "$ROOT/image/arch/installer.sh" && bash -n "$ROOT/image/arch/build.sh" && grep -q "pacstrap -K /mnt base linux-lts" "$ROOT/image/arch/installer.sh" && grep -q "alwayswork-firstboot.service" "$ROOT/image/arch/installer.sh" && grep -q "die \"provision.toml must name the disk" "$ROOT/image/arch/installer.sh"'
+check "unattended image: planted provision file is found by aw provision" 'grep -q "AW_STATE/provision.toml" "$ROOT/lib/control.sh"'
 check "control.join installs the USB hotplug rule"  'grep -q "90-alwayswork-provision.rules" "$ROOT/capabilities/control.join/install.sh" && grep -q "SYSTEMD_WANTS.*alwayswork-provision.service" "$ROOT/capabilities/control.join/install.sh"'
 check "control.join uninstall removes timer + rule"  'grep -q "alwayswork-provision.timer" "$ROOT/capabilities/control.join/uninstall.sh" && grep -q "90-alwayswork-provision.rules" "$ROOT/capabilities/control.join/uninstall.sh"'
 

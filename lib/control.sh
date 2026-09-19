@@ -1116,6 +1116,8 @@ _usb_toml_in() {
 
 control_usb_find_provision() {
   local d f
+  # A file the unattended image planted for first boot counts as a stick.
+  if [[ -f "$AW_STATE/provision.toml" ]]; then printf '%s\n' "$AW_STATE/provision.toml"; return 0; fi
   for d in /run/media/*/* /media/* /mnt/*; do
     [[ -d "$d" ]] || continue
     if f="$(_usb_toml_in "$d")"; then printf '%s\n' "$f"; return 0; fi

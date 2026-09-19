@@ -1,0 +1,42 @@
+name: image-arch
+
+# Builds the AlwaysWork unattended installer ISO for Arch-family mini PCs
+# (SYSTEM_SPEC §4.4) and attaches it to the run as an artifact (and to a
+# release when a tag is pushed). No provision file is embedded: the ISO looks
+# for alwayswork/provision.toml on a FAT stick at boot. Build a per-fleet ISO
+# with an embedded file locally: sudo image/arch/build.sh --provision fleet.toml
+on:
+  push:
+    branches: [main]
+    paths: ["image/arch/**", ".github/workflows/image-arch.yml"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Prepare Arch
+        run: |
+          pacman -Syu --noconfirm --needed archiso git base-devel >/dev/null
+      - uses: actions/checkout@v5
+      - name: Build ISO
+        run: |
+          git config --global --add safe.directory "$PWD"
+          image/arch/build.sh --out out --ref HEAD
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alwayswork-arch-iso
+          path: out/*.iso
+          retention-days: 14
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pacman -S --noconfirm --needed github-cli >/dev/null
+          gh release upload "${GITHUB_REF_NAME}" out/*.iso --clobber
