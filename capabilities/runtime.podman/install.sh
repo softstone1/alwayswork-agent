@@ -39,6 +39,24 @@ elif ! podman network exists alwayswork 2>/dev/null; then
   run podman network create alwayswork >/dev/null && ok "network 'alwayswork' created"
 fi
 
+# A default-deny host firewall also denies the containers' DNS: aardvark-dns
+# listens on the bridge gateway, so every lookup from a workload is an
+# inbound packet on that interface (`[UFW BLOCK] IN=podmanN … DPT=53`). Open
+# 53/udp+tcp from the workload subnet only — nothing else on the host is
+# reachable from a container.
+podman_allow_workload_dns() {
+  local subnet
+  [[ "$DRY_RUN" == "1" ]] && { info "runtime.podman: dry-run — would allow DNS from the workload subnet"; return 0; }
+  subnet="$(podman network inspect alwayswork --format '{{(index .Subnets 0).Subnet}}' 2>/dev/null)" || true
+  [[ "$subnet" =~ ^[0-9./]+$ ]] || { warn "runtime.podman: could not read the workload subnet; containers may not resolve DNS through a strict firewall"; return 0; }
+  if declare -F fw_active >/dev/null && fw_active; then
+    fw_allow_subnet_port runtime.podman "$subnet" 53 udp >/dev/null 2>&1 || true
+    fw_allow_subnet_port runtime.podman "$subnet" 53 tcp >/dev/null 2>&1 || true
+    ok "workload DNS allowed from $subnet"
+  fi
+}
+podman_allow_workload_dns
+
 if cfg_bool '.engine.rootless' true; then
   log "runtime.podman: enabling rootless socket for ${SUDO_USER:-root}"
   local_user="${SUDO_USER:-}"

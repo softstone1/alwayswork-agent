@@ -16,6 +16,9 @@ else
 JSON
 fi
 
+# Remember whether docker was the operator's before we touched it, so
+# disabling the capability later never stops a daemon we did not start.
+if have ledger_service_before; then ledger_service_before docker.service || true; fi
 run systemctl enable --now docker
 cfg_set_str '.engine.runtime' docker
 ok "docker installed and enabled"

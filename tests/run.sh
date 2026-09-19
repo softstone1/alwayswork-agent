@@ -924,8 +924,12 @@ check "dsc: Containerfile verifies the tarball before npm" 'grep -q "openssl dgs
 check "dsc: entrypoint binds loopback, gate in front"  'grep -q -- "--host 127.0.0.1" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q -- "--expose-internals" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
 check "dsc: image workflow publishes the pinned tag"  'grep -q "alwayswork-dsh" "$ROOT/.github/workflows/image.yml" && grep -q "DSH_NPM_VERSION_DEFAULT" "$ROOT/.github/workflows/image.yml"'
 check "dsc: runtime.podman provides userns ranges"    'grep -q "containers:2147483647:2147483648" "$ROOT/capabilities/runtime.podman/install.sh"'
+check "runtime.docker: disabling never stops a docker the operator already ran (ledger says it was active)" \
+  'grep -q "ledger_service_before docker.service" "$ROOT/capabilities/runtime.docker/install.sh" && d="$TMP/dockled" && rm -rf "$d" && mkdir -p "$d" && printf "{\"kind\":\"service\",\"name\":\"docker.service\",\"priorEnabled\":true,\"priorActive\":true}\n" > "$d/ledger.jsonl" && out="$(AW_STATE="$d" bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/ledger.sh\"; ledger_file() { echo \"$d/ledger.jsonl\"; }; run() { echo \"RUN: \$*\"; }; DRY_RUN=0; source \"$ROOT/capabilities/runtime.docker/uninstall.sh\"" 2>&1)" && grep -q "leaving the daemon" <<<"$out" && ! grep -q "RUN: systemctl disable" <<<"$out" && printf "{\"kind\":\"service\",\"name\":\"docker.service\",\"priorEnabled\":false,\"priorActive\":false}\n" > "$d/ledger.jsonl" && out="$(AW_STATE="$d" bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/ledger.sh\"; ledger_file() { echo \"$d/ledger.jsonl\"; }; run() { echo \"RUN: \$*\"; }; DRY_RUN=0; source \"$ROOT/capabilities/runtime.docker/uninstall.sh\"" 2>&1)" && grep -q "RUN: systemctl disable --now docker" <<<"$out"'
+check "dsc: runtime.podman opens DNS (53) from the workload subnet only, through the tracked firewall helpers" \
+  'grep -q "fw_allow_subnet_port runtime.podman \"\$subnet\" 53 udp" "$ROOT/capabilities/runtime.podman/install.sh" && grep -q "fw_close_subnet_port runtime.podman" "$ROOT/capabilities/runtime.podman/uninstall.sh" && ! grep -q "ufw allow in on podman" "$ROOT/capabilities/runtime.podman/install.sh"'
 check "dsc: runtime.podman creates the containers account the ranges belong to (shadow >= 4.14 ignores unknown owners)" \
-  'grep -q "useradd --system --no-create-home" "$ROOT/capabilities/runtime.podman/install.sh" && run_aw --dry-run enable runtime.podman && has "create system user containers"'
+  'grep -q "useradd --system --no-create-home" "$ROOT/capabilities/runtime.podman/install.sh" && mkdir -p "$TMP/nouser" && printf "#!/bin/sh\nexit 2\n" > "$TMP/nouser/getent" && chmod +x "$TMP/nouser/getent" && PATH="$TMP/nouser:$PATH" run_aw --dry-run enable runtime.podman && has "create system user containers"'
 check "apply persists resolved dependencies"          'grep -q "cfg_list_add .\.capabilities\.enabled. \"\$c\"" "$ROOT/commands/apply.sh"'
 
 echo "== services.postgres on the workload contract (SYSTEM_SPEC §12.7) =="
@@ -1067,6 +1071,14 @@ if have yq; then
     'grep -q -- "--yes|-y)" "$ROOT/commands/update.sh" && ! run_aw --dry-run update --yes --no-agent 2>&1 | grep -q "unknown option"'
   check "rollout unit settles a process that died without a result" \
     'grep -q "ExecStopPost=/usr/local/bin/alwayswork update --settle" "$ROOT/lib/updates.sh" && printf "{\"rolloutId\":\"ro_dead\",\"state\":\"running\",\"summary\":\"update started\",\"at\":1}" > "$TMP/upd/state/update-result.json" && upd_probe upd_settle ro_dead exit-code 1 >/dev/null 2>&1 && [[ "$(jq -r .state "$TMP/upd/state/update-result.json")" == "failed" ]] && printf "{\"rolloutId\":\"ro_ok\",\"state\":\"ok\",\"summary\":\"x\",\"at\":1}" > "$TMP/upd/state/update-result.json" && upd_probe upd_settle ro_ok >/dev/null 2>&1 && [[ "$(jq -r .state "$TMP/upd/state/update-result.json")" == "ok" ]]'
+  check "snapshot ids parse from snapper's CSV, and from 0.10+ tables with box-drawing separators" \
+    'mkdir -p "$TMP/snapbin" && cat > "$TMP/snapbin/snapper" <<"EOS"
+#!/bin/bash
+if [[ "$1" == "--machine-readable" ]]; then printf "number,type\n0,single\n41,pre\n42,post\n43,single\n"; exit 0; fi
+if [[ "$*" == *create* ]]; then echo 44; exit 0; fi
+printf "  # │ Type   \n────┼────────\n  0 │ single \n 41 │ pre    \n 42 │ post   \n 43 │ single \n"
+EOS
+chmod +x "$TMP/snapbin/snapper" && [[ "$(PATH="$TMP/snapbin:$PATH" bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/config.sh\"; source \"$ROOT/lib/hardware.sh\"; source \"$ROOT/lib/snapshot.sh\"; hw_is_btrfs() { return 0; }; cfg_get() { echo root; }; snap_latest_id; DRY_RUN=0 snap_create x")" == $'"'"'43\n44'"'"' ]] && printf "#!/bin/bash\nif [[ \"\$1\" == \"--machine-readable\" ]]; then exit 1; fi; printf \"  # │ Type   \\n────┼────────\\n 41 │ pre    \\n 42 │ post   \\n\"\n" > "$TMP/snapbin/snapper" && [[ "$(PATH="$TMP/snapbin:$PATH" bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/config.sh\"; source \"$ROOT/lib/hardware.sh\"; source \"$ROOT/lib/snapshot.sh\"; hw_is_btrfs() { return 0; }; cfg_get() { echo root; }; snap_latest_id")" == "41" ]]'
   check "aw update --dry-run: snapshot, upgrade, gate, probation" \
     'run_aw --dry-run update && has "pre-update" && has "update gate: dry-run" && has "on probation"'
   check "core installs the guard hook and the boot check" \
@@ -1464,6 +1476,8 @@ check "tunnel policy documented"                 'grep -q "| \`tunnel\` |" "$ROO
 check "doctor grades tunnel via loopback check"  'grep -q "ssh_loopback_only" "$ROOT/commands/doctor.sh"'
 check "doctor survives checkupdates exiting 2 (no pending updates) and still writes its score" \
   'mkdir -p "$TMP/dbin" && printf "#!/bin/sh\nexit 2\n" > "$TMP/dbin/checkupdates" && chmod +x "$TMP/dbin/checkupdates" && rm -rf "$TMP/doc" && mkdir -p "$TMP/doc/etc" "$TMP/doc/state" && cp "$ROOT/config/defaults.yaml" "$TMP/doc/etc/worker.yaml" && PATH="$TMP/dbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out" 2>&1; grep -q "system is up to date" "$TMP/doc/out" && grep -q "score" "$TMP/doc/out" && [[ "$(jq -r .score "$TMP/doc/state/doctor.json")" =~ ^[0-9]+$ ]]'
+check "doctor records its FAIL/WARN findings for the heartbeat" \
+  '[[ "$(jq -r ".findings | type" "$TMP/doc/state/doctor.json" 2>/dev/null)" == "array" ]] && jq -e ".findings | all(test(\"^(FAIL|WARN) \"))" "$TMP/doc/state/doctor.json" >/dev/null'
 
 echo "== health =="
 # control_health_json must be valid JSON with the SYSTEM_SPEC §6 names even
@@ -1490,7 +1504,7 @@ check "health agent is typed"           'jq -e ".agent.kind == \"none\" and (.ag
 check "health reads the doctor cache"   'jq -e ".doctorScore == 88 and .doctorAt == 1789776000000" "$TMP/health.out" >/dev/null'
 check "health disk pct is 0-100"        'jq -e "(.diskRootUsedPct // 0) >= 0 and (.diskRootUsedPct // 0) <= 100" "$TMP/health.out" >/dev/null'
 check "health uses only spec field names" \
-  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb")" ]]'
+  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb|doctorFindings|agentCommit|agentOutdated|apps|workloads|packages")" ]]'
 check "health probes stay quiet"        '[[ ! -s "$TMP/health.err" ]]'
 check "gpus json is one value even when lspci finds nothing (pipefail)" \
   '[[ "$(bash -c "set -o pipefail; AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/hardware.sh\"; lspci() { echo \"00:00.0 Host bridge: none\"; }; nvidia-smi() { false; }; export -f lspci; hw_gpus_json")" == "[]" ]]'

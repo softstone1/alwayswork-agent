@@ -33,17 +33,17 @@ health_doctor_cache() { printf '%s\n' "$AW_STATE/doctor.json"; }
 
 # health_doctor_record <score> — called by `aw doctor` after scoring.
 health_doctor_record() {
-  local score="$1" f
+  local score="$1" f; shift || true
   [[ "$score" =~ ^[0-9]+$ ]] || return 0
   [[ "$DRY_RUN" == "1" ]] && return 0
   f="$(health_doctor_cache)"
   ensure_dir "$AW_STATE" 2>/dev/null || return 0
-  jq -n --argjson s "$score" --argjson at "$(( $(date +%s) * 1000 ))" '{score:$s, at:$at}' > "$f" 2>/dev/null \
-    || rm -f "$f"
+  # Findings (FAIL/WARN lines) ride along, capped so the heartbeat stays small.
+  printf '%s\n' "$@" | head -n 24 | cut -c1-200 | jq -R . | jq -s --argjson s "$score" --argjson at "$(( $(date +%s) * 1000 ))" \
+    '{score:$s, at:$at, findings:(map(select(length > 0)))}' > "$f" 2>/dev/null \
+    || warn "could not record doctor score"
 }
 
-# health_doctor_refresh — re-run doctor (non-interactive, output discarded)
-# when the cache is missing or older than an hour. Never fails the caller.
 health_doctor_refresh() {
   local f at now
   f="$(health_doctor_cache)"
@@ -138,6 +138,7 @@ control_health_json() {
   if [[ -s "$cache" ]]; then
     _health_num doctorScore "$(jq -r '.score // empty' "$cache" 2>/dev/null || true)"
     _health_num doctorAt "$(jq -r '.at // empty' "$cache" 2>/dev/null || true)"
+    _health_raw doctorFindings "$(jq -c '.findings // [] | .[:24]' "$cache" 2>/dev/null || true)"
   fi
 
   if have ip; then

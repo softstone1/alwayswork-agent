@@ -42,8 +42,8 @@ cmd_update() {
   local snap_id=""
   if cfg_bool '.hardening.auto_snapshots' true; then
     log "Creating pre-update snapshot"
-    snap_create "alwayswork pre-update $(date -Iseconds)"
-    snap_id="$(snap_latest_id 2>/dev/null || true)"
+    snap_id="$(snap_create "alwayswork pre-update $(date -Iseconds)" 2>/dev/null || true)"
+    [[ "$snap_id" =~ ^[0-9]+$ ]] || snap_id="$(snap_latest_id 2>/dev/null || true)"
     [[ -n "$snap_id" ]] && info "snapshot: $snap_id"
   fi
   [[ -n "$rollout" ]] && upd_record_result running "upgrading (rollout $rollout)"

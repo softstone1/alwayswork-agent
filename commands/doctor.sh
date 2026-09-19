@@ -2,9 +2,12 @@
 # aw doctor — scored security and health audit.
 
 _DOCTOR_PASS=0; _DOCTOR_FAIL=0; _DOCTOR_WARN=0
+# What failed or warned, for the heartbeat (health.doctorFindings): the
+# console shows a score; this is why.
+_DOCTOR_FINDINGS=()
 _dpass() { _DOCTOR_PASS=$(( _DOCTOR_PASS + 1 )); printf '    %sPASS%s %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
-_dfail() { _DOCTOR_FAIL=$(( _DOCTOR_FAIL + 1 )); printf '    %sFAIL%s %s\n' "$C_RED" "$C_RESET" "$1" >&2; [[ -n "${2:-}" ]] && printf '         -> %s\n' "$2" >&2; }
-_dwarn() { _DOCTOR_WARN=$(( _DOCTOR_WARN + 1 )); printf '    %sWARN%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; [[ -n "${2:-}" ]] && printf '         -> %s\n' "$2" >&2; }
+_dfail() { _DOCTOR_FAIL=$(( _DOCTOR_FAIL + 1 )); _DOCTOR_FINDINGS+=("FAIL $1${2:+ — $2}"); printf '    %sFAIL%s %s\n' "$C_RED" "$C_RESET" "$1" >&2; [[ -n "${2:-}" ]] && printf '         -> %s\n' "$2" >&2; }
+_dwarn() { _DOCTOR_WARN=$(( _DOCTOR_WARN + 1 )); _DOCTOR_FINDINGS+=("WARN $1${2:+ — $2}"); printf '    %sWARN%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; [[ -n "${2:-}" ]] && printf '         -> %s\n' "$2" >&2; }
 
 _container_socket_exposure() {
   local b; b="$(engine_bin)"
@@ -136,7 +139,7 @@ cmd_doctor() {
   kv "score" "${score}%"
   # Cached for the heartbeat (health.doctorScore / doctorAt); the agent
   # refreshes it by re-running doctor at most hourly.
-  health_doctor_record "$score"
+  health_doctor_record "$score" "${_DOCTOR_FINDINGS[@]}"
 
   if (( _DOCTOR_FAIL > 0 )); then
     err "doctor found $_DOCTOR_FAIL critical issue(s)"

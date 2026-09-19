@@ -7,7 +7,7 @@ cmd_snapshot() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     list)     snap_list ;;
-    create)   snap_create "${1:-manual snapshot $(date -Iseconds)}" ;;
+    create)   local id; id="$(snap_create "${1:-manual snapshot $(date -Iseconds)}")" && [[ -n "$id" ]] && ok "snapshot $id created" ;;
     rollback) snap_rollback "${1:-}" ;;
     -h|--help) info "usage: aw snapshot <list|create|rollback> [arg]"; return 0 ;;
     *)        die "usage: aw snapshot <list|create|rollback> [arg]" ;;
