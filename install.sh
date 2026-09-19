@@ -287,6 +287,16 @@ install_files() {
   run cp -a "$src/." "$INSTALL_DIR/"
   run chmod +x "$INSTALL_DIR/bin/alwayswork" "$INSTALL_DIR/install.sh"
   run find "$INSTALL_DIR" -name '*.sh' -exec chmod +x {} +
+  # Which commit this is: from the control plane's tarball header (one-liner),
+  # from git (a checkout), or whatever the source already recorded (image).
+  # The heartbeat reports it; `aw update` compares it with what the control
+  # plane ships and upgrades when behind.
+  local commit="${AW_AGENT_COMMIT:-}"
+  [[ -n "$commit" ]] || commit="$(git -C "$src" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$commit" ]] || commit="$(cat "$src/COMMIT" 2>/dev/null || true)"
+  if [[ "$commit" =~ ^[a-f0-9]{7,40}$ ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] record commit $commit"; else printf '%s\n' "$commit" > "$INSTALL_DIR/COMMIT"; fi
+  fi
   ledger_path dir /etc/alwayswork
   run mkdir -p /etc/alwayswork
   ledger_path file "$BIN_LINK"
@@ -374,10 +384,28 @@ bundle_yq() {
 # Either way the first signed desired-state delivery applies everything:
 # tunnel token -> cloudflared up, config, then the deferred lockdown.
 # Ordering: install -> pending -> (approval) -> active -> lockdown.
+# An enrolled node re-running the installer (the same one-liner, `aw update`,
+# or an operator fixing a stale box) keeps its identity: files are already
+# replaced above, so converge and restart the agent — never re-enrol.
+upgrade_in_place() {
+  log "This node is already enrolled: upgrading the agent in place (identity kept)"
+  run "$BIN_LINK" apply || warn "apply reported a problem; the control agent retries desired state on its next tick"
+  if have systemctl && systemctl list-unit-files alwayswork-agent.service >/dev/null 2>&1; then
+    run systemctl restart alwayswork-agent.service 2>/dev/null || true
+  fi
+  ok "agent upgraded in place; the next heartbeat reports the new version"
+}
+already_enrolled() { [[ -f /etc/alwayswork/control.json ]] && grep -q '"deviceId"' /etc/alwayswork/control.json 2>/dev/null; }
+
 auto_enroll() {
   local url="${ENROLL_CONTROL:-https://alwayswork.space}"
   local profile="${ENROLL_PROFILE:-worker}"
   url="${url%/}"
+  if already_enrolled; then
+    [[ -z "$ENROLL_TOKEN" ]] || warn "already enrolled; the join token is ignored (Remove the node in the console first to re-enrol)"
+    upgrade_in_place
+    return 0
+  fi
   log "Zero-touch install: enrolling against ${url} (profile: ${profile})"
   info "no lockdown at install time — SSH stays up until the tunnel is verified"
   if [[ -n "$ENROLL_HOSTNAME" ]]; then
@@ -432,6 +460,8 @@ main() {
     # A token or a control URL on the command line is the zero-touch path too.
     if [[ "${ALWAYSWORK_AUTO_ENROLL:-0}" == "1" || -n "$ENROLL_TOKEN" || -n "$ENROLL_CONTROL" ]]; then
       auto_enroll
+    elif already_enrolled; then
+      upgrade_in_place
     else
       log "Bootstrapping foundation profile"
       run "$BIN_LINK" init --yes

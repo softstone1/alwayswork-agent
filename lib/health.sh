@@ -63,6 +63,10 @@ control_health_json() {
   local v total avail used
 
   _health_str agentVersion "$AW_VERSION"
+  local commit=""; [[ -f "$AW_ROOT/COMMIT" ]] && commit="$(tr -dc 'a-f0-9' < "$AW_ROOT/COMMIT" | head -c 40)"
+  [[ "$commit" =~ ^[a-f0-9]{7,40}$ ]] && _health_str agentCommit "$commit"
+  # Behind what the control plane ships (lib/updates.sh)? Shown as a badge.
+  if declare -F upd_agent_behind >/dev/null && upd_agent_behind 2>/dev/null; then _health_raw agentOutdated true; fi
   _health_str os "$(hw_os_pretty 2>/dev/null || true)"
   _health_str kernel "$(uname -r 2>/dev/null || true)"
   _health_str arch "$(uname -m 2>/dev/null || true)"

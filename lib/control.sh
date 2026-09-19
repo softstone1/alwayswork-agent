@@ -939,6 +939,8 @@ control_agent_tick() {
   # Live samples (SYSTEM_SPEC §14): an operator is watching this node, so
   # the sampler posts usage every few seconds until nobody is.
   control_watch_set "$(jq -r '.watching // false' <<<"$resp" 2>/dev/null)"
+  # The agent the control plane ships; `aw update` upgrades when behind.
+  declare -F upd_agent_note_target >/dev/null && upd_agent_note_target "$(jq -r '.agent.commit // ""' <<<"$resp" 2>/dev/null)"
   if [[ "$desired" != "$applied" ]]; then
     log "control: desired version $desired (applied $applied)"
     delivery=""; rc=1
@@ -1572,6 +1574,8 @@ control_sampler() {
     if control_watching && control_clock_trusted 2>/dev/null; then
       if resp="$(control_call POST /v1/device/samples "$(control_sample_json)" 2>/dev/null)"; then
         control_watch_set "$(jq -r '.watching // false' <<<"$resp" 2>/dev/null)"
+  # The agent the control plane ships; `aw update` upgrades when behind.
+  declare -F upd_agent_note_target >/dev/null && upd_agent_note_target "$(jq -r '.agent.commit // ""' <<<"$resp" 2>/dev/null)"
       fi
     fi
     sleep "$every"

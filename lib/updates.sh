@@ -27,6 +27,58 @@ upd_result_file()    { printf '%s/update-result.json' "$AW_STATE"; }
 upd_min_score()      { cfg_get '.updates.min_doctor_score' 70; }
 upd_gate_seconds()   { cfg_get '.updates.gate_seconds' 180; }
 upd_guard_enabled()  { cfg_bool '.updates.guard' true; }
+upd_agent_enabled()  { cfg_bool '.updates.agent' true; }
+
+# --- the agent itself --------------------------------------------------------
+# `aw update` also brings the agent to what the control plane ships: the
+# heartbeat says which commit that is (agent.commit, kept in
+# $AW_STATE/agent-target); /opt/alwayswork/COMMIT says which this is. When they
+# differ, the control plane's own tarball (GET /agent.tar.gz, the same one the
+# one-liner installs) is fetched and its installer re-run over this install —
+# it recognises an enrolled node and upgrades in place, identity kept. The
+# pre-update snapshot and health gate around `aw update` cover this step too.
+upd_agent_target_file() { printf '%s/agent-target' "$AW_STATE"; }
+upd_agent_installed()   { [[ -f "$AW_ROOT/COMMIT" ]] && tr -dc 'a-f0-9' < "$AW_ROOT/COMMIT" | head -c 40; true; }
+upd_agent_target()      { [[ -f "$(upd_agent_target_file)" ]] && tr -dc 'a-f0-9' < "$(upd_agent_target_file)" | head -c 40; true; }
+upd_agent_note_target() {
+  local c="$1"
+  [[ "$c" =~ ^[a-f0-9]{7,40}$ ]] || return 0
+  [[ "$(upd_agent_target)" == "$c" ]] || printf '%s\n' "$c" > "$(upd_agent_target_file)" 2>/dev/null || true
+}
+upd_agent_behind() {
+  local have want; have="$(upd_agent_installed)"; want="$(upd_agent_target)"
+  [[ -n "$want" && "$have" != "$want" ]]
+}
+
+# Fetch and install the shipped agent. 0 = upgraded or already current,
+# 1 = failed (the caller records it; the old agent keeps running).
+upd_agent_upgrade() {
+  local url tmp hdr commit
+  url="$(control_url)"; [[ -n "$url" ]] || { info "update: no control plane; agent not upgraded"; return 0; }
+  if ! upd_agent_behind && [[ "${AW_AGENT_FORCE:-0}" != "1" ]]; then
+    info "update: agent is current ($(upd_agent_installed | head -c 12))"
+    return 0
+  fi
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/aw-agent.XXXXXX")" || return 1
+  hdr="$tmp/headers"
+  log "update: fetching the agent the control plane ships"
+  if ! curl -fsSL -D "$hdr" "$url/agent.tar.gz" -o "$tmp/agent.tgz"; then
+    rm -rf "$tmp"; err "update: could not download $url/agent.tar.gz"; return 1
+  fi
+  commit="$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="x-aw-agent-commit:" {print $2}' | tail -n1)"
+  tar -xzf "$tmp/agent.tgz" -C "$tmp" || { rm -rf "$tmp"; err "update: bad agent tarball"; return 1; }
+  local src; src="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  [[ -x "$src/install.sh" || -f "$src/install.sh" ]] || { rm -rf "$tmp"; err "update: tarball has no install.sh"; return 1; }
+  if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] would install agent ${commit:-?} over $AW_ROOT"; rm -rf "$tmp"; return 0; fi
+  # The installer copies files over $AW_ROOT, records COMMIT, re-applies
+  # desired state and restarts the agent unit. This process keeps running
+  # on the functions it already loaded.
+  if AW_AGENT_COMMIT="$commit" bash "$src/install.sh" --yes --skip-deps --from "$src" >>"$AW_LOG_DIR/update.log" 2>&1; then
+    ok "update: agent upgraded to ${commit:-unknown commit}"
+    rm -rf "$tmp"; return 0
+  fi
+  rm -rf "$tmp"; err "update: agent installer failed (see $AW_LOG_DIR/update.log)"; return 1
+}
 
 # --- lock + guard ------------------------------------------------------------
 upd_lock() {

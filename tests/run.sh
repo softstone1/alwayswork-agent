@@ -33,6 +33,9 @@ done < <(find "$ROOT" -type f \( -name '*.sh' -o -path '*/bin/alwayswork' \) -pr
 
 echo "== cli =="
 check "install.sh executable"     '[[ -x "$ROOT/install.sh" ]]'
+check "install.sh: an enrolled node is upgraded in place, never re-enrolled" \
+  'grep -q "already_enrolled()" "$ROOT/install.sh" && grep -q "upgrade_in_place" "$ROOT/install.sh" && grep -q "systemctl restart alwayswork-agent.service" "$ROOT/install.sh" && grep -q "join token is ignored" "$ROOT/install.sh"'
+check "install.sh: records the agent commit"  'grep -q "AW_AGENT_COMMIT" "$ROOT/install.sh" && grep -q "INSTALL_DIR/COMMIT" "$ROOT/install.sh"'
 check "bin/alwayswork executable" '[[ -x "$ROOT/bin/alwayswork" ]]'
 check "version"           'run_aw --version && has "^alwayswork "'
 check "help"              'run_aw help && has USAGE'
@@ -1047,6 +1050,13 @@ if have yq; then
     'rm -f "$TMP/upd/state/update-result.json"; upd_probe upd_apply_from_delivery "{\"update\":{\"rolloutId\":\"ro_abc\"}}" >/dev/null 2>&1 && [[ "$(jq -r .rolloutId "$TMP/upd/state/update-result.json")" == "ro_abc" && "$(jq -r .state "$TMP/upd/state/update-result.json")" == "running" ]] && ! upd_probe upd_apply_from_delivery "{\"update\":{\"rolloutId\":\"ro_abc\"}}" 2>&1 | grep -q "asks this node"'
   check "rollout: suspicious id ignored"  '! upd_probe upd_apply_from_delivery "{\"update\":{\"rolloutId\":\"../x\"}}" 2>&1 | grep -q "asks this node"'
   check "health carries the update result"  '[[ "$(upd_probe control_health_json | jq -r ".update.rolloutId")" == "ro_abc" ]]'
+  check "agent self-update: behind when the heartbeat's commit differs from COMMIT" \
+    'rm -f "$TMP/upd/state/agent-target"; ! upd_probe upd_agent_behind && upd_probe upd_agent_note_target aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa && upd_probe upd_agent_behind && upd_probe upd_agent_note_target "../evil" && [[ "$(cat "$TMP/upd/state/agent-target")" == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]] && [[ -z "$(upd_probe upd_agent_behind 2>&1)" ]]'
+  check "agent self-update: the upgrade path fetches the control plane's own tarball and re-runs its installer in place" \
+    'grep -q "x-aw-agent-commit" "$ROOT/lib/updates.sh" && grep -q "agent.tar.gz" "$ROOT/lib/updates.sh" && grep -q -- "--skip-deps --from" "$ROOT/lib/updates.sh"'
+  check "heartbeat notes the shipped agent commit"  'grep -q "upd_agent_note_target" "$ROOT/lib/control.sh" && grep -q "agentOutdated" "$ROOT/lib/health.sh"'
+  check "aw update: agent step runs before packages and can be skipped" \
+    'grep -q "upd_agent_upgrade" "$ROOT/commands/update.sh" && grep -q -- "--no-agent" "$ROOT/commands/update.sh" && grep -q -- "--agent)" "$ROOT/commands/update.sh"'
   check "aw update --dry-run: snapshot, upgrade, gate, probation" \
     'run_aw --dry-run update && has "pre-update" && has "update gate: dry-run" && has "on probation"'
   check "core installs the guard hook and the boot check" \

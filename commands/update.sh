@@ -9,13 +9,15 @@
 # See lib/updates.sh and docs/UPDATES.md (SYSTEM_SPEC §13.1).
 
 cmd_update() {
-  local rollout="" mode="update"
+  local rollout="" mode="update" agent="auto"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --guard)      mode="guard" ;;
       --boot-check) mode="boot-check" ;;
+      --agent)      mode="agent"; agent="force" ;;
+      --no-agent)   agent="off" ;;
       --rollout)    [[ -n "${2-}" ]] || die "missing value for --rollout"; rollout="$2"; shift ;;
-      -h|--help)    info "usage: aw update [--yes] [--rollout <id>] | --guard | --boot-check"; return 0 ;;
+      -h|--help)    info "usage: aw update [--yes] [--rollout <id>] [--no-agent] | --agent | --guard | --boot-check"; return 0 ;;
       *) die "unknown option: $1" ;;
     esac
     shift
@@ -23,6 +25,7 @@ cmd_update() {
   case "$mode" in
     guard)      upd_guard; return $? ;;
     boot-check) require_root update; cfg_require; cfg_need; aw_state_init; upd_boot_check; return $? ;;
+    agent)      require_root update; cfg_require; cfg_need; aw_state_init; AW_AGENT_FORCE=1 upd_agent_upgrade; return $? ;;
   esac
 
   require_root update
@@ -40,8 +43,18 @@ cmd_update() {
   fi
   [[ -n "$rollout" ]] && upd_record_result running "upgrading (rollout $rollout)"
 
-  log "Upgrading packages"
+  # The agent first (SYSTEM_SPEC §13.1): what the control plane ships, when
+  # this node is behind. Its failure is a failed update like any other.
   local rc=0
+  if [[ "$agent" != "off" ]] && upd_agent_enabled; then
+    upd_agent_upgrade || rc=$?
+    if (( rc != 0 )); then
+      upd_record_result failed "agent upgrade failed"
+      return 1
+    fi
+  fi
+
+  log "Upgrading packages"
   pkg_upgrade || rc=$?
   if (( rc != 0 )); then
     err "package upgrade failed (exit $rc)"

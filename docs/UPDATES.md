@@ -11,7 +11,13 @@ undoes itself. `lib/updates.sh` gives `aw update` four layers:
 | **Boot probation** | after a successful update the node is *on probation*: `alwayswork-boot-check.service` re-runs the gate on the next boots. Healthy → probation cleared. Unhealthy on **two** boots → `snapper rollback <pre-update snapshot>` and one reboot. |
 | **Waves** | the control plane delivers `update: { rolloutId }` to the nodes of the current wave; the node runs `aw update --rollout <id>` detached (`systemd-run`) and reports `health.update = { rolloutId, state, summary, at }` on heartbeat. The next wave waits for this one to be healthy. |
 
+| **The agent itself** | before packages, `aw update` compares `/opt/alwayswork/COMMIT` with the commit the control plane ships (every heartbeat answer carries `agent.commit`, kept in `$AW_STATE/agent-target`). When behind it downloads `<control>/agent.tar.gz` — the same tarball the one-liner installs — and re-runs that tarball's `install.sh --yes --skip-deps --from …` over `/opt/alwayswork`: the installer recognises an enrolled node and upgrades in place (files, `aw apply`, agent restart; identity kept). `aw update --agent` forces it; `--no-agent` or `updates.agent: false` skips it. The heartbeat reports `agentCommit` and `agentOutdated`. |
+
 States in `health.update.state`: `running`, `ok`, `failed`, `rolled_back`.
+
+An agent too old to have `aw update` at all is upgraded the same way by
+hand: run the install one-liner on the box again (`curl -fsSL
+<control>/install.sh | sudo bash`) — no token, identity kept.
 
 ## What it cannot do
 
@@ -31,7 +37,9 @@ image (spec §4.4).
 ## Using it
 
 ```bash
-sudo aw update                  # snapshot -> upgrade -> gate -> probation
+sudo aw update                  # snapshot -> agent (if behind) -> upgrade -> gate -> probation
+sudo aw update --agent          # only the agent, now, even if it looks current
+sudo aw update --no-agent       # packages only
 sudo aw update --boot-check     # what the boot unit runs
 sudo aw update --guard          # what the package hook runs (exit 0 = allowed)
 ```
