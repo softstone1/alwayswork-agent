@@ -909,7 +909,11 @@ if have yq; then
   check "dsc: unit is a notify service that systemd restarts" \
     'u="$TMP/dsc/systemd/alwayswork-dsh.service"; grep -q "^Type=notify" "$u" && grep -q -- "--sdnotify=conmon" "$u" && grep -q "^Restart=always" "$u" && grep -q "^ExecStop=.*podman stop" "$u"'
   check "dsc: env file carries the trusted host and port, 0600" \
-    'dsc_probe dsc_render_env >/dev/null 2>&1 && f="$TMP/dsc/etc/dsh.env" && grep -q "^DSH_TRUSTED_HOST=$(hostname).alwayswork.space$" "$f" && grep -q "^DSH_PORT=3080$" "$f" && [[ "$(stat -c %a "$f")" == "600" ]]'
+    'dsc_probe dsc_render_env >/dev/null 2>&1 && f="$TMP/dsc/etc/dsh.env" && grep -q "^DSH_TRUSTED_HOST=dsh-pending.alwayswork.space$" "$f" && grep -q "^DSH_PORT=3080$" "$f" && [[ "$(stat -c %a "$f")" == "600" ]]'
+  check "dsc: the trusted host is the surface name the control plane delivered, never the node hostname (§12.8)" \
+    'yq -i ".surfaces.dsh = \"dsh-k3v9q.alwayswork.space\"" "$TMP/dsc/etc/worker.yaml" && dsc_probe dsc_render_env >/dev/null 2>&1 && grep -q "^DSH_TRUSTED_HOST=dsh-k3v9q.alwayswork.space$" "$TMP/dsc/etc/dsh.env" && ! grep -q "$(hostname)" "$TMP/dsc/etc/dsh.env"; yq -i "del(.surfaces)" "$TMP/dsc/etc/worker.yaml"'
+  check "dsc: credential names given to the harness are recorded for the heartbeat (never values)" \
+    '[[ "$(jq -c . "$TMP/dsc/state/dsh/credentials.json")" == "[]" ]]'
   check "dsc: workspace falls back to a directory off btrfs" \
     'dsc_probe dsc_ensure_workspace >/dev/null 2>&1 && [[ -d "$TMP/dsc/state/workspaces/dsh" && -d "$TMP/dsc/state/dsh/home" ]]'
   check "dsc: env carries the UI gate facts from desired state; pinned key mounted read-only" \

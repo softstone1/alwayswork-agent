@@ -38,11 +38,15 @@ dsc_port() {
 
 # The public name: explicit wins, otherwise <hostname>.<base domain>. The
 # control plane can pin it later via .expose.webUi.host.
+# The harness's public name is its surface's name, allocated by the control
+# plane and delivered in desired state (§12.8) — never the node's hostname.
+# Before the first delivery names it, a placeholder keeps the gate strict.
 dsc_host() {
   local h; h="$(cap_config host)"
+  [[ -n "$h" ]] || h="$(cfg_get '.surfaces.dsh' '')"
   [[ -n "$h" ]] || h="$(cfg_get '.expose.webUi.host' '')"
   if [[ -z "$h" ]]; then
-    h="$(hostname).$(cfg_get '.expose.webUi.baseDomain' 'alwayswork.space')"
+    h="dsh-pending.$(cfg_get '.expose.webUi.baseDomain' 'alwayswork.space')"
   fi
   [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]] || die "agents.dsh: refusing suspicious host '$h'"
   printf '%s' "$h"
@@ -120,6 +124,11 @@ dsc_render_env() {
     fi
   } > "$tmp"
   mv -f "$tmp" "$dest"
+  # Which credential names reached the harness (never values): the console
+  # tells the operator what is missing instead of DSH failing a turn.
+  ensure_dir "$AW_STATE/dsh"
+  grep -oE '^[A-Z][A-Z0-9_]*_(API_KEY|TOKEN)=' "$dest" 2>/dev/null | sed 's/=$//' | jq -R . | jq -sc . > "$AW_STATE/dsh/credentials.json" 2>/dev/null || true
+  chmod 644 "$AW_STATE/dsh/credentials.json" 2>/dev/null || true
   chmod 600 "$dest"
 }
 

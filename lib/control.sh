@@ -663,6 +663,12 @@ control_apply_delivery() {
   # Objectives (lib/objectives.sh): intent for the harness, materialised in
   # its workspace; results ride the heartbeat.
   obj_apply_from_delivery "$json"
+  # Surface names (SYSTEM_SPEC §12.8): the public name of each surface this
+  # node reports, allocated by the control plane. Kept in config so every
+  # workload learns its own name (the harness's trusted host, for one).
+  if jq -e '.surfaces | type == "object"' >/dev/null 2>&1 <<<"$json"; then
+    cfg_set_expr '.surfaces' "$(jq -c '.surfaces' <<<"$json")" 2>/dev/null || true
+  fi
   # Packages (lib/packages.sh): approved manifests — oci workloads,
   # capabilities with config, catalog apps. Before `apply`, so a capability
   # package is installed by the same reconcile.

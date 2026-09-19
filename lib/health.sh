@@ -119,9 +119,13 @@ control_health_json() {
   # host install as alwayswork-webui.service. "up" is whichever exists.
   local agent_unit=alwayswork-webui.service
   { have systemctl && systemctl list-unit-files alwayswork-dsh.service 2>/dev/null | grep -q '^alwayswork-dsh.service'; } && agent_unit=alwayswork-dsh.service
-  _health_raw agent "$(jq -nc --arg k "$kind" --arg v "$v" \
+  # Credential names the harness was given (values never leave the node).
+  local creds='[]'
+  [[ -s "$AW_STATE/dsh/credentials.json" ]] && creds="$(jq -c '.' "$AW_STATE/dsh/credentials.json" 2>/dev/null || printf '[]')"
+  [[ "$creds" == \[* ]] || creds='[]'
+  _health_raw agent "$(jq -nc --arg k "$kind" --arg v "$v" --argjson creds "$creds" \
     --argjson up "$(_health_bool _health_unit_active "$agent_unit")" \
-    '{kind:$k, up:$up} + (if $v == "" then {} else {version:$v} end)')"
+    '{kind:$k, up:$up, credentials:$creds} + (if $v == "" then {} else {version:$v} end)')"
 
   if have systemctl; then
     _health_raw tunnelUp "$(_health_bool _health_unit_active cloudflared.service)"
