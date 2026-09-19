@@ -131,6 +131,17 @@ ok("garbage token -> 401", r.status === 401);
 
 r = await get("/", { cookie: "aw-session=" + tenantSession() });
 ok("control-plane tenant session -> proxied", r.status === 200);
+{
+  // The portal handoff: ?aw_session= becomes an HttpOnly cookie and the URL is cleaned.
+  const tok = tenantSession();
+  const hand = await new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port: gatePort, path: "/chat?x=1&aw_session=" + encodeURIComponent(tok), method: "GET", headers: { host: HOST } }, (res) => { res.resume(); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers })); });
+    req.on("error", reject); req.end();
+  });
+  ok("tenant handoff sets the session cookie and redirects without the token", hand.status === 302 && String(hand.headers["set-cookie"]).includes("aw-session=" + tok) && String(hand.headers["set-cookie"]).includes("HttpOnly") && hand.headers.location === "/chat?x=1");
+  const bad = await get("/?aw_session=v1.garbage.sig");
+  ok("a bad handoff token is refused", bad.status === 401);
+}
 r = await get("/", { cookie: "aw-session=" + tenantSession({ host: "other.example.test" }) });
 ok("tenant session for another host -> 401", r.status === 401);
 r = await get("/", { cookie: "aw-session=" + tenantSession({ exp: Math.floor(Date.now() / 1000) - 5 }) });

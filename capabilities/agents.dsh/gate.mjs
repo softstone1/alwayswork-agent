@@ -217,6 +217,23 @@ const notConfigured = !((TEAM && AUD) || CONTROL_PUBKEY_FILE);
 const server = http.createServer(async (req, res) => {
   if (req.url === "/_aw/health") { res.writeHead(204); return res.end(); }
   if (notConfigured) return deny(res, 401, "alwayswork: node UI gate is not configured (deliver access.teamDomain + access.uiAud to this node)");
+  // A tenant arrives from the portal with the control-plane session in the
+  // query (the portal cannot set a cookie for this hostname). Verify it,
+  // move it into an HttpOnly cookie, and redirect to the same path without it.
+  const u = new URL(req.url, "http://x");
+  const handoff = u.searchParams.get("aw_session");
+  if (handoff !== null) {
+    const authority = String(req.headers.host || "");
+    const who = verifyControlSession(handoff, authority);
+    if (!who) { log({ msg: "denied handoff" }); return deny(res, 401, "invalid or expired session"); }
+    u.searchParams.delete("aw_session");
+    res.writeHead(302, {
+      "set-cookie": `aw-session=${handoff}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${12 * 3600}`,
+      location: u.pathname + (u.search || ""),
+      "cache-control": "no-store",
+    });
+    return res.end();
+  }
   const who = await authenticate(req);
   if (!who) { log({ msg: "denied", path: req.url }); return deny(res, 401, "Cloudflare Access required"); }
   const headers = upstreamHeaders(req, who.authority);
