@@ -6,8 +6,19 @@ pkg_install podman podman-compose
 # userns=auto (the workload isolation contract, SYSTEM_SPEC §12) hands each
 # container a private uid/gid range taken from the `containers` entry in
 # /etc/subuid and /etc/subgid. Neither distro family ships that entry.
+#
+# The owner must be a real account: shadow >= 4.14 (Arch/CachyOS) resolves the
+# owner with getpwnam and silently returns no ranges for an unknown name —
+# podman then fails with "no subuid ranges found for user containers". A
+# locked system user with no home, never logged into, satisfies it.
 podman_ensure_userns_ranges() {
   local f
+  if ! getent passwd containers >/dev/null 2>&1; then
+    if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] create system user containers (owner of the userns ranges)\n' >&2
+    else run useradd --system --no-create-home --shell /usr/sbin/nologin --user-group containers 2>/dev/null \
+      || run useradd --system --no-create-home --shell /usr/bin/nologin --user-group containers \
+      || warn "runtime.podman: could not create the containers user; userns=auto may find no ranges"; fi
+  fi
   for f in /etc/subuid /etc/subgid; do
     if [[ -f "$f" ]] && grep -q '^containers:' "$f"; then continue; fi
     if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] append containers:2147483647:2147483648 to %s\n' "$f" >&2; continue; fi

@@ -922,6 +922,8 @@ check "dsc: Containerfile verifies the tarball before npm" 'grep -q "openssl dgs
 check "dsc: entrypoint binds loopback, gate in front"  'grep -q -- "--host 127.0.0.1" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q -- "--expose-internals" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
 check "dsc: image workflow publishes the pinned tag"  'grep -q "alwayswork-dsh" "$ROOT/.github/workflows/image.yml" && grep -q "DSH_NPM_VERSION_DEFAULT" "$ROOT/.github/workflows/image.yml"'
 check "dsc: runtime.podman provides userns ranges"    'grep -q "containers:2147483647:2147483648" "$ROOT/capabilities/runtime.podman/install.sh"'
+check "dsc: runtime.podman creates the containers account the ranges belong to (shadow >= 4.14 ignores unknown owners)" \
+  'grep -q "useradd --system --no-create-home" "$ROOT/capabilities/runtime.podman/install.sh" && run_aw --dry-run enable runtime.podman && has "create system user containers"'
 check "apply persists resolved dependencies"          'grep -q "cfg_list_add .\.capabilities\.enabled. \"\$c\"" "$ROOT/commands/apply.sh"'
 
 echo "== services.postgres on the workload contract (SYSTEM_SPEC §12.7) =="
