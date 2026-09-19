@@ -50,13 +50,45 @@ run the same image.
 `capabilities/agents.dsh/Containerfile`: `node:22-bookworm-slim`, the pinned
 `@deepseek-ai/dsh` tarball fetched and **sha512-verified before npm sees
 it** (same pin as `ensure.sh`), git, ripgrep, curl, jq, openssh-client,
-socat, tini; user `dsh` (uid 1000); `/workspace` and `/home/dsh` volumes.
+tini; user `dsh` (uid 1000); `/workspace` and `/home/dsh` volumes.
 
 The entrypoint starts the harness on `127.0.0.1:$DSH_PORT` (upstream
 refuses `0.0.0.0` on purpose) with node's `--expose-internals` (its web
-profile's HMR plugin needs it) and a `socat` forwarder from the container's
-own interface to that loopback port, which is what podman publishes. If
-either process dies the container exits and systemd restarts it.
+profile's HMR plugin needs it), and the **gate** on the container's own
+interface — which is what podman publishes. If either process dies the
+container exits and systemd restarts it.
+
+## The gate: node-side session mint (spec §10 B)
+
+`capabilities/agents.dsh/gate.mjs` (zero dependencies) is the reverse
+proxy in front of the harness. The harness only trusts its own signed
+browser-session cookie; a request that arrives through the tunnel was
+authenticated by Cloudflare Access at the edge but carries none. The gate
+closes that gap on the node, so the per-node proxy Worker is no longer
+needed:
+
+1. Verifies `Cf-Access-Jwt-Assertion` (or the `CF_Authorization` cookie)
+   as an RS256 JWT against the team's JWKS
+   (`https://<team>/cdn-cgi/access/certs`, cached 10 min): issuer, the
+   node-UI application's AUD, expiry.
+2. Or verifies an `aw-session` cookie signed by the control plane's
+   Ed25519 key, which the node pinned at enrolment (`aw-session=v1.<payload>.<sig>`,
+   payload `{sub, host, exp}`, host must equal the request authority) — the
+   tenant path (spec §12.6).
+3. Mints the harness's cookie `dsh-auth-<sha256(authority)>` from the secret
+   in `~/.dsh/.credentials.yaml` (record `client-connection/browser-session`),
+   strips any stale `dsh-auth-*` cookie, and proxies HTTP and WebSocket
+   upgrades to `127.0.0.1:$DSH_PORT`.
+4. Anything else is a 401. With neither `AW_ACCESS_TEAM_DOMAIN`+`AW_ACCESS_AUD`
+   nor `AW_CONTROL_PUBKEY_FILE` configured it refuses everything and says
+   so. `/_aw/health` answers 204 without auth for the node's healthcheck.
+
+The facts it needs arrive in signed desired state as `access.teamDomain`
+and `access.uiAud` (the control plane's `ACCESS_TEAM_DOMAIN` and
+`ACCESS_NODE_UI_AUD`, or a group's own `access.uiAud`); the agent records
+them under `.access.*` and renders them into `dsh.env`. The pinned control
+key is mounted read-only at `/run/alwayswork/control-pubkey.json`.
+`tests/gate.test.mjs` exercises all of it against a fake JWKS and harness.
 
 `.github/workflows/image.yml` builds the image on every change to the
 Containerfile/entrypoint/pin, smoke-tests that the UI answers, and pushes

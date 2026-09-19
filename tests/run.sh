@@ -903,6 +903,8 @@ if have yq; then
     'dsc_probe dsc_render_env >/dev/null 2>&1 && f="$TMP/dsc/etc/dsh.env" && grep -q "^DSH_TRUSTED_HOST=$(hostname).alwayswork.space$" "$f" && grep -q "^DSH_PORT=3080$" "$f" && [[ "$(stat -c %a "$f")" == "600" ]]'
   check "dsc: workspace falls back to a directory off btrfs" \
     'dsc_probe dsc_ensure_workspace >/dev/null 2>&1 && [[ -d "$TMP/dsc/state/workspaces/dsh" && -d "$TMP/dsc/state/dsh/home" ]]'
+  check "dsc: env carries the UI gate facts from desired state; pinned key mounted read-only" \
+    'yq -i ".access.teamDomain = \"team.cloudflareaccess.com\" | .access.uiAud = \"aud-node-ui\"" "$TMP/dsc/etc/worker.yaml" && printf "{\"kid\":\"ck-x\",\"alg\":\"Ed25519\",\"publicKey\":\"AA==\"}" > "$TMP/dsc/state/control-pubkey.json" && dsc_probe dsc_render_env >/dev/null 2>&1 && grep -q "^AW_ACCESS_TEAM_DOMAIN=team.cloudflareaccess.com$" "$TMP/dsc/etc/dsh.env" && grep -q "^AW_ACCESS_AUD=aud-node-ui$" "$TMP/dsc/etc/dsh.env" && grep -q "^AW_CONTROL_PUBKEY_FILE=/run/alwayswork/control-pubkey.json$" "$TMP/dsc/etc/dsh.env" && dsc_probe dsc_write_unit >/dev/null 2>&1 && grep -q -- "--volume $TMP/dsc/state/control-pubkey.json:/run/alwayswork/control-pubkey.json:ro" "$TMP/dsc/systemd/alwayswork-dsh.service"'
   check "dsc: --network none is honoured" \
     'yq -i ".capabilities.config.agents.dsh.network = \"none\"" "$TMP/dsc/etc/worker.yaml" && dsc_probe dsc_write_unit >/dev/null 2>&1 && grep -q -- "--network none" "$TMP/dsc/systemd/alwayswork-dsh.service" && yq -i "del(.capabilities.config.agents.dsh.network)" "$TMP/dsc/etc/worker.yaml"'
   check "dsc: dry-run enable agents.dsh pulls runtime.podman first" \
@@ -910,10 +912,41 @@ if have yq; then
 fi
 check "dsc: manifest requires runtime.podman"     'grep -q "requires: \[core, runtime.podman\]" "$ROOT/capabilities/agents.dsh/manifest.yaml"'
 check "dsc: Containerfile verifies the tarball before npm" 'grep -q "openssl dgst -sha512" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "USER dsh" "$ROOT/capabilities/agents.dsh/Containerfile"'
-check "dsc: entrypoint binds loopback and forwards"   'grep -q -- "--host 127.0.0.1" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q "socat" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q -- "--expose-internals" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
+check "dsc: entrypoint binds loopback, gate in front"  'grep -q -- "--host 127.0.0.1" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh" && grep -q -- "--expose-internals" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
 check "dsc: image workflow publishes the pinned tag"  'grep -q "alwayswork-dsh" "$ROOT/.github/workflows/image.yml" && grep -q "DSH_NPM_VERSION_DEFAULT" "$ROOT/.github/workflows/image.yml"'
 check "dsc: runtime.podman provides userns ranges"    'grep -q "containers:2147483647:2147483648" "$ROOT/capabilities/runtime.podman/install.sh"'
 check "apply persists resolved dependencies"          'grep -q "cfg_list_add .\.capabilities\.enabled. \"\$c\"" "$ROOT/commands/apply.sh"'
+
+echo "== node UI gate (SYSTEM_SPEC §10 B) =="
+check "gate ships in the image"       'grep -q "COPY gate.mjs /usr/local/bin/alwayswork-gate" "$ROOT/capabilities/agents.dsh/Containerfile" && grep -q "alwayswork-gate" "$ROOT/capabilities/agents.dsh/entrypoint.sh"'
+if have node && node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)" 2>/dev/null; then
+  check "gate: JWT verification, cookie mint, proxy, tenant sessions, fail closed" 'node "$ROOT/tests/gate.test.mjs" > "$TMP/gate.out" 2>&1 && grep -q "failed 0" "$TMP/gate.out"'
+else
+  echo "  skip  node >= 20 not installed (gate tests)"
+fi
+
+# The delivery's access.teamDomain / access.uiAud land in config; null clears; junk is refused.
+cat > "$TMP/uiaccess.sh" <<'EOS'
+set -u
+ROOT="$1"; D="$2"
+export AW_ROOT="$ROOT" AW_ETC="$D/etc" AW_STATE="$D/state" AW_LOG_DIR="$D/log" AW_CONFIG="$D/etc/worker.yaml"
+mkdir -p "$AW_ETC" "$AW_STATE"
+source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hardware.sh"; source "$ROOT/lib/secrets.sh"; source "$ROOT/lib/control.sh"
+DRY_RUN=0
+cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
+control_apply_ui_access '{"access":{"sshCa":null,"teamDomain":"team.cloudflareaccess.com","uiAud":"aud-1"}}'
+[[ "$(cfg_get .access.teamDomain '')" == "team.cloudflareaccess.com" && "$(cfg_get .access.uiAud '')" == "aud-1" ]] || exit 1
+control_apply_ui_access '{"access":{"sshCa":null,"uiAud":"bad aud;rm"}}'
+[[ "$(cfg_get .access.uiAud '')" == "aud-1" ]] || exit 2
+control_apply_ui_access '{"access":{"sshCa":null}}'
+[[ "$(cfg_get .access.uiAud '')" == "aud-1" ]] || exit 3
+control_apply_ui_access '{"access":{"sshCa":null,"uiAud":null}}'
+[[ -z "$(cfg_get .access.uiAud '')" ]] || exit 4
+exit 0
+EOS
+if have yq; then
+  check "delivered access.teamDomain/uiAud are recorded, junk refused, null clears" 'bash "$TMP/uiaccess.sh" "$ROOT" "$TMP/uiaccess"'
+fi
 
 echo "== secret store =="
 if have sops && have age && yq --version 2>/dev/null | grep -qi mikefarah; then

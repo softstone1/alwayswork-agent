@@ -62,6 +62,9 @@ dsc_image() {
 dsc_workspace() { printf '%s' "$AW_STATE/workspaces/dsh"; }
 dsc_home()      { printf '%s' "$AW_STATE/dsh/home"; }
 dsc_env_file()  { printf '%s' "$AW_ETC/dsh.env"; }
+# The control-plane signing key the agent pinned at enrolment (lib/control.sh
+# control_pubkey_file); named here too so this file stands alone in tests.
+dsc_control_pubkey() { printf '%s' "$AW_STATE/control-pubkey.json"; }
 
 # A workspace is a btrfs subvolume where the host has btrfs (snapshot per
 # task later), a plain directory otherwise. Idempotent.
@@ -93,9 +96,18 @@ dsc_render_env() {
   fi
   tmp="$(mktemp "${dest}.XXXXXX")" || die "agents.dsh: cannot stage env file"
   chmod 600 "$tmp"
+  local team aud
+  team="$(cap_config access_team_domain)"; [[ -n "$team" ]] || team="$(cfg_get '.access.teamDomain' '')"
+  aud="$(cap_config access_aud)";          [[ -n "$aud" ]]  || aud="$(cfg_get '.access.uiAud' '')"
   {
     printf 'DSH_TRUSTED_HOST=%s\n' "$host"
     printf 'DSH_PORT=%s\n' "$port"
+    # The node-side UI gate (gate.mjs): Access JWT verification needs both;
+    # without them the gate fails closed and says so.
+    [[ -n "$team" ]] && printf 'AW_ACCESS_TEAM_DOMAIN=%s\n' "$team"
+    [[ -n "$aud" ]]  && printf 'AW_ACCESS_AUD=%s\n' "$aud"
+    # Control-plane tenant sessions verify against the pinned control key.
+    [[ -f "$(dsc_control_pubkey)" ]] && printf 'AW_CONTROL_PUBKEY_FILE=/run/alwayswork/control-pubkey.json\n'
     if [[ "$(sec_backend)" == "sops" ]] && sec_exists; then
       while IFS= read -r k; do
         [[ -n "$k" ]] || continue
@@ -157,8 +169,13 @@ dsc_write_unit() {
   podman_bin="$(command -v podman || echo /usr/bin/podman)"
   engine_build_args
   dsc_isolation_args
-  local flags
+  local flags pubkey_mount=""
   flags="$(printf '%q ' "${AW_ENGINE_ARGS[@]}" "${DSC_ISO_ARGS[@]}")"
+  # The pinned control key is public material (0644); mounted read-only so
+  # the gate can verify control-plane tenant sessions.
+  if [[ -f "$(dsc_control_pubkey)" ]]; then
+    pubkey_mount="--volume $(dsc_control_pubkey):/run/alwayswork/control-pubkey.json:ro "
+  fi
   aw_write "$DSH_UNIT_DIR/$DSH_UNIT" <<UNIT
 [Unit]
 Description=AlwaysWork workload: DeepSeek Harness web UI (container)
@@ -181,6 +198,7 @@ ExecStart=$podman_bin run --rm --replace --sdnotify=conmon --name $DSH_CONTAINER
   --env-file $envf \\
   --volume $ws:/workspace:U \\
   --volume $home:/home/dsh:U \\
+  ${pubkey_mount}\\
   --label dev.alwayswork.workload=dsh --label dev.alwayswork.host=$host \\
   $img
 ExecStop=$podman_bin stop -t 10 $DSH_CONTAINER

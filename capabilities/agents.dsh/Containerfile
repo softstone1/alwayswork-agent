@@ -9,6 +9,8 @@
 # (published to loopback only by the node), configuration by environment:
 #   DSH_TRUSTED_HOST   the public hostname the tunnel publishes (required)
 #   DSH_PORT           listen port (default 3080)
+#   AW_ACCESS_TEAM_DOMAIN / AW_ACCESS_AUD   Cloudflare Access verification (gate.mjs)
+#   AW_CONTROL_PUBKEY_FILE  pinned control key for tenant sessions (optional)
 # Provider keys arrive through an env file the node renders from its sealed
 # secret store; nothing secret is ever baked in here.
 FROM docker.io/library/node:22-bookworm-slim
@@ -24,7 +26,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq openssh-client ripgrep socat tini \
+      ca-certificates curl git jq openssh-client ripgrep tini \
  && rm -rf /var/lib/apt/lists/*
 
 # Fetch the pinned release tarball and verify it BEFORE npm sees it — the
@@ -50,7 +52,8 @@ RUN useradd --uid 1000 --user-group --create-home --shell /bin/bash dsh 2>/dev/n
  && mkdir -p /workspace && chown dsh:dsh /workspace
 
 COPY entrypoint.sh /usr/local/bin/alwayswork-entrypoint
-RUN chmod 0755 /usr/local/bin/alwayswork-entrypoint
+COPY gate.mjs /usr/local/bin/alwayswork-gate
+RUN chmod 0755 /usr/local/bin/alwayswork-entrypoint /usr/local/bin/alwayswork-gate
 
 LABEL org.opencontainers.image.title="alwayswork-dsh" \
       org.opencontainers.image.description="AlwaysWork standard workload image: DeepSeek Harness web UI" \

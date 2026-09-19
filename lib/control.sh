@@ -719,6 +719,28 @@ control_apply_lockdown() {
   ok "control: lockdown applied (SSH policy: $policy)"
 }
 
+# control_apply_ui_access <delivery-json> — what the node-side UI gate needs
+# (SYSTEM_SPEC §10 B): the Access team domain and the AUD of the application
+# in front of node UIs. Recorded as .access.teamDomain / .access.uiAud; the
+# agents.dsh container reads them from its env file on the next apply.
+# Absent = unchanged; explicit null clears. Values are validated: they end
+# up in an env file the gate parses, never in a command line.
+control_apply_ui_access() {
+  local json="$1" v k
+  for k in teamDomain uiAud; do
+    if jq -e --arg k "$k" '.access[$k] | type == "string"' >/dev/null 2>&1 <<<"$json"; then
+      v="$(jq -r --arg k "$k" '.access[$k]' <<<"$json" 2>/dev/null)"
+      if [[ "$v" =~ ^[A-Za-z0-9._-]{1,255}$ ]]; then
+        [[ "$(cfg_get ".access.$k" '')" == "$v" ]] || cfg_set_str ".access.$k" "$v"
+      else
+        warn "control: access.$k has unexpected characters; ignoring it"
+      fi
+    elif jq -e --arg k "$k" '.access[$k] == null and (.access | has($k))' >/dev/null 2>&1 <<<"$json"; then
+      [[ -z "$(cfg_get ".access.$k" '')" ]] || cfg_set_str ".access.$k" ""
+    fi
+  done
+}
+
 # control_apply_access <delivery-json> — the SSH access CA from desired state.
 #
 # SSH policy `tunnel` trusts short-lived certificates signed by the Cloudflare
@@ -733,6 +755,7 @@ control_access_ca_file() { printf '%s\n' "/etc/ssh/alwayswork_access_ca.pub"; }
 control_apply_access() {
   local json="$1" ca f policy
   jq -e '.access | type == "object"' >/dev/null 2>&1 <<<"$json" || return 0
+  control_apply_ui_access "$json"
   jq -e '.access.sshCa | type == "string"' >/dev/null 2>&1 <<<"$json" || return 0
   ca="$(jq -r '.access.sshCa' <<<"$json" 2>/dev/null)"
   ca="${ca//$'\r'/}"
