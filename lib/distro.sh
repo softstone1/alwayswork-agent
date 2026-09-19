@@ -140,12 +140,16 @@ pkg_is_installed() {
   esac
 }
 
-# pkg_upgrade — full system upgrade (paru first on Arch, like before).
+# pkg_upgrade — full system upgrade. On Arch: paru (repos + AUR) when an
+# operator runs this from their own sudo session; pacman when unattended —
+# a rollout unit has no unprivileged user to hand paru to, and paru would
+# need an interactive sudo for its own pacman step anyway. AUR packages are
+# therefore upgraded only by an interactive `sudo aw update`.
 pkg_upgrade() {
   export AW_PKG_GUARD_OK=1
   case "$(distro_family)" in
     arch)
-      if have paru; then run_paru -Syu --noconfirm
+      if have paru && [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then run_paru -Syu --noconfirm
       else run pacman -Syu --noconfirm; fi ;;
     debian)
       _distro_apt_update

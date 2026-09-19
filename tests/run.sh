@@ -591,6 +591,8 @@ check "debian install translates names" ': > "$PKGLOG"; stub_probe fam-debian pk
 check "arch remove uses pacman"    ': > "$PKGLOG"; stub_probe fam-arch pkg_remove ripgrep >/dev/null 2>&1 && grep -qx "pacman -Rns --noconfirm ripgrep" "$PKGLOG"'
 check "debian remove uses apt purge" ': > "$PKGLOG"; stub_probe fam-debian pkg_remove ripgrep >/dev/null 2>&1 && grep -qx "apt-get purge -y ripgrep" "$PKGLOG"'
 check "arch upgrade uses pacman -Syu" ': > "$PKGLOG"; stub_probe fam-arch pkg_upgrade >/dev/null 2>&1 && grep -qx "pacman -Syu --noconfirm" "$PKGLOG"'
+check "arch upgrade unattended (no SUDO_USER) never hands off to paru" \
+  ': > "$PKGLOG"; printf "#!/bin/sh\necho paru-called >> \"$PKGLOG\"\n" > "$TMP/stubbin/paru"; chmod +x "$TMP/stubbin/paru"; SUDO_USER= stub_probe fam-arch pkg_upgrade >/dev/null 2>&1; rm -f "$TMP/stubbin/paru"; grep -qx "pacman -Syu --noconfirm" "$PKGLOG" && ! grep -q paru-called "$PKGLOG"'
 check "debian upgrade uses apt"    ': > "$PKGLOG"; stub_probe fam-debian pkg_upgrade >/dev/null 2>&1 && grep -qx "apt-get upgrade -y" "$PKGLOG"'
 check "arch orphans query pacman"  ': > "$PKGLOG"; stub_probe fam-arch pkg_orphans_remove >/dev/null 2>&1 && grep -qx "pacman -Qtdq" "$PKGLOG"'
 check "debian orphans use autoremove" ': > "$PKGLOG"; stub_probe fam-debian pkg_orphans_remove >/dev/null 2>&1 && grep -qx "apt-get autoremove -y" "$PKGLOG"'
