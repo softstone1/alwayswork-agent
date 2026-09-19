@@ -286,6 +286,172 @@ if have yq; then
   check "provision dry-run is a no-op"        'run_aw --dry-run provision >/dev/null && [[ ! -e "$AW_STATE/decommission.json" ]]'
 fi
 
+echo "== ledger =="
+# The footprint ledger (docs/DECOMMISSION.md): recorders capture prior
+# state, restore replays in reverse. Exercised in a scratch state dir with
+# stubbed package/systemd helpers; anything that would touch the host runs
+# under --dry-run and is asserted on its printed plan.
+cat > "$TMP/ledger-probe.sh" <<'EOS'
+set -uo pipefail
+ROOT="$1"; OUT="$2"; SCENARIO="$3"
+export AW_ROOT="$ROOT" AW_TEST=1 AW_ETC="$OUT/etc" AW_STATE="$OUT/state" AW_LOG_DIR="$OUT/log"
+export AW_OS_RELEASE="$4"
+export NO_COLOR=1
+source "$ROOT/lib/core.sh"
+source "$ROOT/lib/distro.sh"
+source "$ROOT/lib/ledger.sh"
+source "$ROOT/lib/firewall.sh"
+mkdir -p "$OUT" "$AW_STATE"
+L="$AW_STATE/ledger.jsonl"
+synthetic() {
+  cat > "$L" <<'EOL'
+{"t":1,"by":"install","kind":"pkg","name":"jq","priorInstalled":false}
+{"t":1,"by":"install","kind":"pkg","name":"ufw","priorInstalled":false}
+{"t":1,"by":"install","kind":"pkg","name":"git","priorInstalled":true}
+{"t":1,"by":"install","kind":"dir","path":"/opt/alwayswork","existed":false}
+{"t":2,"by":"bootstrap","kind":"firewall","backend":"ufw","priorActive":false,"priorRules":"abc"}
+{"t":2,"by":"bootstrap","kind":"ssh","unit":"sshd","priorEnabled":true,"priorActive":true,"dropins":"/etc/ssh/sshd_config.d/*alwayswork*.conf"}
+{"t":3,"by":"agents.dsh","kind":"file","path":"/etc/systemd/system/alwayswork-webui.service","existed":false}
+{"t":3,"by":"agents.dsh","kind":"unit","name":"alwayswork-webui.service","existed":false,"priorEnabled":false,"priorActive":false}
+{"t":3,"by":"control.join","kind":"service","name":"sshd","priorEnabled":true,"priorActive":false}
+{"t":4,"by":"provision","kind":"hostname","prior":"ubuntu"}
+EOL
+}
+case "$SCENARIO" in
+  record)
+    AW_LEDGER_BY=test
+    ledger_record pkg "name=ufw" "priorInstalled:=false" || exit 1
+    ledger_record file "path=/etc/x y" "existed:=true" "sha=abc" || exit 1
+    [[ "$(wc -l < "$L")" == "2" ]] || exit 1
+    jq -e . "$L" >/dev/null || exit 1
+    [[ "$(sed -n 1p "$L" | jq -r '.by + " " + .kind + " " + .name + " " + (.priorInstalled|tostring) + " " + (.t|type)')" == "test pkg ufw false number" ]] || exit 1
+    [[ "$(sed -n 2p "$L" | jq -r '.path')" == "/etc/x y" ]] || exit 1
+    ! ledger_record pkg "bad key=1" 2>/dev/null || exit 1
+    ;;
+  record-dry)
+    DRY_RUN=1 ledger_record pkg "name=ufw" "priorInstalled:=false" 2>"$OUT/dry" || exit 1
+    [[ ! -e "$L" ]] || exit 1
+    grep -q "\[dry-run\] ledger pkg name=ufw" "$OUT/dry" || exit 1
+    ;;
+  file-before)
+    printf 'original\n' > "$OUT/conf"
+    ledger_file_before "$OUT/conf" || exit 1
+    ledger_file_before "$OUT/missing" || exit 1
+    sha="$(sha256sum "$OUT/conf" | cut -d' ' -f1)"
+    [[ "$(sed -n 1p "$L" | jq -r '.kind + " " + (.existed|tostring) + " " + .sha')" == "file true $sha" ]] || exit 1
+    [[ "$(cat "$AW_STATE/ledger.d/$sha")" == "original" ]] || exit 1
+    [[ "$(sed -n 2p "$L" | jq -r '(.existed|tostring)')" == "false" ]] || exit 1
+    # idempotent: the same path is never recorded twice (the first entry wins)
+    printf 'changed\n' > "$OUT/conf"
+    ledger_file_before "$OUT/conf" || exit 1
+    [[ "$(wc -l < "$L")" == "2" ]] || exit 1
+    ;;
+  pkg-before)
+    pkg_is_installed() { [[ "$1" == "git" ]]; }
+    ledger_pkg_before git ufw || exit 1
+    ledger_pkg_before ufw || exit 1
+    [[ "$(jq -r 'select(.name=="git") | .priorInstalled' "$L")" == "true" ]] || exit 1
+    [[ "$(jq -r 'select(.name=="ufw") | .priorInstalled' "$L")" == "false" ]] || exit 1
+    [[ "$(wc -l < "$L")" == "2" ]] || exit 1
+    ;;
+  unit-before)
+    ledger_unit alwayswork-x.service || exit 1
+    ledger_unit alwayswork-x.service || exit 1
+    [[ "$(jq -r '.kind + " " + .name + " " + (.existed|tostring)' "$L")" == "unit alwayswork-x.service false" ]] || exit 1
+    ;;
+  restore-dry)
+    synthetic
+    DRY_RUN=1 ledger_restore 2>"$OUT/plan" || exit 1
+    [[ "$(wc -l < "$L")" == "10" ]] || exit 1           # unchanged
+    [[ ! -e "$AW_STATE/decommission.json" ]] || exit 1   # nothing marked
+    ;;
+  restore-keep)
+    synthetic
+    DRY_RUN=1 ledger_restore --keep-foundation 2>"$OUT/plan" || exit 1
+    ;;
+  restore-real)
+    # Only kinds that never touch systemd/hostname: file and dir, for real.
+    mkdir -p "$OUT/root/created" "$OUT/root/kept"
+    printf 'ours\n' > "$OUT/root/new.conf"
+    printf 'ours\n' > "$OUT/root/replaced.conf"
+    printf 'theirs\n' > "$OUT/prior"
+    sha="$(sha256sum "$OUT/prior" | cut -d' ' -f1)"
+    mkdir -p "$AW_STATE/ledger.d"; cp "$OUT/prior" "$AW_STATE/ledger.d/$sha"
+    jq -cn --arg p "$OUT/root/kept" '{t:1,by:"install",kind:"dir",path:$p,existed:true}' > "$L"
+    jq -cn --arg p "$OUT/root/created" '{t:1,by:"install",kind:"dir",path:$p,existed:false}' >> "$L"
+    jq -cn --arg p "$OUT/root/replaced.conf" --arg s "$sha" '{t:2,by:"core",kind:"file",path:$p,existed:true,sha:$s}' >> "$L"
+    jq -cn --arg p "$OUT/root/lost.conf" '{t:2,by:"core",kind:"file",path:$p,existed:true,sha:"0000"}' >> "$L"
+    jq -cn --arg p "$OUT/root/new.conf" '{t:3,by:"core",kind:"file",path:$p,existed:false}' >> "$L"
+    printf 'ours\n' > "$OUT/root/lost.conf"
+    ledger_restore 2>"$OUT/real"; rc=$?
+    [[ "$rc" != "0" ]] || exit 1                                   # one entry (no copy) failed
+    [[ ! -e "$OUT/root/new.conf" ]] || exit 1                      # deleted
+    [[ "$(cat "$OUT/root/replaced.conf")" == "theirs" ]] || exit 1 # prior content back
+    [[ -f "$OUT/root/lost.conf" ]] || exit 1                       # never deleted
+    [[ ! -d "$OUT/root/created" ]] || exit 1                       # our empty dir removed
+    [[ -d "$OUT/root/kept" ]] || exit 1                            # pre-existing dir kept
+    [[ "$(jq -c '.restored' "$AW_STATE/decommission.json")" == "[1,2,3,5]" ]] || exit 1
+    # re-run: only the failed entry is attempted again
+    ledger_restore 2>"$OUT/again"; [[ "$?" != "0" ]] || exit 1
+    grep -q "1 failed" "$OUT/again" || exit 1
+    grep -q "4 already done" "$OUT/again" || exit 1
+    ;;
+  self-remove)
+    marker="$OUT/marker"; touch "$marker"
+    ! ledger_self_remove 2>"$OUT/self" || exit 1
+    [[ -e "$marker" && -d "$ROOT/lib" ]] || exit 1
+    grep -q "refusing" "$OUT/self" || exit 1
+    AW_TEST=0
+    ! ledger_self_remove 2>"$OUT/self2" || exit 1                  # not under /opt: still refused
+    grep -q "not under /opt" "$OUT/self2" || exit 1
+    ;;
+  self-remove-dry)
+    DRY_RUN=1 ledger_self_remove 2>"$OUT/self" || exit 1
+    grep -q "rm -rf $ROOT $AW_ETC $AW_LOG_DIR $AW_STATE" "$OUT/self" || exit 1
+    [[ -d "$ROOT/lib" ]] || exit 1
+    ;;
+  *) printf 'unknown scenario: %s\n' "$SCENARIO" >&2; exit 2 ;;
+esac
+EOS
+run_ledger() { rm -rf "$TMP/lout"; mkdir -p "$TMP/lout"; bash "$TMP/ledger-probe.sh" "$ROOT" "$TMP/lout" "$1" "$TMP/os/arch" > "$TMP/ledger.out" 2>&1; }
+plan() { grep -n "$1" "$TMP/lout/plan" | head -1 | cut -d: -f1; }
+check "ledger_record writes valid JSON lines"     'run_ledger record'
+check "ledger_record honours dry-run"             'run_ledger record-dry'
+check "ledger_file_before keeps a copy, once"     'run_ledger file-before'
+check "ledger_pkg_before marks priorInstalled"    'run_ledger pkg-before'
+check "ledger_unit records once"                  'run_ledger unit-before'
+check "dry-run restore changes nothing"           'run_ledger restore-dry'
+check "dry-run restore plans in reverse order"    '[[ "$(plan "restore #10 hostname")" -lt "$(plan "restore #8 unit")" && "$(plan "restore #8 unit")" -lt "$(plan "restore #7 file")" && "$(plan "restore #7 file")" -lt "$(plan "restore #5 firewall")" && "$(plan "restore #5 firewall")" -lt "$(plan "restore #2 pkg")" ]]'
+check "dry-run restore undoes each kind"          'grep -q "hostnamectl set-hostname ubuntu" "$TMP/lout/plan" && grep -q "systemctl disable --now alwayswork-webui.service" "$TMP/lout/plan" && grep -q "rm -f /etc/systemd/system/alwayswork-webui.service" "$TMP/lout/plan" && grep -q "ufw --force disable" "$TMP/lout/plan" && grep -q "pacman -Rns --noconfirm ufw" "$TMP/lout/plan" && grep -q "systemctl restart sshd" "$TMP/lout/plan"'
+check "restore keeps a package that was there"    'grep -q "git was already installed; kept" "$TMP/lout/plan" && ! grep -q "pacman -Rns --noconfirm git" "$TMP/lout/plan"'
+check "restore removes jq last"                   '[[ "$(plan "restore #1 pkg: remove jq")" -gt "$(plan "restore #2 pkg")" ]]'
+check "--keep-foundation skips firewall and ssh"  'run_ledger restore-keep && grep -q "restore #5 firewall: kept" "$TMP/lout/plan" && grep -q "restore #6 ssh: kept" "$TMP/lout/plan" && ! grep -q "ufw --force" "$TMP/lout/plan" && ! grep -q "systemctl.*sshd" "$TMP/lout/plan"'
+check "--keep-foundation keeps the installer's footprint" 'grep -q "restore #2 pkg: kept (foundation, by install)" "$TMP/lout/plan" && ! grep -q "pacman -Rns" "$TMP/lout/plan" && grep -q "hostnamectl set-hostname ubuntu" "$TMP/lout/plan"'
+check "real restore: files back, failures loud, resumable" 'run_ledger restore-real'
+check "self-remove refuses under AW_TEST / outside /opt" 'run_ledger self-remove'
+check "self-remove dry-run only prints the plan" 'run_ledger self-remove-dry'
+check "decommission --help documents restore flags" 'run_aw decommission --help && has "keep-foundation" && has "keep-agent" && has "restore"'
+check "help documents the restore flags"          'run_aw help && has "keep-foundation"'
+check "drain order restore:false keeps the agent" 'grep -q "\.restore == false" "$ROOT/lib/control.sh" && grep -q "decommission_run 0 \"\$mode\"" "$ROOT/lib/control.sh"'
+check "restore runs between wipe and report"      'grep -A4 "decommission_phase_wipe || return 1" "$ROOT/lib/control.sh" | grep -q "decommission_phase_restore"'
+check "ledger lib is sourced by the cli"          'grep -q "lib/ledger.sh" "$ROOT/bin/alwayswork"'
+check "aw_write records the prior file"           'grep -q "ledger_file_before" "$ROOT/lib/core.sh" && grep -q "ledger_unit" "$ROOT/lib/core.sh"'
+check "pkg_install records prior packages"        'grep -q "ledger_pkg_before" "$ROOT/lib/distro.sh"'
+check "cap_install attributes entries to the cap" 'grep -q "AW_LEDGER_BY=\"\$id\"" "$ROOT/lib/capability.sh"'
+check "bootstrap records firewall and ssh first"  'grep -q "ledger_firewall_before" "$ROOT/commands/bootstrap.sh" && grep -q "ledger_ssh_before" "$ROOT/commands/bootstrap.sh"'
+check "usb provisioning records the hostname"     'grep -B1 "run hostnamectl set-hostname" "$ROOT/lib/control.sh" | grep -q "ledger_hostname_before"'
+if have yq; then
+  # End to end, dry-run, against a seeded ledger: the CLI plans the reverse
+  # replay, removes itself last, and writes nothing.
+  mkdir -p "$AW_STATE"
+  printf '%s\n' '{"t":1,"by":"install","kind":"pkg","name":"ufw","priorInstalled":false}' \
+    '{"t":2,"by":"bootstrap","kind":"hostname","prior":"pristine"}' > "$AW_STATE/ledger.jsonl"
+  check "decommission dry-run replays the ledger"   'run_aw --dry-run --yes decommission && has "restore #2 hostname: pristine" && has "restore #1 pkg: remove ufw" && has "removing alwayswork itself" && [[ ! -e "$AW_STATE/decommission.json" && -f "$AW_STATE/ledger.jsonl" ]]'
+  check "decommission --keep-foundation keeps install entries" 'run_aw --dry-run --yes decommission --keep-foundation && has "restore #1 pkg: kept" && ! has "removing alwayswork itself" && has "kept the hardened base"'
+  check "decommission --keep-agent skips restore" 'run_aw --dry-run --yes decommission --keep-agent && ! has "restore #" && has "keep-agent"'
+  rm -f "$AW_STATE/ledger.jsonl"
+fi
+
 echo "== distro =="
 
 # Mock os-release files for the family matrix ($TMP/os/arch is the suite-wide
@@ -448,6 +614,11 @@ cat > "$TMP/sopsbin/apt-get" <<'EOS'
 echo "apt-get $*" >> "$PKGLOG"
 exit 0
 EOS
+cat > "$TMP/sopsbin/dpkg-query" <<'EOS'
+#!/bin/bash
+# Fake dpkg-query -s: "installed" only for names listed in DPKG_INSTALLED.
+[[ " ${DPKG_INSTALLED:-} " == *" ${2:-} "* ]]
+EOS
 cat > "$TMP/sopsbin/pacman" <<'EOS'
 #!/bin/bash
 echo "pacman $*" >> "$PKGLOG"
@@ -475,7 +646,8 @@ esac
 EOS
 sops_probe() { # <install.sh path> <mode>
   rm -f "$TMP/dpkg-failed" "$TMP/curl-marker"
-  export PKGLOG="$TMP/sopspkglog" CURL_MARKER="$TMP/curl-marker" TMP
+  # The installer's footprint ledger goes to a scratch state dir, never the host.
+  export PKGLOG="$TMP/sopspkglog" CURL_MARKER="$TMP/curl-marker" TMP STATE_DIR="$TMP/sopsstate"
   : > "$PKGLOG"
   PATH="$TMP/sopsbin:/usr/bin:/bin" bash "$TMP/sops-probe.sh" "$1" "$2" > "$TMP/sops.out" 2>&1
 }
@@ -496,6 +668,14 @@ check "debian apt list excludes sops" \
   'rm -f "$TMP/sopsbin/sops"; SHA256_STUB="927c45f2ccb5b1c9acb1e80c7befaea0672c721fd3f222697a51e0a7081e3f3b" sops_probe "$ROOT" deps && grep -qx "apt-get install -y git curl jq openssl age restic ufw" "$PKGLOG" && ! grep -q "^apt-get.*sops" "$PKGLOG"'
 check "arch pacman still installs sops from repos" \
   'sops_probe "$ROOT" archdeps && grep -qx "pacman -Syu --needed --noconfirm git curl jq openssl age restic ufw sops" "$PKGLOG"'
+
+# footprint ledger: the installer's own entries, same format, checked before the package manager runs
+check "installer records packages before installing" \
+  'rm -rf "$TMP/sopsstate"; DPKG_INSTALLED="jq" sops_probe "$ROOT" deps && jq -e . "$TMP/sopsstate/ledger.jsonl" >/dev/null && [[ "$(jq -r "select(.name==\"jq\") | .by + \" \" + .kind + \" \" + (.priorInstalled|tostring)" "$TMP/sopsstate/ledger.jsonl")" == "install pkg true" ]] && [[ "$(jq -r "select(.name==\"ufw\") | .priorInstalled" "$TMP/sopsstate/ledger.jsonl")" == "false" ]]'
+check "installer never records a package twice" \
+  'DPKG_INSTALLED="jq" sops_probe "$ROOT" deps && DPKG_INSTALLED="ufw" sops_probe "$ROOT" deps && [[ "$(grep -c "\"name\":\"ufw\"" "$TMP/sopsstate/ledger.jsonl")" == "1" ]] && [[ "$(jq -r "select(.name==\"ufw\") | .priorInstalled" "$TMP/sopsstate/ledger.jsonl")" == "false" ]]'
+check "installer dry-run plans its ledger entries" \
+  'bash "$ROOT/install.sh" --dry-run --skip-deps --no-alias > "$TMP/ildr" 2>&1 && grep -q "ledger dir path=/opt/alwayswork" "$TMP/ildr" && grep -q "ledger file path=/usr/local/bin/alwayswork" "$TMP/ildr" && grep -q "ledger file path=/opt/alwayswork/bin/yq" "$TMP/ildr"'
 
 echo "== agents.dsh zero-touch =="
 # Exercise capabilities/agents.dsh/ensure.sh without touching the host:

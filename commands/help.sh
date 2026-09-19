@@ -25,7 +25,8 @@ OPERATIONS
   clean                     Remove orphans, caches and junk
   enroll --control URL [--token T|--usb]  Announce this worker; USB or console approval
   enroll --status           Show enrollment / claim / decommission state
-  decommission [--local]    Remove this node from the fleet (drain, tombstone, wipe)
+  decommission [--local]    Leave the fleet: drain, tombstone, wipe, restore the machine
+      [--keep-foundation|--keep-agent]   ... but keep the hardening / keep alwayswork
   reset [--purge]           Forget this identity so the node can re-join
   agent [interval]          Report state and reconcile (run as a service)
 
