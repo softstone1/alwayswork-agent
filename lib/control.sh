@@ -832,8 +832,8 @@ control_agent() {
     control_agent_tick
     return $?
   fi
-  log "control agent: reporting every ${interval}s"
-  local fails=0 pause i
+  log "control agent: heartbeat every ${interval}s, long-polling for desired state in between"
+  local fails=0 pause i deadline
   while :; do
     if control_agent_tick; then
       fails=0
@@ -845,8 +845,41 @@ control_agent() {
     # transient outage neither kills the daemon nor hammers the server.
     pause="$interval"; i=1
     while (( i < fails && pause < 600 )); do pause=$(( pause * 2 )); i=$(( i + 1 )); done
-    sleep "$pause"
+    if (( fails > 0 )); then sleep "$pause"; continue; fi
+    # The mailbox (SYSTEM_SPEC §14): between heartbeats, hold a long-poll open
+    # on /v1/device/desired. The per-device Durable Object wakes it the moment
+    # an operator changes anything, so desired state lands in well under a
+    # second instead of at the next tick — with no extra client or daemon.
+    deadline=$(( $(date +%s) + pause ))
+    while (( $(date +%s) < deadline )); do
+      control_wait_desired || { sleep 5; break; }
+    done
   done
+}
+
+# One long-poll for desired state. Returns 0 when it ended normally (change
+# applied, or the server's ~25 s wait lapsed unchanged), 1 on an error the
+# caller should back off from.
+control_wait_desired() {
+  local applied delivery rc ver
+  control_clock_trusted 2>/dev/null || return 1
+  applied="$(cfg_get '.control.appliedVersion' 0)"
+  delivery=""; rc=1
+  if delivery="$(control_verified_delivery "/v1/device/desired?since=$applied")"; then rc=0; else rc=$?; fi
+  case "$rc" in
+    2) control_handle_revoked ;;
+    3) return 0 ;;                       # woke unchanged (timeout): poll again
+    0) ;;
+    *) return 1 ;;
+  esac
+  if ! control_apply_delivery "$delivery"; then
+    warn "control: apply failed; it stays unacked and will be retried"
+    return 1
+  fi
+  ver="$(jq -r '.config.configVersion // 0' <<<"$delivery")"
+  control_call POST /v1/device/ack "$(jq -n --argjson v "$ver" '{configVersion:$v}')" >/dev/null \
+    || warn "control: ack of version $ver failed (transient); the heartbeat will report it"
+  return 0
 }
 
 control_agent_tick() {
