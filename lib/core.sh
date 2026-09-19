@@ -182,7 +182,26 @@ aw_write() {
     cat >/dev/null
     return 0
   fi
+  _aw_write_ledger "$path"
   cat > "$path"
+}
+
+# Record a file's prior state in the footprint ledger (lib/ledger.sh) before
+# aw_write replaces it, so decommission can put it back. Our own tree, config
+# and state are not ledgered: a full restore removes them wholesale at the
+# end. A unit file written under /etc/systemd/system is also recorded as a
+# unit, so restore disables it before deleting it.
+_aw_write_ledger() {
+  local path="$1"
+  have ledger_file_before || return 0
+  case "$path" in
+    "$AW_STATE"/*|"$AW_ETC"/*|"$AW_ROOT"/*) return 0 ;;
+  esac
+  ledger_file_before "$path" || warn "ledger: could not record $path"
+  case "$path" in
+    /etc/systemd/system/*.service|/etc/systemd/system/*.timer)
+      ledger_unit "$(basename "$path")" || warn "ledger: could not record unit $(basename "$path")" ;;
+  esac
 }
 
 aw_random_hex() {

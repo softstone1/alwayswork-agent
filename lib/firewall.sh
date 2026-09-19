@@ -39,6 +39,11 @@ fw_rule_untrack() {
 }
 
 fw_ensure() {
+  # Footprint ledger: the firewall as it was before we touched it. Recorded
+  # once; later calls (aw apply, the deferred lockdown) find the entry.
+  if have ledger_firewall_before; then
+    ledger_firewall_before || warn "ledger: could not record the firewall state"
+  fi
   case "$(fw_backend)" in
     ufw)
       run ufw --force default deny incoming

@@ -102,8 +102,12 @@ _distro_apt_update() {
 # pkg_install <pkgs...> — install system packages (translated via distro_pkg).
 pkg_install() {
   local -a pkgs=() p
+  (( $# > 0 )) || return 0
+  # Footprint ledger: which of these were already here (lib/ledger.sh).
+  if have ledger_pkg_before; then
+    ledger_pkg_before "$@" || warn "ledger: could not record packages: $*"
+  fi
   for p in "$@"; do pkgs+=("$(distro_pkg "$p")"); done
-  (( "${#pkgs[@]}" > 0 )) || return 0
   case "$(distro_family)" in
     arch)   run pacman -S --needed --noconfirm "${pkgs[@]}" ;;
     debian) _distro_apt_update
