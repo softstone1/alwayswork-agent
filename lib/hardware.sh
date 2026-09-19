@@ -21,6 +21,23 @@ hw_gpu() {
   lspci 2>/dev/null | grep -Ei 'vga|3d|display' | sed 's/^[^:]*: //' | head -1
 }
 
+hw_cpu_model() { sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo 2>/dev/null | head -1; }
+
+# GPUs as JSON [{model, vramMb, vendor}]: nvidia-smi when present (VRAM
+# known), else every VGA/3D device from lspci (model only). Capacity, not load.
+hw_gpus_json() {
+  if have nvidia-smi; then
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null \
+      | awk -F', *' 'NF>=2 {printf "%s\t%s\n", $1, $2}' \
+      | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {model:.[0], vramMb:(.[1]|tonumber), vendor:"nvidia"})' 2>/dev/null && return 0
+  fi
+  if have lspci; then
+    lspci 2>/dev/null | grep -Ei 'vga|3d|display' | sed 's/^[^ ]* [^:]*: //; s/ (rev [^)]*)$//' | cut -c1-128 \
+      | jq -R -s 'split("\n") | map(select(length>0) | {model:., vendor:(if test("NVIDIA";"i") then "nvidia" elif test("AMD|ATI";"i") then "amd" elif test("Intel";"i") then "intel" else "other" end)})' 2>/dev/null && return 0
+  fi
+  printf '[]'
+}
+
 hw_free_disk_gb() { df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc '0-9'; }
 hw_virt()         { systemd-detect-virt 2>/dev/null || echo unknown; }
 

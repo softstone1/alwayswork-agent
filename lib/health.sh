@@ -141,6 +141,11 @@ control_health_json() {
   fi
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
+  # Inventory (capacity, not load): what this box is made of.
+  _health_str cpuModel "$(hw_cpu_model 2>/dev/null | head -c 128)"
+  _health_raw gpus "$(hw_gpus_json 2>/dev/null)"
+  _health_str virt "$(hw_virt 2>/dev/null | head -c 32)"
+  _health_num diskRootFreeGb "$(hw_free_disk_gb 2>/dev/null || true)"
   # Last update result (lib/updates.sh): what a rollout wave waits for.
   local upd; upd="$(declare -F upd_result_json >/dev/null && upd_result_json || printf null)"
   [[ "$upd" != "null" ]] && _health_raw update "$upd"
