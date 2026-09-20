@@ -1,7 +1,7 @@
 # Agent-driven bootstrap
 
 > **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
-> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> defines Apps, Packages, Components, Instances, Nodes, Volumes, Connections and
 > Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
 > `apps` configuration remain compatibility contracts. This document describes
 > existing mechanics; the new runtime features are planned unless stated otherwise.

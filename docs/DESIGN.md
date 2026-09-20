@@ -1,7 +1,7 @@
 # Design
 
 > **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
-> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> defines Apps, Packages, Components, Instances, Nodes, Volumes, Connections and
 > Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
 > `apps` configuration remain compatibility contracts. This document describes
 > existing mechanics; the new runtime features are planned unless stated otherwise.
@@ -107,3 +107,10 @@ components. Container software dependencies belong to package environments, not 
 host app installer. The first refactor classifies catalog entries without changing
 wire formats. Future instance-scoped state is required before multiple independent
 copies of a singleton capability can run. See the canonical app model for sequence.
+
+## Terminology
+
+Use Node for enrolled compute in both the console and agent documentation. Host
+means its underlying OS or execution boundary (host metrics, host-level services).
+An app environment is separate from the host OS. Onboarding may say “Connect a
+computer or VPS.” Existing machineId fields and CLI/protocol identifiers are unchanged.
