@@ -1,4 +1,524 @@
 {
+  "apps": [
+    {
+      "category": "security",
+      "description": "Modern file encryption",
+      "id": "age",
+      "manager": "pacman",
+      "name": "age"
+    },
+    {
+      "category": "agents",
+      "description": "AI pair programming in the terminal",
+      "id": "aider",
+      "manager": "pipx",
+      "name": "aider"
+    },
+    {
+      "category": "cli",
+      "description": "Multi-protocol download utility",
+      "id": "aria2",
+      "manager": "pacman",
+      "name": "aria2"
+    },
+    {
+      "category": "dev",
+      "description": "gcc, make and build essentials",
+      "id": "base-devel",
+      "manager": "pacman",
+      "name": "base-devel"
+    },
+    {
+      "category": "cli",
+      "description": "cat with syntax highlighting",
+      "id": "bat",
+      "manager": "pacman",
+      "name": "bat"
+    },
+    {
+      "category": "storage",
+      "description": "Deduplicating backup program",
+      "id": "borg",
+      "manager": "pacman",
+      "name": "BorgBackup"
+    },
+    {
+      "category": "monitoring",
+      "description": "Resource monitor TUI",
+      "id": "btop",
+      "manager": "pacman",
+      "name": "btop"
+    },
+    {
+      "category": "containers",
+      "description": "Build OCI images without a daemon",
+      "id": "buildah",
+      "manager": "pacman",
+      "name": "buildah"
+    },
+    {
+      "category": "security",
+      "description": "Antivirus scanner",
+      "id": "clamav",
+      "manager": "pacman",
+      "name": "ClamAV"
+    },
+    {
+      "category": "agents",
+      "description": "Anthropic coding agent CLI",
+      "id": "claude-code",
+      "manager": "npm",
+      "name": "Claude Code"
+    },
+    {
+      "category": "network",
+      "description": "Cloudflare Tunnel client",
+      "id": "cloudflared",
+      "manager": "paru",
+      "name": "cloudflared"
+    },
+    {
+      "category": "dev",
+      "description": "Cross-platform build system",
+      "id": "cmake",
+      "manager": "pacman",
+      "name": "cmake"
+    },
+    {
+      "category": "agents",
+      "description": "OpenAI coding agent CLI",
+      "id": "codex",
+      "manager": "npm",
+      "name": "Codex CLI"
+    },
+    {
+      "category": "cli",
+      "description": "Better git diffs",
+      "id": "delta",
+      "manager": "pacman",
+      "name": "delta"
+    },
+    {
+      "category": "cli",
+      "description": "Per-directory environment loader",
+      "id": "direnv",
+      "manager": "pacman",
+      "name": "direnv"
+    },
+    {
+      "category": "containers",
+      "description": "Explore container image layers",
+      "id": "dive",
+      "manager": "pacman",
+      "name": "dive"
+    },
+    {
+      "category": "network",
+      "description": "DNS and domain troubleshooting",
+      "id": "dnstools",
+      "manager": "pacman",
+      "name": "dig / whois"
+    },
+    {
+      "category": "containers",
+      "description": "Container engine",
+      "id": "docker",
+      "manager": "pacman",
+      "name": "docker"
+    },
+    {
+      "category": "cli",
+      "description": "Disk usage overview",
+      "id": "duf",
+      "manager": "pacman",
+      "name": "duf"
+    },
+    {
+      "category": "cli",
+      "description": "Intuitive du replacement",
+      "id": "dust",
+      "manager": "pacman",
+      "name": "dust"
+    },
+    {
+      "category": "cli",
+      "description": "Modern ls replacement",
+      "id": "eza",
+      "manager": "pacman",
+      "name": "eza"
+    },
+    {
+      "category": "security",
+      "description": "Ban brute-force attackers",
+      "id": "fail2ban",
+      "manager": "pacman",
+      "name": "fail2ban"
+    },
+    {
+      "category": "cli",
+      "description": "Simple, fast alternative to find",
+      "id": "fd",
+      "manager": "pacman",
+      "name": "fd"
+    },
+    {
+      "category": "media",
+      "description": "Audio and video toolkit",
+      "id": "ffmpeg",
+      "manager": "pacman",
+      "name": "ffmpeg"
+    },
+    {
+      "category": "cli",
+      "description": "Fuzzy finder for the shell",
+      "id": "fzf",
+      "manager": "pacman",
+      "name": "fzf"
+    },
+    {
+      "category": "agents",
+      "description": "Google coding agent CLI",
+      "id": "gemini-cli",
+      "manager": "npm",
+      "name": "Gemini CLI"
+    },
+    {
+      "category": "cli",
+      "description": "GitHub CLI",
+      "id": "gh",
+      "manager": "pacman",
+      "name": "gh"
+    },
+    {
+      "category": "dev",
+      "description": "Git large file storage",
+      "id": "git-lfs",
+      "manager": "pacman",
+      "name": "git-lfs"
+    },
+    {
+      "category": "cli",
+      "description": "Markdown renderer for the terminal",
+      "id": "glow",
+      "manager": "pacman",
+      "name": "glow"
+    },
+    {
+      "category": "security",
+      "description": "Signing and encryption",
+      "id": "gnupg",
+      "manager": "pacman",
+      "name": "GnuPG"
+    },
+    {
+      "category": "dev",
+      "description": "Go toolchain",
+      "id": "go",
+      "manager": "pacman",
+      "name": "go"
+    },
+    {
+      "category": "dev",
+      "description": "Post-modern modal editor",
+      "id": "helix",
+      "manager": "pacman",
+      "name": "helix"
+    },
+    {
+      "category": "monitoring",
+      "description": "Interactive process viewer",
+      "id": "htop",
+      "manager": "pacman",
+      "name": "htop"
+    },
+    {
+      "category": "cli",
+      "description": "User-friendly HTTP client",
+      "id": "httpie",
+      "manager": "pacman",
+      "name": "httpie"
+    },
+    {
+      "category": "media",
+      "description": "Image conversion and editing",
+      "id": "imagemagick",
+      "manager": "pacman",
+      "name": "ImageMagick"
+    },
+    {
+      "category": "network",
+      "description": "Network bandwidth testing",
+      "id": "iperf3",
+      "manager": "pacman",
+      "name": "iperf3"
+    },
+    {
+      "category": "cli",
+      "description": "Command runner (make alternative)",
+      "id": "just",
+      "manager": "pacman",
+      "name": "just"
+    },
+    {
+      "category": "containers",
+      "description": "Terminal UI for docker",
+      "id": "lazydocker",
+      "manager": "pacman",
+      "name": "lazydocker"
+    },
+    {
+      "category": "cli",
+      "description": "Terminal UI for git",
+      "id": "lazygit",
+      "manager": "pacman",
+      "name": "lazygit"
+    },
+    {
+      "category": "agents",
+      "description": "Run prompts against many models from the CLI",
+      "id": "llm",
+      "manager": "pipx",
+      "name": "llm"
+    },
+    {
+      "category": "monitoring",
+      "description": "Temperature and fan monitoring",
+      "id": "lm_sensors",
+      "manager": "pacman",
+      "name": "lm_sensors"
+    },
+    {
+      "category": "security",
+      "description": "Security auditing tool",
+      "id": "lynis",
+      "manager": "pacman",
+      "name": "lynis"
+    },
+    {
+      "category": "network",
+      "description": "traceroute plus ping",
+      "id": "mtr",
+      "manager": "pacman",
+      "name": "mtr"
+    },
+    {
+      "category": "cli",
+      "description": "Interactive disk usage analyzer",
+      "id": "ncdu",
+      "manager": "pacman",
+      "name": "ncdu"
+    },
+    {
+      "category": "dev",
+      "description": "Modal text editor",
+      "id": "neovim",
+      "manager": "pacman",
+      "name": "neovim"
+    },
+    {
+      "category": "storage",
+      "description": "Network filesystem client/server",
+      "id": "nfs-utils",
+      "manager": "pacman",
+      "name": "NFS utilities"
+    },
+    {
+      "category": "network",
+      "description": "Network scanner",
+      "id": "nmap",
+      "manager": "pacman",
+      "name": "nmap"
+    },
+    {
+      "category": "monitoring",
+      "description": "GPU monitor for NVIDIA/AMD/Intel",
+      "id": "nvtop",
+      "manager": "pacman",
+      "name": "nvtop"
+    },
+    {
+      "category": "agents",
+      "description": "Run local models (optional; most boxes use cloud LLMs)",
+      "id": "ollama",
+      "manager": "pacman",
+      "name": "Ollama"
+    },
+    {
+      "category": "agents",
+      "description": "Open-source terminal coding agent",
+      "id": "opencode",
+      "manager": "npm",
+      "name": "opencode"
+    },
+    {
+      "category": "dev",
+      "description": "Fast, disk-efficient package manager",
+      "id": "pnpm",
+      "manager": "npm",
+      "name": "pnpm"
+    },
+    {
+      "category": "containers",
+      "description": "Daemonless container engine",
+      "id": "podman",
+      "manager": "pacman",
+      "name": "podman"
+    },
+    {
+      "category": "cli",
+      "description": "Modern ps replacement",
+      "id": "procs",
+      "manager": "pacman",
+      "name": "procs"
+    },
+    {
+      "category": "storage",
+      "description": "Sync to cloud storage",
+      "id": "rclone",
+      "manager": "pacman",
+      "name": "rclone"
+    },
+    {
+      "category": "storage",
+      "description": "Encrypted, deduplicated backups",
+      "id": "restic",
+      "manager": "pacman",
+      "name": "restic"
+    },
+    {
+      "category": "cli",
+      "description": "Fast recursive regex search (rg)",
+      "id": "ripgrep",
+      "manager": "pacman",
+      "name": "ripgrep"
+    },
+    {
+      "category": "security",
+      "description": "Rootkit and malware scanner",
+      "id": "rkhunter",
+      "manager": "pacman",
+      "name": "rkhunter"
+    },
+    {
+      "category": "cli",
+      "description": "Fast incremental file transfer",
+      "id": "rsync",
+      "manager": "pacman",
+      "name": "rsync"
+    },
+    {
+      "category": "dev",
+      "description": "Rust toolchain manager",
+      "id": "rustup",
+      "manager": "pacman",
+      "name": "rustup"
+    },
+    {
+      "category": "storage",
+      "description": "SMB file sharing",
+      "id": "samba",
+      "manager": "pacman",
+      "name": "Samba"
+    },
+    {
+      "category": "cli",
+      "description": "Intuitive sed replacement",
+      "id": "sd",
+      "manager": "pacman",
+      "name": "sd"
+    },
+    {
+      "category": "containers",
+      "description": "Inspect and copy container images",
+      "id": "skopeo",
+      "manager": "pacman",
+      "name": "skopeo"
+    },
+    {
+      "category": "monitoring",
+      "description": "Disk health monitoring",
+      "id": "smartmontools",
+      "manager": "pacman",
+      "name": "smartmontools"
+    },
+    {
+      "category": "security",
+      "description": "Encrypted config and secrets",
+      "id": "sops",
+      "manager": "pacman",
+      "name": "sops"
+    },
+    {
+      "category": "cli",
+      "description": "Cross-shell prompt",
+      "id": "starship",
+      "manager": "pacman",
+      "name": "starship"
+    },
+    {
+      "category": "monitoring",
+      "description": "sar, iostat and friends",
+      "id": "sysstat",
+      "manager": "pacman",
+      "name": "sysstat"
+    },
+    {
+      "category": "network",
+      "description": "Private mesh VPN",
+      "id": "tailscale",
+      "manager": "pacman",
+      "name": "tailscale"
+    },
+    {
+      "category": "cli",
+      "description": "Fast tldr client",
+      "id": "tealdeer",
+      "manager": "pacman",
+      "name": "tealdeer"
+    },
+    {
+      "category": "cli",
+      "description": "Terminal multiplexer",
+      "id": "tmux",
+      "manager": "pacman",
+      "name": "tmux"
+    },
+    {
+      "category": "cli",
+      "description": "Directory tree viewer",
+      "id": "tree",
+      "manager": "pacman",
+      "name": "tree"
+    },
+    {
+      "category": "dev",
+      "description": "Extremely fast Python package manager",
+      "id": "uv",
+      "manager": "pacman",
+      "name": "uv"
+    },
+    {
+      "category": "network",
+      "description": "WireGuard VPN userspace tools",
+      "id": "wireguard-tools",
+      "manager": "pacman",
+      "name": "wireguard-tools"
+    },
+    {
+      "category": "media",
+      "description": "Download audio and video",
+      "id": "yt-dlp",
+      "manager": "pacman",
+      "name": "yt-dlp"
+    },
+    {
+      "category": "cli",
+      "description": "Smarter cd",
+      "id": "zoxide",
+      "manager": "pacman",
+      "name": "zoxide"
+    }
+  ],
   "capabilities": [
     {
       "description": "Private encrypted network for administration and break-glass access.",
