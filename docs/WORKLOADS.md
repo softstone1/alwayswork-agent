@@ -1,5 +1,12 @@
 # Workloads: the agent harness as a container
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 The node side of `docs/SYSTEM_SPEC.md` §12 (control repo). Every agent
 harness on a node runs as a **standard OCI container**; the node OS is a
 substrate — a CachyOS desktop, an Ubuntu Server VPS and an Arch mini PC all
@@ -193,3 +200,16 @@ An updated control plane can remove or restore workloads on an individual node.
 and retains dependencies and persistent data. The journal advances only after
 successful convergence, so failed removals are retried. An agent from before
 this change must be upgraded before relying on remote workload removal.
+
+## Apps, components and instances
+
+The current workload helper is the runtime adapter for app components. Existing
+units such as `alwayswork-dsh` and paths under `workspaces/dsh` are singletons;
+multiple packages targeting agents.dsh do not create independent apps. The next
+runtime migration must scope units, volume ownership, interfaces and reports by
+app/component/instance identity and preserve old data explicitly.
+
+Base OS/userspace, runtime and dependency packages form the component environment.
+The node host OS remains independent. Resource changes declare live/restart/migration
+requirements. Compose describes component relationships, never an unvalidated host
+execution escape. Keep persistent volumes outside disposable instance state.

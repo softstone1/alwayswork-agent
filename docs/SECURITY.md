@@ -1,5 +1,12 @@
 # Security model
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 ## Defaults
 
 | Control | Default |
@@ -144,3 +151,17 @@ Neither a tombstone nor a successful API request proves a physical machine has
 wiped its disk. Root compromise, shared-kernel container escapes, and unrestricted
 workload egress remain outside the current guarantees; microVM isolation and
 per-workload egress enforcement are still required for hostile multi-tenancy.
+
+## Shared node security and observability foundation
+
+The node is the enforcement point for identity, signed desired state, runtime
+isolation, approved operation dispatch, credential delivery and telemetry collection.
+Packages request policy; they cannot grant themselves privileges. Centralize
+collector lifecycle, redaction, outbound authentication, buffering and resource
+budgets at the node. App exporters are optional local sources. Never mount an engine
+socket into an app to obtain metrics. Privileged host collection requires a narrowly
+scoped, node-owned adapter, not a general app permission.
+
+Per-app egress, scoped credentials, workload identities and the OTel pipeline are
+required target contracts but not yet fully implemented. Report unsupported features
+and reject requirements the node cannot enforce. AI cannot waive these checks.

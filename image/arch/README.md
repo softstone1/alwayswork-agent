@@ -1,5 +1,12 @@
 # Unattended Arch image for mini PCs
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 `image/arch/` builds a bootable ISO that turns a **blank** mini PC into an
 enrolled AlwaysWork node with nothing typed (SYSTEM_SPEC §4.4). It is the
 Arch-family counterpart of the Ubuntu autoinstall carrier the console

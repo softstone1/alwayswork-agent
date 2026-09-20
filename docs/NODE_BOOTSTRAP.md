@@ -1,5 +1,12 @@
 # Node bootstrap — design and workflow
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 How a bare machine becomes a managed AlwaysWork node: enrolled, converged,
 reachable at its own hostname, and running an agent UI an operator can drive
 from anywhere. This is the target design; §10 lists what is missing today.
@@ -268,3 +275,10 @@ Gaps, in build order:
    `worker.yaml` as `agent.user`.
 5. **Exposure default** — does every node get a public UI, or only groups that
    ask? Suggested: only groups that ask (`expose.webUi.enabled`).
+
+## Foundation scope
+
+Provision the node foundation first: identity, runtime, tunnel, host policy and
+reconciliation. Shared observability/security services belong here as supported
+capabilities. Application packages are deployed separately after readiness; app
+software dependencies do not expand the host bootstrap tool list.

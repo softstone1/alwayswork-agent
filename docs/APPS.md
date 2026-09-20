@@ -1,5 +1,12 @@
 # Apps and tools
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 `aw app` installs tools on demand from a curated catalog; `aw clean` removes
 what is no longer used. Neither is part of the bootstrap, so a fresh worker
 stays minimal.
@@ -67,3 +74,12 @@ in use, the secret store, or agent workspaces.
 
 If something needs a service, firewall rule or config, write a capability.
 If it is just a tool, add it to the catalog.
+
+## Host packages versus application packages
+
+This command manages **host packages**. The historical word `app` in `aw app` is
+not the new product App (a deployment of an application package). Preserve CLI
+compatibility, but expose this catalog under machine host setup. Do not offer nano,
+gh or a language toolchain as an independently running app. Environment dependency
+resolution/builds are a separate planned package pipeline; they do not use host
+`aw app install` behind the scenes.

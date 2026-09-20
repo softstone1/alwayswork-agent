@@ -1,5 +1,12 @@
 # Design
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 ## Goal
 
 Turn a bare CachyOS / Arch mini PC into a **secure AlwaysWork node**, then let
@@ -91,3 +98,12 @@ timer that runs this same path.
 `aw capability add <path>` copies an out-of-tree capability into
 `/etc/alwayswork/capabilities.d`. Discovery walks both the shipped catalog
 and the user directory, so third-party tooling never requires a fork.
+
+## Updated product boundary
+
+The host is a thin node foundation; it owns identity, runtime, security enforcement,
+shared telemetry collection and signed reconciliation. Applications run in isolated
+components. Container software dependencies belong to package environments, not the
+host app installer. The first refactor classifies catalog entries without changing
+wire formats. Future instance-scoped state is required before multiple independent
+copies of a singleton capability can run. See the canonical app model for sequence.

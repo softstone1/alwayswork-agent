@@ -1,5 +1,12 @@
 # Agent-driven bootstrap
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 The box should bootstrap itself. A human installs the worker once (or flashes
 an image); from then on an **AI agent** running on the machine does the work —
 enrolling, applying its profile, fixing problems and reporting back — with no
@@ -76,3 +83,10 @@ box healthy.
 For many boxes, bake `alwayswork` + the harness + a fleet enrollment
 token into the image. First boot: the agent enrolls, the group auto-approves,
 and the box configures itself. Nobody touches it.
+
+## Agent roles
+
+Distinguish the privileged node agent (deterministic reconciliation) from an app's
+optional AI agent component. The control-plane assistant coordinates typed changes
+and objectives. App agents receive only scoped tools and connections; the presence
+of an AI harness never grants node-admin authority.

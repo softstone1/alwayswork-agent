@@ -1,5 +1,12 @@
 # Decommission and restore
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 **Goal:** leaving the fleet returns the machine to what it was before
 AlwaysWork touched it. Not "unenrolled", not "hardened but idle" — the
 same PC, with the same SSH state, the same firewall state, and none of the
@@ -158,3 +165,11 @@ why:
 - **Self-removal guard.** `ledger_self_remove` refuses when `AW_ROOT` is
   not under `/opt` or when `AW_TEST=1`, unless
   `AW_LEDGER_ALLOW_SELF_REMOVE=1` is set; a dry-run prints the plan only.
+
+## App data and completion
+
+In the app model, removing an app retains its volumes by default. Machine retirement
+must explicitly handle those retained volumes before host restore. A control-plane
+record removal or tombstone does not prove execution or data erasure. Keep failures
+and offline nodes visible until evidence arrives; durable completion receipts remain
+planned. Existing recovery/ledger guarantees are not expanded by the terminology.

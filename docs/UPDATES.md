@@ -1,5 +1,12 @@
 # Safe unattended updates
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 The node side of `docs/SYSTEM_SPEC.md` §13.1 (control repo). A rolling
 release on a box nobody watches is only safe if an update that goes wrong
 undoes itself. `lib/updates.sh` gives `aw update` four layers:
@@ -55,3 +62,11 @@ updates:
 
 Kernel choice for nodes: `linux-cachyos-lts` keeps the CachyOS patches on
 an LTS base and takes most of the churn out of the rolling release.
+
+## App releases and machine updates
+
+Keep machine agent/host updates distinct from app release changes. App software
+changes build/resolve package artifacts; resource-only changes need not rebuild an
+image. Report compatibility and restart requirements. Data migration/restore is not
+implied by reverting an image. Existing aw update behavior below remains the v1
+contract; do not silently change the upgrade scope during the model migration.

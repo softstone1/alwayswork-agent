@@ -1,5 +1,12 @@
 # Writing a capability
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 A capability is any directory containing a `manifest.yaml`. Copy the shape
 below and register it:
 
@@ -77,3 +84,11 @@ Use `run` for every mutating command so `--dry-run` works.
 5. **No engine socket.** Never bind-mount `/var/run/docker.sock`.
 6. **Declare dependencies.** If you need a runtime, `requires` it or check
    `engine_present` in `preflight.sh`.
+
+## Catalog role and platform responsibility
+
+A capability with `workload` metadata can project an application package; one without
+it remains host setup. The generated catalog labels this distinction. Host apps
+remain role=host, never role=software implicitly. Software dependency recipes are
+planned separately. Shared collection and security enforcement belong to the node
+foundation; app manifests declare sources/requirements, not privileged collectors.

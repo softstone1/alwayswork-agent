@@ -1,5 +1,12 @@
 # AlwaysWork
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 **Install a secured foundation on any Arch- or Debian-family Linux mini PC, then grow it one capability at a time.**
 
 AlwaysWork turns a mini PC into a self-hosted AlwaysWork node. The installer

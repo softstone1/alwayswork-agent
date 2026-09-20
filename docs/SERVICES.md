@@ -1,5 +1,12 @@
 # Services
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 **Web admin.** `services.postgres` runs a `pgweb` side-car by default
 (`alwayswork-postgres-admin`: pinned image, read-only, loopback port 8081,
 connects as the application role over the workload network). It is the
@@ -93,3 +100,13 @@ runtime.podman]`), `<id>.sh` with `<id>_workload_vars` filling the `WL_*`
 variables and the `<id>_status|logs|backup|…` operations, hooks that call
 `wl_apply_unit` / `wl_report_service` / `wl_remove_unit`. Redis, MinIO,
 PostgREST and n8n fit the same shape.
+
+## PostgreSQL as an app package
+
+Target package: PostgreSQL component, persistent data volume, private PostgreSQL
+interface, optional HTTP admin component, exporter metadata, backup/diagnostic
+operations and recovery runbooks. A Connection grants a consumer (for example a
+Cloudflare Worker through Hyperdrive) scoped database access. The node's collector
+reads declared exporter/log sources and forwards telemetry outward; the control AI
+uses scoped queries and deterministic operations. This adapter contract is planned.
+A database needs no embedded AI or MCP server to participate.

@@ -1,5 +1,12 @@
 # Packages
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 A package is a versioned manifest the control plane delivers to a node —
 only once an operator approved it, and only inside the Ed25519-signed
 desired state (`SYSTEM_SPEC.md` §9). It is the one way the control plane
@@ -77,3 +84,17 @@ stale surfaces; removal deletes the workload's reports and private env file.
 The control plane rejects new unversioned/`latest` OCI manifests and control
 characters in argv/env/health fields. Unit rendering escapes systemd expansion,
 including dollar signs and percent specifiers, independently of shell quoting.
+
+## Target package contract and v1 compatibility
+
+These three kinds are delivery adapters, not a complete product taxonomy. Target
+packages declare a role (application, software dependency, host), releases,
+components, interfaces, volume requirements, operations and observability metadata.
+An App deploys an application package release; software packages are dependencies
+inside component environments. Existing distro packages remain host setup.
+
+A generated catalog may project application/host roles from the current capability
+metadata, but this does not create independent app identity, Compose support,
+software builds or autoscaling. Keep existing approved assignments intact during
+migration. Immutable image digests and reproducible builds remain stronger than
+merely recording the existing manifest digest.

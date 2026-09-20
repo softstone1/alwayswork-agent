@@ -1,5 +1,12 @@
 # Rolling out to many mini PCs
 
+> **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
+> defines Apps, Packages, Components, Instances, Machines, Volumes, Connections and
+> Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
+> `apps` configuration remain compatibility contracts. This document describes
+> existing mechanics; the new runtime features are planned unless stated otherwise.
+
+
 The bootstrap is designed to be identical on every machine; only
 `worker.yaml` differs.
 
@@ -54,3 +61,10 @@ sudo aw apply
 - Capability: `sudo aw disable <cap>`.
 - Full node: restore `/etc/alwayswork` and `/var/lib/alwayswork` from
   `backup.restic`.
+
+## Release scopes
+
+App package releases and machine updates are separate change scopes. Retain exact
+version/digest reports and canary gates. Assignment accepted, process started, app
+ready and application connection verified are different outcomes. The new catalog
+projection does not alter existing v1 rollout semantics.
