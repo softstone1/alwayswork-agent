@@ -102,7 +102,11 @@ upd_lock_held() { [[ "${AW_PKG_GUARD_OK:-0}" == "1" ]] && return 0; [[ -f "$(upd
 upd_guard() {
   upd_guard_enabled || return 0
   if upd_lock_held; then return 0; fi
-  if [[ "$(cfg_get '.updates.guard' true)" != "strict" ]] && [[ -t 0 || -t 1 || -t 2 ]] && [[ -n "${SUDO_USER:-}" || "$(id -u)" == "0" ]] && { tty -s 2>/dev/null || [[ -t 2 ]]; }; then
+  # pacman/apt run hooks with their fds captured, so "-t" never sees the
+  # terminal; the controlling tty of the process (ps: "?" for daemons,
+  # timers and cron) and SUDO_USER do.
+  local ctty; ctty="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+  if [[ "$(cfg_get '.updates.guard' true)" != "strict" ]] && { [[ -n "$ctty" && "$ctty" != "?" ]] || [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; }; then
     info "alwayswork: operator transaction from a terminal — allowed (prefer 'sudo aw update': snapshot, upgrade, health gate)"
     return 0
   fi
