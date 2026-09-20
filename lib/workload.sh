@@ -124,13 +124,18 @@ wl_write_unit() {
   for v in "${WL_EXTRA[@]:-}"; do [[ -n "$v" ]] && iso+=("$v"); done
   flags="$(wl_qs "${AW_ENGINE_ARGS[@]}" "${iso[@]}")"
   local args=""; [[ -n "${WL_ARGS[*]:-}" ]] && args="$(wl_qs "${WL_ARGS[@]}")"
+  # The env file (secrets, hosts) is read at start, so its digest is part of
+  # the unit: a changed secret changes the unit and restarts this container —
+  # nothing else. Never the contents.
+  local envsum=""
+  [[ -n "${WL_ENV_FILE:-}" && -f "$WL_ENV_FILE" ]] && envsum="$(sha256sum "$WL_ENV_FILE" | cut -c1-16)"
   aw_write "$WL_UNIT_DIR/$unit" <<UNIT
 [Unit]
 Description=AlwaysWork workload: ${WL_DESC}
 Documentation=https://github.com/softstone1/alwayswork-agent
 After=network-online.target
 Wants=network-online.target
-# Managed by alwayswork (lib/workload.sh). Image: ${WL_IMAGE}
+# Managed by alwayswork (lib/workload.sh). Image: ${WL_IMAGE}${envsum:+  env: ${envsum}}
 
 [Service]
 Type=notify
