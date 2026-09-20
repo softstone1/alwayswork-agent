@@ -26,7 +26,7 @@ upd_probation_file() { printf '%s/update-probation.json' "$AW_STATE"; }
 upd_result_file()    { printf '%s/update-result.json' "$AW_STATE"; }
 upd_min_score()      { cfg_get '.updates.min_doctor_score' 70; }
 upd_gate_seconds()   { cfg_get '.updates.gate_seconds' 180; }
-upd_guard_enabled()  { cfg_bool '.updates.guard' true; }
+upd_guard_enabled()  { [[ "$(cfg_get '.updates.guard' true)" != "false" ]]; }   # true (default) | strict | false
 upd_agent_enabled()  { cfg_bool '.updates.agent' true; }
 
 # --- the agent itself --------------------------------------------------------
@@ -92,11 +92,22 @@ upd_lock() {
 upd_lock_held() { [[ "${AW_PKG_GUARD_OK:-0}" == "1" ]] && return 0; [[ -f "$(upd_lock_file)" ]] && ! flock -n "$(upd_lock_file)" true 2>/dev/null; }
 
 # `aw update --guard`: the package-manager hook. Exit 0 = allowed.
+# The guard stops *unattended* package changes — timers, cron, other agents,
+# a stray script — so nothing upgrades outside the snapshot + health gate of
+# `aw update`. A person at a terminal is not what it guards against: an
+# operator's own pacman/apt run on a mini PC that doubles as their desktop
+# goes through, with a hint. Interactive = a controlling terminal on the
+# pacman/apt process (hooks inherit it). `.updates.guard: strict` refuses
+# everyone, for nodes nobody should touch by hand.
 upd_guard() {
   upd_guard_enabled || return 0
   if upd_lock_held; then return 0; fi
-  err "alwayswork: package transactions on this node go through 'aw update' (or the agent); refusing"
-  err "  (disable with: aw config set .updates.guard false)"
+  if [[ "$(cfg_get '.updates.guard' true)" != "strict" ]] && [[ -t 0 || -t 1 || -t 2 ]] && [[ -n "${SUDO_USER:-}" || "$(id -u)" == "0" ]] && { tty -s 2>/dev/null || [[ -t 2 ]]; }; then
+    info "alwayswork: operator transaction from a terminal — allowed (prefer 'sudo aw update': snapshot, upgrade, health gate)"
+    return 0
+  fi
+  err "alwayswork: unattended package transactions on this node go through 'aw update' (or the agent); refusing"
+  err "  (an operator at a terminal is allowed; disable entirely with: aw config set .updates.guard false)"
   return 1
 }
 

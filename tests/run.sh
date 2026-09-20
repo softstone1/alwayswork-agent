@@ -1079,8 +1079,10 @@ EOS
 upd_probe() { bash "$TMP/upd-probe.sh" "$ROOT" "$TMP/upd" "$@"; }
 rm -rf "$TMP/upd"
 if have yq; then
-  check "update guard: refuses without the lock, allows the agent's own installs" \
-    '! upd_probe upd_guard >/dev/null 2>&1 && AW_PKG_GUARD_OK=1 upd_probe upd_guard >/dev/null 2>&1'
+  check "update guard: refuses unattended (no terminal) without the lock, allows the agent's own installs" \
+    '! upd_probe upd_guard >/dev/null 2>&1 </dev/null && AW_PKG_GUARD_OK=1 upd_probe upd_guard >/dev/null 2>&1 </dev/null'
+  check "update guard: an operator at a terminal is let through; strict mode refuses even them" \
+    'script -qec "SUDO_USER=op bash \"$TMP/upd-probe.sh\" \"$ROOT\" \"$TMP/upd\" upd_guard" /dev/null >/dev/null 2>&1 && yq -i ".updates.guard = \"strict\"" "$TMP/upd/etc/worker.yaml" && ! script -qec "SUDO_USER=op bash \"$TMP/upd-probe.sh\" \"$ROOT\" \"$TMP/upd\" upd_guard" /dev/null >/dev/null 2>&1; yq -i "del(.updates.guard)" "$TMP/upd/etc/worker.yaml"'
   check "update guard: can be switched off in config" \
     'yq -i ".updates.guard = false" "$TMP/upd/etc/worker.yaml" && upd_probe upd_guard >/dev/null 2>&1; yq -i "del(.updates.guard)" "$TMP/upd/etc/worker.yaml"'
   check "boot check: nothing on probation is a no-op" 'upd_probe upd_boot_check >/dev/null 2>&1'
