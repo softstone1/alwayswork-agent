@@ -121,6 +121,20 @@ cmd_doctor() {
     else _dpass "no known vulnerable packages (arch-audit)"; fi
   fi
 
+  # --- operator accounts ------------------------------------------------------
+  # pam_faillock lockouts look like a changed password from the outside;
+  # name them so a locked operator sees why in the console.
+  if have faillock; then
+    local u n deny
+    deny="$( (grep -E '^deny' /etc/security/faillock.conf 2>/dev/null || true) | awk -F= '{print $2}' | tr -d ' ')"
+    [[ "$deny" =~ ^[0-9]+$ ]] || deny=3
+    while IFS= read -r u; do
+      [[ -n "$u" ]] || continue
+      n="$(faillock --user "$u" 2>/dev/null | grep -c ' V$' || true)"
+      if (( n >= deny )); then _dwarn "account $u is locked by pam_faillock ($n recent failures)" "faillock --user $u --reset  (or wait the unlock time)"; fi
+    done < <(awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /nologin|false/ {print $1}' /etc/passwd 2>/dev/null)
+  fi
+
   # --- capabilities ---------------------------------------------------------
   local failing=0 id
   while IFS= read -r id; do
