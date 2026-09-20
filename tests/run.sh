@@ -1061,6 +1061,8 @@ check "samples: a sample carries node load and per-workload usage only" \
 check "packages: an empty installed dir reports [] exactly once (a doubled value breaks health --argjson)" \
   'mkdir -p "$PKGD/installed" && rm -f "$PKGD"/installed/*.json && [[ "$(pkg_probe pkg_reports_json)" == "[]" ]] && [[ "$(pkg_probe pkg_reports_json | wc -c)" == "2" ]]'
 check "packages: bridge allows the packages op" 'grep -q "packages)" "$ROOT/lib/objectives.sh"'
+check "aw config get/set exists and round-trips a boolean, a number and a string" \
+  'rm -rf "$TMP/cfgt"; mkdir -p "$TMP/cfgt/etc" "$TMP/cfgt/state"; cp "$ROOT/config/defaults.yaml" "$TMP/cfgt/etc/worker.yaml"; c() { AW_ROOT="$ROOT" AW_ETC="$TMP/cfgt/etc" AW_STATE="$TMP/cfgt/state" AW_CONFIG="$TMP/cfgt/etc/worker.yaml" AW_TEST=1 bash "$AW" config "$@"; }; c set .updates.guard false >/dev/null && [[ "$(c get .updates.guard)" == "false" ]] && c set .updates.min_doctor_score 80 >/dev/null && [[ "$(c get .updates.min_doctor_score)" == "80" ]] && c set .updates.guard strict >/dev/null && [[ "$(c get .updates.guard)" == "strict" ]] && c show | grep -q "min_doctor_score: 80"'
 check "packages: aw package is a command"        'grep -q "|package|" "$ROOT/bin/alwayswork" && [[ -f "$ROOT/commands/package.sh" ]]'
 
 echo "== safe unattended updates (SYSTEM_SPEC §13.1) =="
