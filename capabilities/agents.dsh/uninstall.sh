@@ -7,13 +7,8 @@ source "${CAP_DIR}/ensure.sh"
 # shellcheck disable=SC1090
 source "${CAP_DIR}/container.sh"
 
-run systemctl disable --now "$DSH_UNIT" 2>/dev/null || true
-run systemctl disable --now "$DSH_LEGACY_UNIT" 2>/dev/null || true
-run rm -f "$DSH_UNIT_DIR/$DSH_UNIT" "$DSH_UNIT_DIR/$DSH_LEGACY_UNIT"
-run systemctl daemon-reload
-if have podman; then
-  run podman rm -f "$DSH_CONTAINER" 2>/dev/null || true
-fi
+wl_remove_unit dsh || return 1
+wl_remove_unit webui || return 1
 run rm -f "$AW_STATE/webui.json" "$(dsc_env_file)"
 if [[ "${AW_PURGE:-0}" == "1" ]]; then
   warn "agents.dsh: purging workspace, harness home and image"

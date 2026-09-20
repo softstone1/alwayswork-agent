@@ -184,3 +184,12 @@ wave) runs `aw update`, which upgrades the agent, packages, then
 re-converges workloads — only the containers whose unit changed restart —
 and gates on health. A failed gate reverts to the previous channel versions
 first, then to the file snapshot.
+
+## Desired-state removal
+
+An updated control plane can remove or restore workloads on an individual node.
+`aw apply` compares the resolved desired capability set with
+`$AW_STATE/applied-capabilities.json`, uninstalls absent workload capabilities,
+and retains dependencies and persistent data. The journal advances only after
+successful convergence, so failed removals are retried. An agent from before
+this change must be upgraded before relying on remote workload removal.

@@ -610,6 +610,21 @@ control_apply_delivery() {
      [[ "$(jq -r '.config // empty' <<<"$json" 2>/dev/null)" == "" ]]; then
     die "control: refusing a malformed delivery: $(printf '%s' "$json" | head -c 200)"
   fi
+  ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
+  # The signed sequence and the config version must agree: a delivery whose
+  # config claims a different version than the signature covered is either
+  # corrupt or forged, and is refused before anything is applied.
+  local seq
+  seq="$(jq -r '.sequence // ""' <<<"$json" 2>/dev/null)"
+  if [[ -n "$seq" && "$seq" != "$ver" ]]; then
+    die "control: refusing delivery: config version ($ver) does not match the signed sequence ($seq)"
+  fi
+  # Preserve the prior workload set before desired state replaces the config.
+  # Kept until apply succeeds so interrupted removals are retried.
+  if [[ ! -f "$AW_STATE/applied-capabilities.json" ]]; then
+    ensure_dir "$AW_STATE"
+    cfg_list '.capabilities.enabled' | jq -Rsc 'split("\n") | map(select(length > 0))' | aw_write "$AW_STATE/applied-capabilities.json"
+  fi
   profile="$(jq -r '.config.profile // "foundation"' <<<"$json")"
   cfg_set_str '.profile' "$profile"
   cfg_set_expr '.capabilities.enabled' "$(jq -c '.config.capabilities // ["core"]' <<<"$json")"
@@ -637,15 +652,6 @@ control_apply_delivery() {
     trap - EXIT
   fi
 
-  ver="$(jq -r '.config.configVersion // 0' <<<"$json")"
-  # The signed sequence and the config version must agree: a delivery whose
-  # config claims a different version than the signature covered is either
-  # corrupt or forged, and is refused before anything is applied.
-  local seq
-  seq="$(jq -r '.sequence // ""' <<<"$json" 2>/dev/null)"
-  if [[ -n "$seq" && "$seq" != "$ver" ]]; then
-    die "control: refusing delivery: config version ($ver) does not match the signed sequence ($seq)"
-  fi
   log "control: applying desired state (version $ver)"
   # The tunnel token arrives ONLY over this verified channel, as a top-level
   # "tunnel" object ({token, hostname}). No tunnel section: existing tunnel
@@ -672,7 +678,7 @@ control_apply_delivery() {
   # Packages (lib/packages.sh): approved manifests — oci workloads,
   # capabilities with config, catalog apps. Before `apply`, so a capability
   # package is installed by the same reconcile.
-  pkg_apply_from_delivery "$json"
+  pkg_apply_from_delivery "$json" || return 1
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.

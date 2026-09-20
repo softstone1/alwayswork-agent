@@ -24,11 +24,26 @@ cmd_apply() {
     # runtime.podman) are installed and persisted too, the way `aw enable`
     # does: desired state means "this and whatever it needs".
     for c in "${ordered[@]}"; do
-      cap_install "$c"
+      cap_install "$c" || return 1
       cap_is_enabled "$c" || cfg_list_add '.capabilities.enabled' "$c"
     done
   else
     info "no capabilities enabled"
+  fi
+
+  # Stop workloads absent from the resolved desired set, retaining their data.
+  # Foundation teardown remains an explicit decommission operation.
+  local prior="$AW_STATE/applied-capabilities.json" old i
+  local -a previous=()
+  if [[ -f "$prior" ]]; then
+    mapfile -t previous < <(jq -r '.[]' "$prior")
+    for (( i=${#previous[@]}-1; i>=0; i-- )); do
+      old="${previous[i]}"
+      [[ " ${ordered[*]} " == *" $old "* ]] && continue
+      cap_exists "$old" || { warn "cannot remove missing capability $old"; return 1; }
+      [[ -n "$(cap_meta "$old" '.workload.id')" ]] || continue
+      AW_PURGE=0 cap_uninstall "$old" || return 1
+    done
   fi
 
   # Apps are part of the desired state the control plane delivers, so a node is
@@ -42,6 +57,7 @@ cmd_apply() {
     done
   fi
 
+  printf '%s\n' "${ordered[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))' | aw_write "$AW_STATE/applied-capabilities.json"
   ok "applied"
 
   # Last, and deliberately: everything above is finished, so reloading an agent

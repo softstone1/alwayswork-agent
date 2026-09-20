@@ -129,3 +129,18 @@ exits non-zero when a critical check fails, so it can gate automation.
 - Egress allowlist for agent containers
 - Rotating provider keys on a schedule
 - 2FA on GitHub, Cloudflare and every LLM provider account
+
+## September 2026 reconciliation review
+
+Signed sequence/config-version mismatches are refused before configuration
+writes. Workload units escape systemd percent/dollar expansion and line breaks;
+package env files refuse missing or multiline credentials and preserve their
+last valid contents on failure. Desired-state removals stop managed workloads
+and retain data; failed convergence is not acknowledged.
+
+The control plane now releases public tunnels on explicit revocation as well as
+decommissioning. A revoked agent stops on its next contact, not while offline.
+Neither a tombstone nor a successful API request proves a physical machine has
+wiped its disk. Root compromise, shared-kernel container escapes, and unrestricted
+workload egress remain outside the current guarantees; microVM isolation and
+per-workload egress enforcement are still required for hostile multi-tenancy.

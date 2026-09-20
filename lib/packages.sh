@@ -59,7 +59,7 @@ pkg_apply_from_delivery() {
     [[ -f "$f" ]] || continue
     name="$(basename "$f" .json)"; keep=0
     for w in "${want[@]:-}"; do [[ "$w" == "$name" ]] && keep=1; done
-    (( keep )) || pkg_remove_one "$name" "$(jq -r '.kind // ""' "$f" 2>/dev/null)"
+    (( keep )) || pkg_remove_one "$name" "$(jq -r '.kind // ""' "$f" 2>/dev/null)" || return 1
   done
   (( n > 0 )) && info "packages: $n package(s) in desired state"
   return 0
@@ -76,8 +76,9 @@ pkg_install_one() {
   if [[ -n "$cur" && "$cur" == "$digest" && "$curstate" == "installed" && "${PKG_FORCE:-0}" != "1" ]]; then
     # Still re-assert the workload unit for oci packages: a unit an operator
     # deleted by hand comes back, and wl_apply_unit only restarts on change.
-    [[ "$kind" == "oci" ]] && { pkg_oci_apply "$p" >/dev/null 2>&1 || true; }
-    return 0
+    # Capability/app lists are rebuilt on each delivery: reassert packages too.
+    # Use the normal error-recording path so reassertion failures are visible.
+    :
   fi
   log "packages: $name@$version ($kind) $( [[ -n "$cur" ]] && echo update || echo install )"
   # Each kind runs in a subshell: a `die` inside a package (bad volume, pull
@@ -146,7 +147,8 @@ pkg_oci_apply() {
   pkg_oci_render_env "$p" || return 1
   WL_ENV_FILE="$(pkg_env_file "$name")"
   wl_ensure_image "$image" || { err "packages: $name: image pull failed"; return 1; }
-  wl_apply_unit
+  wl_apply_unit || return 1
+  pkg_clear_surfaces "$name"
   # Every published port is a surface (SYSTEM_SPEC §12.8): the first under
   # the package name, the others as <name>-<port>; `kind` says what it is
   # for (http UI, vnc, tcp, cdp), `name` what to call it.
@@ -161,10 +163,10 @@ pkg_oci_apply() {
 }
 
 # The env file: plain env from the manifest, secrets by name from the sealed
-# store (a missing secret is a warning — the container starts without it —
-# not a failure that would loop). 0600, never on a command line.
+# store. Missing or multiline values fail this package closed; other packages
+# still converge. The old env file is preserved on error. 0600, never argv.
 pkg_oci_render_env() {
-  local p="$1" name dest tmp k v
+  local p="$1" name dest tmp k v invalid=0
   name="$(jq -r '.name' <<<"$p")"; dest="$(pkg_env_file "$name")"
   if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] render %s\n' "$dest" >&2; return 0; fi
   ensure_dir "$(dirname "$dest")"
@@ -175,9 +177,13 @@ pkg_oci_render_env() {
     while IFS= read -r k; do
       [[ "$k" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || continue
       v="$(sec_get "$k" 2>/dev/null || true)"
-      if [[ -n "$v" ]]; then printf '%s=%s\n' "$k" "$v"; else warn "packages: $name: secret $k is not in the sealed store"; fi
+      if [[ -z "$v" || "$v" == *$'\n'* || "$v" == *$'\r'* ]]; then
+        err "packages: $name: required secret $k is missing or cannot be represented in an env file"
+        invalid=1
+      else printf '%s=%s\n' "$k" "$v"; fi
     done < <(jq -r '.manifest.secrets[]?' <<<"$p")
   } > "$tmp"
+  if (( invalid )); then rm -f "$tmp"; return 1; fi
   mv -f "$tmp" "$dest"; chmod 600 "$dest"
 }
 
@@ -206,17 +212,26 @@ pkg_distro_apply() {
   done < <(jq -r '.manifest.apps[]?' <<<"$p")
 }
 
+# Remove reports by workload ownership, never the operator-facing display name.
+pkg_clear_surfaces() {
+  local name="$1" f
+  for f in "$(wl_services_dir)"/*.json; do
+    [[ -f "$f" ]] || continue
+    if [[ "$(jq -r '.workload // .id // ""' "$f" 2>/dev/null)" == "$name" ]]; then
+      run rm -f "$f" || return 1
+    fi
+  done
+  return 0
+}
+
 # --- removal ---------------------------------------------------------------------------
 pkg_remove_one() {
   local name="$1" kind="$2"
   log "packages: $name no longer in desired state; removing ($kind)"
   case "$kind" in
     oci)
-      wl_remove_unit "$name"
-      local f; for f in "$(wl_services_dir)"/*.json; do
-        [[ -f "$f" ]] || continue
-        [[ "$(jq -r '.name // ""' "$f" 2>/dev/null)" == "$name" ]] && run rm -f "$f"
-      done
+      wl_remove_unit "$name" || return 1
+      pkg_clear_surfaces "$name" || return 1
       run rm -f "$(pkg_env_file "$name")"
       info "packages: data of $name kept at $(pkg_root "$name")"
       ;;

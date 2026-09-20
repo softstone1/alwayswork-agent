@@ -698,6 +698,8 @@ ROOT="$1"; MODE="$2"; shift 2
 sed '/^main "$@"/d' "$ROOT/install.sh" > "$TMP/sops-install.sh"
 # shellcheck disable=SC1090
 source "$TMP/sops-install.sh"
+# The host may already have sops. Only the test's installed stub counts.
+have() { if [[ "$1" == sops ]]; then [[ -x "$TMP/sopsbin/sops" ]]; else command -v "$1" >/dev/null 2>&1; fi; }
 INSTALL_FAMILY="debian"
 case "$MODE" in
   present)  install_sops_debian ;;
@@ -737,7 +739,7 @@ check "installer records packages before installing" \
 check "installer never records a package twice" \
   'DPKG_INSTALLED="jq" sops_probe "$ROOT" deps && DPKG_INSTALLED="ufw" sops_probe "$ROOT" deps && [[ "$(grep -c "\"name\":\"ufw\"" "$TMP/sopsstate/ledger.jsonl")" == "1" ]] && [[ "$(jq -r "select(.name==\"ufw\") | .priorInstalled" "$TMP/sopsstate/ledger.jsonl")" == "false" ]]'
 check "installer dry-run plans its ledger entries" \
-  'bash "$ROOT/install.sh" --dry-run --skip-deps --no-alias > "$TMP/ildr" 2>&1 && grep -q "ledger dir path=/opt/alwayswork" "$TMP/ildr" && grep -q "ledger file path=/usr/local/bin/alwayswork" "$TMP/ildr" && grep -q "ledger file path=/opt/alwayswork/bin/yq" "$TMP/ildr"'
+  'INSTALL_DIR="$TMP/ledger-install" BIN_LINK="$TMP/ledger-bin" bash "$ROOT/install.sh" --dry-run --skip-deps --no-alias > "$TMP/ildr" 2>&1 && grep -q "ledger dir path=$TMP/ledger-install" "$TMP/ildr" && grep -q "ledger file path=$TMP/ledger-bin" "$TMP/ildr" && grep -q "ledger file path=$TMP/ledger-install/bin/yq" "$TMP/ildr"'
 
 echo "== agents.dsh zero-touch =="
 # Exercise capabilities/agents.dsh/ensure.sh without touching the host:
@@ -826,6 +828,14 @@ pkg_install() {
 }
 # shellcheck disable=SC1090
 source "$ROOT/capabilities/agents.dsh/ensure.sh"
+# Keep zero-touch probes independent of harnesses installed elsewhere on the host.
+ds_dsh_bin() {
+  local candidate
+  for candidate in "$(cap_config dsh)" "$(command -v dsh 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] && { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
 case "$MODE" in
   ensure) ds_ensure_harness ;;
 esac
@@ -1021,6 +1031,7 @@ source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hard
 source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
 source "$ROOT/lib/capability.sh"; source "$ROOT/lib/apps.sh"; source "$ROOT/lib/workload.sh"; source "$ROOT/lib/packages.sh"
 DRY_RUN=0
+sec_get() { [[ "$1" == N8N_ENCRYPTION_KEY ]] && printf "test-only-key"; }
 [[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
 "$@"
 EOS
@@ -1030,8 +1041,8 @@ N8N='{"packages":[{"id":"pkg_1","name":"n8n","version":"1.80.0","kind":"oci","di
 if have yq; then
 check "packages: an oci package becomes a workload unit on the contract" \
   'pkg_probe pkg_apply_from_delivery "$N8N" >/dev/null 2>&1 && u="$TMP/pkg/systemd/alwayswork-n8n.service" && grep -q -- "--userns=auto" "$u" && grep -q -- "--publish 127.0.0.1:5678:5678" "$u" && grep -q -- "--publish 127.0.0.1:5679:80" "$u" && grep -q -- "--volume $TMP/pkg/state/workloads/n8n/data:/home/node/.n8n:U" "$u" && grep -q -- "--memory 2048m" "$u" && grep -q -- "--cpus 1.5" "$u" && grep -q -- "--user 1000:1000" "$u" && grep -q -- "--health-cmd" "$u" && grep -q "healthz" "$u" && grep -q -- "--env-file $TMP/pkg/etc/pkg-n8n.env" "$u" && grep -q "docker.io/n8nio/n8n:1.80.0 start" "$u"'
-check "packages: env file is 0600 with the plain env; a missing secret is a warning, not a value" \
-  'f="$TMP/pkg/etc/pkg-n8n.env" && [[ "$(stat -c %a "$f")" == "600" ]] && grep -qx "GENERIC_TIMEZONE=UTC" "$f" && ! grep -q "N8N_ENCRYPTION_KEY" "$f"'
+check "packages: env file is 0600 with plain env and the required secret" \
+  'f="$TMP/pkg/etc/pkg-n8n.env" && [[ "$(stat -c %a "$f")" == "600" ]] && grep -qx "GENERIC_TIMEZONE=UTC" "$f" && grep -qx "N8N_ENCRYPTION_KEY=test-only-key" "$f"'
 check "packages: every published port is a surface with kind and name" \
   '[[ "$(pkg_probe wl_services_json | jq -r "sort_by(.port) | map(.id + \" \" + .workload + \" \" + .kind) | join(\",\")")" == "n8n n8n http,n8n-5679 n8n tcp" ]]'
 check "packages: every published port is reported as a service" \
@@ -1285,6 +1296,10 @@ sec_set_stdin() {
   chmod 600 "$OUT/store/$k"
 }
 cap_install()      { printf 'cap_install %s\n' "$1" >> "$OUT/calls"; return "${CAP_INSTALL_RC:-0}"; }
+cfg_list()         { printf 'core\n'; }
+pkg_apply_from_delivery() { return 0; }
+upd_apply_from_delivery() { return 0; }
+obj_apply_from_delivery() { return 0; }
 cfg_set_str()      { printf 'cfg_set_str %s\n' "$1" >> "$OUT/calls"; }
 cfg_set_expr()     { printf 'cfg_set_expr %s\n' "$1" >> "$OUT/calls"; }
 cfg_get()          { printf '%s\n' "${CFG_GET:-disabled}"; }
@@ -1620,5 +1635,6 @@ check "hardening lib is sourced by the cli" 'grep -q "lib/hardening.sh" "$ROOT/b
 check "bootstrap uses the shared ssh policy" 'grep -q "apply_ssh_policy" "$ROOT/commands/bootstrap.sh" && ! grep -q "apply_ssh_policy()" "$ROOT/commands/bootstrap.sh"'
 
 echo
-printf 'passed: %s   failed: %s\n' "$PASS" "$FAIL"
+check "workload reconciliation and argument boundary regressions" 'bash "$ROOT/tests/workload-lifecycle.sh"'
+printf 'passed: %s   failed: %s\n'  "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

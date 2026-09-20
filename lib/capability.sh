@@ -125,7 +125,7 @@ cap_install() {
 cap_uninstall() {
   local id="$1"
   log "Removing capability: $id"
-  cap_run_hook "$id" uninstall
+  cap_run_hook "$id" uninstall || return 1
   ok "$id removed"
 }
 

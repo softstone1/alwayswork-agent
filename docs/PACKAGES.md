@@ -19,8 +19,8 @@ a manifest, never a command.
 1. Every verified delivery carries `packages: [...]`. `lib/packages.sh`
    writes the set to `/var/lib/alwayswork/packages/desired.json`.
 2. Each package is compared by **digest** with
-   `packages/installed/<name>.json`; unchanged ones are a no-op (an `oci`
-   unit is re-asserted, and only restarts if its file changed).
+   `packages/installed/<name>.json`; unchanged manifests are reasserted because each delivery rebuilds the
+   capability/app lists. An `oci` unit only restarts if its file changed.
 3. New or changed ones are installed. A failure — bad image, no podman,
    unknown capability — is recorded as `failed` with the last error line
    and reported; it never blocks the rest of the delivery or makes the
@@ -60,3 +60,20 @@ for `packages` through the bridge (`OBJECTIVES.md`).
 - The container runs with the same hardening as every workload; images
   that must start as root to `chown` need `user` set to their service uid
   (see how `services.postgres` uses `--user 999:999`).
+
+## Removal and reconciliation
+
+The control plane can exclude a package or capability workload on one node,
+without changing its group's assignment. Signed desired state carries the
+resulting set. The agent journals previously applied capabilities and stops
+workloads removed from that set, in reverse dependency order, after resolving
+the capabilities still required. Data is retained and a failed removal is retried
+without acknowledging convergence. Foundation removal remains decommissioning.
+Distro packages remove apps from desired configuration; they do not automatically
+uninstall host packages, which may have other consumers.
+
+Service reports belong to workload IDs, not display names. Reapplication removes
+stale surfaces; removal deletes the workload's reports and private env file.
+The control plane rejects new unversioned/`latest` OCI manifests and control
+characters in argv/env/health fields. Unit rendering escapes systemd expansion,
+including dollar signs and percent specifiers, independently of shell quoting.

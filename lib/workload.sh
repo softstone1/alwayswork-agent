@@ -91,8 +91,11 @@ wl_ensure_image() {
 # backslash and double-quote escaped (systemd.syntax(7) "Quoting").
 wl_q() {
   local a="$1"
+  # systemd expands specifiers and environment variables even inside quotes.
+  a="${a//%/%%}"; a="${a//\$/\$\$}"
+  a="${a//\\/\\\\}"; a="${a//$'\n'/\\n}"; a="${a//$'\r'/\\r}"; a="${a//$'\t'/\\t}"
   if [[ "$a" =~ ^[A-Za-z0-9_./:=@,+%-]+$ ]]; then printf '%s' "$a"
-  else a="${a//\\/\\\\}"; a="${a//\"/\\\"}"; printf '"%s"' "$a"; fi
+  else a="${a//\"/\\\"}"; printf '"%s"' "$a"; fi
 }
 wl_qs() { local out="" a; for a in "$@"; do out+="$(wl_q "$a") "; done; printf '%s' "$out"; }
 
@@ -164,8 +167,8 @@ wl_apply_unit() {
   [[ -f "$path" ]] && before="$(sha256sum "$path" | cut -d' ' -f1)"
   wl_write_unit
   [[ -f "$path" && "$DRY_RUN" != "1" ]] && after="$(sha256sum "$path" | cut -d' ' -f1)"
-  run systemctl daemon-reload
-  run systemctl enable "$unit"
+  run systemctl daemon-reload || return 1
+  run systemctl enable "$unit" || return 1
   if [[ "$DRY_RUN" == "1" ]]; then
     info "workload: dry-run — would (re)start $unit"
   elif [[ "$before" != "$after" ]] || ! systemctl is-active --quiet "$unit"; then
@@ -177,10 +180,13 @@ wl_apply_unit() {
 
 wl_remove_unit() {
   local unit; unit="$(wl_unit_name "$1")"
-  run systemctl disable --now "$unit" 2>/dev/null || true
-  run rm -f "$WL_UNIT_DIR/$unit"
-  run systemctl daemon-reload
-  if have podman; then run podman rm -f "$(wl_container "$1")" 2>/dev/null || true; fi
+  # A missing unit is already stopped; a failed stop of a managed unit is not.
+  if ! run systemctl disable --now "$unit" 2>/dev/null && [[ -f "$WL_UNIT_DIR/$unit" ]]; then
+    return 1
+  fi
+  if have podman; then run podman rm -f --ignore "$(wl_container "$1")" || return 1; fi
+  run rm -f "$WL_UNIT_DIR/$unit" || return 1
+  run systemctl daemon-reload || return 1
 }
 
 # --- surfaces ------------------------------------------------------------------------------
