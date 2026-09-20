@@ -55,6 +55,16 @@ for m in "$ROOT"/capabilities/*/manifest.yaml; do
   check "$d install+uninstall"     "[[ -f '$(dirname "$m")/install.sh' && -f '$(dirname "$m")/uninstall.sh' ]]"
 done
 
+# The suite must never reach the real system: a probe that calls
+# systemctl/ufw/podman/useradd as the developer's user would prompt for a
+# password through polkit (it did once). Every such binary is shadowed by
+# a no-op stub for the whole run; probes that need behaviour add their own.
+mkdir -p "$TMP/nobin"
+for b in systemctl systemd-run ufw useradd pacman apt-get snapper hostnamectl sysctl podman docker; do
+  printf '#!/bin/sh\nexit 0\n' > "$TMP/nobin/$b"; chmod +x "$TMP/nobin/$b"
+done
+export PATH="$TMP/nobin:$PATH"
+
 echo "== dry-run (no yq needed) =="
 export AW_TEST=1 AW_ROOT="$ROOT" AW_ETC="$TMP/etc" AW_STATE="$TMP/state" AW_LOG_DIR="$TMP/log" AW_CONFIG="$TMP/etc/worker.yaml"
 check "dry-run init exits 0"      'run_aw --dry-run init --profile foundation'

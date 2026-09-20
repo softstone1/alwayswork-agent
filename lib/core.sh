@@ -54,6 +54,22 @@ run() {
     printf '    %s[dry-run]%s %s\n' "$C_DIM" "$C_RESET" "$*" >&2
     return 0
   fi
+  # Under the test suite a real system tool must never run (it would change
+  # the developer's machine, or make polkit ask for a password): only stubs
+  # on a temporary PATH are allowed through.
+  if [[ "${AW_TEST:-0}" == "1" ]]; then
+    case "$1" in
+      systemctl|systemd-run|useradd|usermod|userdel|ufw|firewall-cmd|pacman|paru|apt-get|apt|dpkg|snapper|hostnamectl|sysctl|podman|docker|btrfs|mount|umount|chown|chmod|shred|ln|cp|rm|mkdir|tee|install)
+        local bin; bin="$(command -v "$1" 2>/dev/null || true)"
+        case "$bin" in
+          /usr/*|/bin/*|/sbin/*)
+            case "$1" in
+              chown|chmod|ln|cp|rm|mkdir|tee|install) ;;   # file tools are fine on scratch paths
+              *) printf '    [test] refusing real %s\n' "$*" >&2; return 0 ;;
+            esac ;;
+        esac ;;
+    esac
+  fi
   "$@"
 }
 
