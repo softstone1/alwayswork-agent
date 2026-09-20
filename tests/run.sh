@@ -1559,7 +1559,7 @@ check "health agent is typed"           'jq -e ".agent.kind == \"none\" and (.ag
 check "health reads the doctor cache"   'jq -e ".doctorScore == 88 and .doctorAt == 1789776000000" "$TMP/health.out" >/dev/null'
 check "health disk pct is 0-100"        'jq -e "(.diskRootUsedPct // 0) >= 0 and (.diskRootUsedPct // 0) <= 100" "$TMP/health.out" >/dev/null'
 check "health uses only spec field names" \
-  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb|doctorFindings|agentCommit|agentOutdated|apps|workloads|packages")" ]]'
+  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb|doctorFindings|agentCommit|agentOutdated|updateProtocol|apps|workloads|packages")" ]]'
 check "health probes stay quiet"        '[[ ! -s "$TMP/health.err" ]]'
 check "gpus json is one value even when lspci finds nothing (pipefail)" \
   '[[ "$(bash -c "set -o pipefail; AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/hardware.sh\"; lspci() { echo \"00:00.0 Host bridge: none\"; }; nvidia-smi() { false; }; export -f lspci; hw_gpus_json")" == "[]" ]]'
@@ -1636,5 +1636,6 @@ check "bootstrap uses the shared ssh policy" 'grep -q "apply_ssh_policy" "$ROOT/
 
 echo
 check "workload reconciliation and argument boundary regressions" 'bash "$ROOT/tests/workload-lifecycle.sh"'
+check "scoped node update regressions" 'bash "$ROOT/tests/node-updates.sh"'
 printf 'passed: %s   failed: %s\n'  "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

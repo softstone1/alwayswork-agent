@@ -70,3 +70,25 @@ changes build/resolve package artifacts; resource-only changes need not rebuild 
 image. Report compatibility and restart requirements. Data migration/restore is not
 implied by reverting an image. Existing aw update behavior below remains the v1
 contract; do not silently change the upgrade scope during the model migration.
+
+
+## Scoped control-plane updates (protocol 2)
+
+Nodes advertise `health.updateProtocol: 2`. The console offers Agent, Host packages,
+and Full node maintenance. Agent updates take the update lock and verify health;
+they do not run the host package-manager upgrade. The installer still re-applies
+desired state, so changed service definitions can restart. Full maintenance retains
+the existing agent/package/image convergence behavior. Host-package updates use
+`--scope system`, skip the agent installer, and retain reconciliation/health checks.
+
+A signed update can contain `scope` and an exact `agentCommit`. The archive is
+requested by commit and its response metadata must match before installation.
+Retries use a new execution ID, so an earlier attempt cannot finish the new one.
+The control plane additionally verifies the reported installed commit before
+advancing a scoped agent rollout. Old nodes first use the legacy full update; the
+console states that broader scope. Cancellation stops future waves, not a running
+package manager. Health failure remains failure unless recovery is actually proven.
+
+The canonical app model now also defines configuration, credentials/access grants
+and the Cloudflare-native control-plane service map. These target contracts do not
+turn existing group-wide secret delivery into per-component isolation.

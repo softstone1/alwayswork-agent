@@ -63,6 +63,7 @@ control_health_json() {
   local v total avail used
 
   _health_str agentVersion "$AW_VERSION"
+  _health_num updateProtocol 2
   local commit=""; [[ -f "$AW_ROOT/COMMIT" ]] && commit="$(tr -dc 'a-f0-9' < "$AW_ROOT/COMMIT" | head -c 40)"
   [[ "$commit" =~ ^[a-f0-9]{7,40}$ ]] && _health_str agentCommit "$commit"
   # Behind what the control plane ships (lib/updates.sh)? Shown as a badge.

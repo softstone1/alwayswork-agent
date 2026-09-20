@@ -53,19 +53,23 @@ upd_agent_behind() {
 # Fetch and install the shipped agent. 0 = upgraded or already current,
 # 1 = failed (the caller records it; the old agent keeps running).
 upd_agent_upgrade() {
-  local url tmp hdr commit
+  local url tmp hdr commit target="${AW_UPDATE_TARGET_COMMIT:-}"
   url="$(control_url)"; [[ -n "$url" ]] || { info "update: no control plane; agent not upgraded"; return 0; }
-  if ! upd_agent_behind && [[ "${AW_AGENT_FORCE:-0}" != "1" ]]; then
+  if [[ -z "$target" ]] && ! upd_agent_behind && [[ "${AW_AGENT_FORCE:-0}" != "1" ]]; then
     info "update: agent is current ($(upd_agent_installed | head -c 12))"
     return 0
   fi
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/aw-agent.XXXXXX")" || return 1
   hdr="$tmp/headers"
   log "update: fetching the agent the control plane ships"
-  if ! curl -fsSL -D "$hdr" "$url/agent.tar.gz" -o "$tmp/agent.tgz"; then
+  if [[ -n "$target" && ! "$target" =~ ^[a-f0-9]{40}$ ]]; then rm -rf "$tmp"; err "update: invalid target commit"; return 1; fi
+  if ! curl -fsSL -D "$hdr" "$url/agent.tar.gz${target:+?ref=$target}" -o "$tmp/agent.tgz"; then
     rm -rf "$tmp"; err "update: could not download $url/agent.tar.gz"; return 1
   fi
   commit="$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="x-aw-agent-commit:" {print $2}' | tail -n1)"
+  if [[ ! "$commit" =~ ^[a-f0-9]{40}$ || ( -n "$target" && "$commit" != "$target" ) ]]; then
+    rm -rf "$tmp"; err "update: downloaded agent does not match the requested release"; return 1
+  fi
   tar -xzf "$tmp/agent.tgz" -C "$tmp" || { rm -rf "$tmp"; err "update: bad agent tarball"; return 1; }
   local src; src="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
   [[ -x "$src/install.sh" || -f "$src/install.sh" ]] || { rm -rf "$tmp"; err "update: tarball has no install.sh"; return 1; }
@@ -209,9 +213,11 @@ upd_probation_clear() { run rm -f "$(upd_probation_file)"; }
 # unhealthy twice -> roll back to the pre-update snapshot and reboot once.
 upd_boot_check() {
   local f snap boots rolled
+  local AW_UPDATE_ROLLOUT=""
   f="$(upd_probation_file)"
   [[ -f "$f" ]] || { info "boot check: no update on probation"; return 0; }
   snap="$(jq -r '.snapshot // ""' "$f")"; boots="$(jq -r '.boots // 0' "$f")"; rolled="$(jq -r '.rolledBack // false' "$f")"
+  AW_UPDATE_ROLLOUT="$(jq -r '.rollout // ""' "$f")"
   log "boot check: update on probation (snapshot ${snap:-none}, boot $((boots + 1)))"
   if upd_health_gate; then
     ok "boot check: healthy after update; probation cleared"
@@ -241,8 +247,9 @@ upd_boot_check() {
 # rollout waits for before the next wave.
 upd_record_result() {
   local state="$1" summary="${2:-}" rollout
-  rollout="$(jq -r '.rollout // ""' "$(upd_probation_file)" 2>/dev/null || true)"
+  rollout="${AW_UPDATE_ROLLOUT:-}"
   [[ -n "$rollout" ]] || rollout="$(jq -r '.rolloutId // ""' "$(upd_result_file)" 2>/dev/null || true)"
+  [[ -n "$rollout" ]] || rollout="$(jq -r '.rollout // ""' "$(upd_probation_file)" 2>/dev/null || true)"
   [[ "$DRY_RUN" == "1" ]] && return 0
   ensure_dir "$AW_STATE"
   jq -n --arg r "$rollout" --arg s "$state" --arg m "$summary" --argjson at "$(( $(date +%s) * 1000 ))" \
@@ -288,10 +295,17 @@ UNIT
 # current wave. Run the update once per id, detached from the agent (the
 # agent must keep heart-beating while packages change), and report.
 upd_apply_from_delivery() {
-  local json="$1" id last
+  local json="$1" id last scope target
+  local -a update_args=()
   jq -e '.update | type == "object"' >/dev/null 2>&1 <<<"$json" || return 0
   id="$(jq -r '.update.rolloutId // ""' <<<"$json")"
   [[ "$id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || return 0
+  scope="$(jq -r '.update.scope // "all"' <<<"$json")"
+  target="$(jq -r '.update.agentCommit // ""' <<<"$json")"
+  [[ "$scope" =~ ^(agent|system|all)$ ]] || { warn "control: invalid update scope"; return 1; }
+  [[ -z "$target" || "$target" =~ ^[a-f0-9]{40}$ ]] || { warn "control: invalid agent target"; return 1; }
+  update_args=(--scope "$scope")
+  [[ -z "$target" ]] || update_args+=(--target-commit "$target")
   last="$(jq -r '.rolloutId // ""' "$(upd_result_file)" 2>/dev/null || true)"
   [[ "$id" == "$last" ]] && return 0
   log "control: rollout $id asks this node to update now"
@@ -303,9 +317,9 @@ upd_apply_from_delivery() {
     # ExecStopPost settles the result when the process dies without one.
     systemd-run --unit "alwayswork-update-$id" --collect --quiet \
       -p "ExecStopPost=/usr/local/bin/alwayswork update --settle $id" \
-      /usr/local/bin/alwayswork update --yes --rollout "$id" \
+      /usr/local/bin/alwayswork update --yes --rollout "$id" "${update_args[@]}" \
       || { warn "control: could not start the update unit"; upd_record_result failed "could not start update"; }
   else
-    ( /usr/local/bin/alwayswork update --yes --rollout "$id" ) >/dev/null 2>&1 &
+    ( trap '' HUP; /usr/local/bin/alwayswork update --yes --rollout "$id" "${update_args[@]}"; AW_UPDATE_ROLLOUT="$id" upd_settle "$id" ) >/dev/null 2>&1 &
   fi
 }

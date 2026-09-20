@@ -9,13 +9,15 @@
 # See lib/updates.sh and docs/UPDATES.md (SYSTEM_SPEC §13.1).
 
 cmd_update() {
-  local rollout="" mode="update" agent="auto"
+  local rollout="" mode="update" agent="auto" scope="all" target_commit=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --guard)      mode="guard" ;;
       --boot-check) mode="boot-check" ;;
-      --agent)      mode="agent"; agent="force" ;;
+      --agent)      scope="agent"; agent="force" ;;
       --no-agent)   agent="off" ;;
+      --scope)      [[ "${2-}" =~ ^(agent|system|all)$ ]] || die "invalid update scope"; scope="$2"; shift ;;
+      --target-commit) [[ "${2-}" =~ ^[a-f0-9]{40}$ ]] || die "invalid agent commit"; target_commit="$2"; shift ;;
       --yes|-y)     export ASSUME_YES=1 ;;  # the global flag, accepted here too (rollouts pass it after the command)
       --settle)     [[ -n "${2-}" ]] || die "missing value for --settle"; mode="settle"; rollout="$2"; shift ;;
       --rollout)    [[ -n "${2-}" ]] || die "missing value for --rollout"; rollout="$2"; shift ;;
@@ -27,7 +29,6 @@ cmd_update() {
   case "$mode" in
     guard)      upd_guard; return $? ;;
     boot-check) require_root update; cfg_require; cfg_need; aw_state_init; upd_boot_check; return $? ;;
-    agent)      require_root update; cfg_require; cfg_need; aw_state_init; AW_AGENT_FORCE=1 upd_agent_upgrade; return $? ;;
     # ExecStopPost of the rollout unit: a process that died before recording
     # an outcome must not leave the control plane waiting for the wave timeout.
     settle)     require_root update; upd_settle "$rollout" "${SERVICE_RESULT:-}" "${EXIT_STATUS:-}"; return 0 ;;
@@ -38,6 +39,9 @@ cmd_update() {
   cfg_need
   aw_state_init
   upd_lock
+  export AW_UPDATE_ROLLOUT="$rollout" AW_UPDATE_TARGET_COMMIT="$target_commit"
+  [[ "$scope" == "agent" || -n "$target_commit" ]] && agent="force"
+  [[ "$scope" == "system" ]] && agent="off"
 
   local snap_id=""
   if cfg_bool '.hardening.auto_snapshots' true; then
@@ -51,12 +55,21 @@ cmd_update() {
   # The agent first (SYSTEM_SPEC §13.1): what the control plane ships, when
   # this node is behind. Its failure is a failed update like any other.
   local rc=0
-  if [[ "$agent" != "off" ]] && upd_agent_enabled; then
-    upd_agent_upgrade || rc=$?
+  if [[ "$agent" != "off" ]] && { [[ "$agent" == "force" ]] || upd_agent_enabled; }; then
+    AW_AGENT_FORCE="$([[ "$agent" == "force" ]] && printf 1 || printf 0)" upd_agent_upgrade || rc=$?
     if (( rc != 0 )); then
       upd_record_result failed "agent upgrade failed"
       return 1
     fi
+  fi
+
+  if [[ "$scope" == "agent" ]]; then
+    if ! upd_health_gate; then
+      upd_record_result failed "agent installed but health verification failed; inspect node diagnostics"
+      return 1
+    fi
+    upd_record_result ok "agent updated and health verified"
+    return 0
   fi
 
   log "Upgrading packages"
