@@ -8,8 +8,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v yq >/dev/null || { echo "yq (mikefarah) required" >&2; exit 1; }
-out="$(for m in capabilities/*/manifest.yaml; do yq -o=json '.' "$m"; done | jq -s 'sort_by(.id) | { generatedFrom: "capabilities/*/manifest.yaml", capabilities: map({id, name, description, version, requires: (.requires // []), profiles: (.profiles // []), workload: (.workload // null)}) }')"
-apps="$(yq -o=json '.apps' catalog/apps.yaml | jq 'to_entries | map({id: .key, name: .value.name, description: .value.description, category: .value.category, manager: .value.manager}) | sort_by(.id)')"
+out="$(for m in capabilities/*/manifest.yaml; do yq -o=json '.' "$m"; done | jq -s 'sort_by(.id) | { generatedFrom: "capabilities/*/manifest.yaml", capabilities: map({id, name, description, version, requires: (.requires // []), profiles: (.profiles // []), package: {role: (if .workload then "application" else "host" end), instanceModel: (if .workload then "singleton-per-machine" else "host-setup" end)}, workload: (.workload // null)}) }')"
+apps="$(yq -o=json '.apps' catalog/apps.yaml | jq 'to_entries | map({id: .key, name: .value.name, description: .value.description, category: .value.category, manager: .value.manager, package: {role: "host", instanceModel: "host-setup"}}) | sort_by(.id)')"
 out="$(jq --argjson apps "$apps" '. + {apps: $apps}' <<<"$out")"
 if [[ "${1:-}" == "--check" ]]; then
   [[ -f catalog.json ]] || { echo "catalog.json missing; run scripts/catalog.sh" >&2; exit 1; }

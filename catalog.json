@@ -5,518 +5,814 @@
       "description": "Modern file encryption",
       "id": "age",
       "manager": "pacman",
-      "name": "age"
+      "name": "age",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "AI pair programming in the terminal",
       "id": "aider",
       "manager": "pipx",
-      "name": "aider"
+      "name": "aider",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Multi-protocol download utility",
       "id": "aria2",
       "manager": "pacman",
-      "name": "aria2"
+      "name": "aria2",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "gcc, make and build essentials",
       "id": "base-devel",
       "manager": "pacman",
-      "name": "base-devel"
+      "name": "base-devel",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "cat with syntax highlighting",
       "id": "bat",
       "manager": "pacman",
-      "name": "bat"
+      "name": "bat",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "storage",
       "description": "Deduplicating backup program",
       "id": "borg",
       "manager": "pacman",
-      "name": "BorgBackup"
+      "name": "BorgBackup",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "monitoring",
       "description": "Resource monitor TUI",
       "id": "btop",
       "manager": "pacman",
-      "name": "btop"
+      "name": "btop",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "containers",
       "description": "Build OCI images without a daemon",
       "id": "buildah",
       "manager": "pacman",
-      "name": "buildah"
+      "name": "buildah",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "security",
       "description": "Antivirus scanner",
       "id": "clamav",
       "manager": "pacman",
-      "name": "ClamAV"
+      "name": "ClamAV",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "Anthropic coding agent CLI",
       "id": "claude-code",
       "manager": "npm",
-      "name": "Claude Code"
+      "name": "Claude Code",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "Cloudflare Tunnel client",
       "id": "cloudflared",
       "manager": "paru",
-      "name": "cloudflared"
+      "name": "cloudflared",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Cross-platform build system",
       "id": "cmake",
       "manager": "pacman",
-      "name": "cmake"
+      "name": "cmake",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "OpenAI coding agent CLI",
       "id": "codex",
       "manager": "npm",
-      "name": "Codex CLI"
+      "name": "Codex CLI",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Better git diffs",
       "id": "delta",
       "manager": "pacman",
-      "name": "delta"
+      "name": "delta",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Per-directory environment loader",
       "id": "direnv",
       "manager": "pacman",
-      "name": "direnv"
+      "name": "direnv",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "containers",
       "description": "Explore container image layers",
       "id": "dive",
       "manager": "pacman",
-      "name": "dive"
+      "name": "dive",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "DNS and domain troubleshooting",
       "id": "dnstools",
       "manager": "pacman",
-      "name": "dig / whois"
+      "name": "dig / whois",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "containers",
       "description": "Container engine",
       "id": "docker",
       "manager": "pacman",
-      "name": "docker"
+      "name": "docker",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Disk usage overview",
       "id": "duf",
       "manager": "pacman",
-      "name": "duf"
+      "name": "duf",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Intuitive du replacement",
       "id": "dust",
       "manager": "pacman",
-      "name": "dust"
+      "name": "dust",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Modern ls replacement",
       "id": "eza",
       "manager": "pacman",
-      "name": "eza"
+      "name": "eza",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "security",
       "description": "Ban brute-force attackers",
       "id": "fail2ban",
       "manager": "pacman",
-      "name": "fail2ban"
+      "name": "fail2ban",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Simple, fast alternative to find",
       "id": "fd",
       "manager": "pacman",
-      "name": "fd"
+      "name": "fd",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "media",
       "description": "Audio and video toolkit",
       "id": "ffmpeg",
       "manager": "pacman",
-      "name": "ffmpeg"
+      "name": "ffmpeg",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Fuzzy finder for the shell",
       "id": "fzf",
       "manager": "pacman",
-      "name": "fzf"
+      "name": "fzf",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "Google coding agent CLI",
       "id": "gemini-cli",
       "manager": "npm",
-      "name": "Gemini CLI"
+      "name": "Gemini CLI",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "GitHub CLI",
       "id": "gh",
       "manager": "pacman",
-      "name": "gh"
+      "name": "gh",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Git large file storage",
       "id": "git-lfs",
       "manager": "pacman",
-      "name": "git-lfs"
+      "name": "git-lfs",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Markdown renderer for the terminal",
       "id": "glow",
       "manager": "pacman",
-      "name": "glow"
+      "name": "glow",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "security",
       "description": "Signing and encryption",
       "id": "gnupg",
       "manager": "pacman",
-      "name": "GnuPG"
+      "name": "GnuPG",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Go toolchain",
       "id": "go",
       "manager": "pacman",
-      "name": "go"
+      "name": "go",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Post-modern modal editor",
       "id": "helix",
       "manager": "pacman",
-      "name": "helix"
+      "name": "helix",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "monitoring",
       "description": "Interactive process viewer",
       "id": "htop",
       "manager": "pacman",
-      "name": "htop"
+      "name": "htop",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "User-friendly HTTP client",
       "id": "httpie",
       "manager": "pacman",
-      "name": "httpie"
+      "name": "httpie",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "media",
       "description": "Image conversion and editing",
       "id": "imagemagick",
       "manager": "pacman",
-      "name": "ImageMagick"
+      "name": "ImageMagick",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "Network bandwidth testing",
       "id": "iperf3",
       "manager": "pacman",
-      "name": "iperf3"
+      "name": "iperf3",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Command runner (make alternative)",
       "id": "just",
       "manager": "pacman",
-      "name": "just"
+      "name": "just",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "containers",
       "description": "Terminal UI for docker",
       "id": "lazydocker",
       "manager": "pacman",
-      "name": "lazydocker"
+      "name": "lazydocker",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Terminal UI for git",
       "id": "lazygit",
       "manager": "pacman",
-      "name": "lazygit"
+      "name": "lazygit",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "Run prompts against many models from the CLI",
       "id": "llm",
       "manager": "pipx",
-      "name": "llm"
+      "name": "llm",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "monitoring",
       "description": "Temperature and fan monitoring",
       "id": "lm_sensors",
       "manager": "pacman",
-      "name": "lm_sensors"
+      "name": "lm_sensors",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "security",
       "description": "Security auditing tool",
       "id": "lynis",
       "manager": "pacman",
-      "name": "lynis"
+      "name": "lynis",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "traceroute plus ping",
       "id": "mtr",
       "manager": "pacman",
-      "name": "mtr"
+      "name": "mtr",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Interactive disk usage analyzer",
       "id": "ncdu",
       "manager": "pacman",
-      "name": "ncdu"
+      "name": "ncdu",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Modal text editor",
       "id": "neovim",
       "manager": "pacman",
-      "name": "neovim"
+      "name": "neovim",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "storage",
       "description": "Network filesystem client/server",
       "id": "nfs-utils",
       "manager": "pacman",
-      "name": "NFS utilities"
+      "name": "NFS utilities",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "Network scanner",
       "id": "nmap",
       "manager": "pacman",
-      "name": "nmap"
+      "name": "nmap",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "monitoring",
       "description": "GPU monitor for NVIDIA/AMD/Intel",
       "id": "nvtop",
       "manager": "pacman",
-      "name": "nvtop"
+      "name": "nvtop",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "Run local models (optional; most boxes use cloud LLMs)",
       "id": "ollama",
       "manager": "pacman",
-      "name": "Ollama"
+      "name": "Ollama",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "agents",
       "description": "Open-source terminal coding agent",
       "id": "opencode",
       "manager": "npm",
-      "name": "opencode"
+      "name": "opencode",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Fast, disk-efficient package manager",
       "id": "pnpm",
       "manager": "npm",
-      "name": "pnpm"
+      "name": "pnpm",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "containers",
       "description": "Daemonless container engine",
       "id": "podman",
       "manager": "pacman",
-      "name": "podman"
+      "name": "podman",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Modern ps replacement",
       "id": "procs",
       "manager": "pacman",
-      "name": "procs"
+      "name": "procs",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "storage",
       "description": "Sync to cloud storage",
       "id": "rclone",
       "manager": "pacman",
-      "name": "rclone"
+      "name": "rclone",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "storage",
       "description": "Encrypted, deduplicated backups",
       "id": "restic",
       "manager": "pacman",
-      "name": "restic"
+      "name": "restic",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Fast recursive regex search (rg)",
       "id": "ripgrep",
       "manager": "pacman",
-      "name": "ripgrep"
+      "name": "ripgrep",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "security",
       "description": "Rootkit and malware scanner",
       "id": "rkhunter",
       "manager": "pacman",
-      "name": "rkhunter"
+      "name": "rkhunter",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Fast incremental file transfer",
       "id": "rsync",
       "manager": "pacman",
-      "name": "rsync"
+      "name": "rsync",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Rust toolchain manager",
       "id": "rustup",
       "manager": "pacman",
-      "name": "rustup"
+      "name": "rustup",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "storage",
       "description": "SMB file sharing",
       "id": "samba",
       "manager": "pacman",
-      "name": "Samba"
+      "name": "Samba",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Intuitive sed replacement",
       "id": "sd",
       "manager": "pacman",
-      "name": "sd"
+      "name": "sd",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "containers",
       "description": "Inspect and copy container images",
       "id": "skopeo",
       "manager": "pacman",
-      "name": "skopeo"
+      "name": "skopeo",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "monitoring",
       "description": "Disk health monitoring",
       "id": "smartmontools",
       "manager": "pacman",
-      "name": "smartmontools"
+      "name": "smartmontools",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "security",
       "description": "Encrypted config and secrets",
       "id": "sops",
       "manager": "pacman",
-      "name": "sops"
+      "name": "sops",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Cross-shell prompt",
       "id": "starship",
       "manager": "pacman",
-      "name": "starship"
+      "name": "starship",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "monitoring",
       "description": "sar, iostat and friends",
       "id": "sysstat",
       "manager": "pacman",
-      "name": "sysstat"
+      "name": "sysstat",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "Private mesh VPN",
       "id": "tailscale",
       "manager": "pacman",
-      "name": "tailscale"
+      "name": "tailscale",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Fast tldr client",
       "id": "tealdeer",
       "manager": "pacman",
-      "name": "tealdeer"
+      "name": "tealdeer",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Terminal multiplexer",
       "id": "tmux",
       "manager": "pacman",
-      "name": "tmux"
+      "name": "tmux",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Directory tree viewer",
       "id": "tree",
       "manager": "pacman",
-      "name": "tree"
+      "name": "tree",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "dev",
       "description": "Extremely fast Python package manager",
       "id": "uv",
       "manager": "pacman",
-      "name": "uv"
+      "name": "uv",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "network",
       "description": "WireGuard VPN userspace tools",
       "id": "wireguard-tools",
       "manager": "pacman",
-      "name": "wireguard-tools"
+      "name": "wireguard-tools",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "media",
       "description": "Download audio and video",
       "id": "yt-dlp",
       "manager": "pacman",
-      "name": "yt-dlp"
+      "name": "yt-dlp",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     },
     {
       "category": "cli",
       "description": "Smarter cd",
       "id": "zoxide",
       "manager": "pacman",
-      "name": "zoxide"
+      "name": "zoxide",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      }
     }
   ],
   "capabilities": [
@@ -524,6 +820,10 @@
       "description": "Private encrypted network for administration and break-glass access.",
       "id": "access.tailscale",
       "name": "Tailscale admin plane",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "full"
       ],
@@ -537,6 +837,10 @@
       "description": "Outbound-only secure public access. Opens no inbound ports.",
       "id": "access.tunnel",
       "name": "Cloudflare Tunnel",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "full"
       ],
@@ -550,6 +854,10 @@
       "description": "Workspace layout, hardened agent runner and a systemd task template.",
       "id": "agents.core",
       "name": "Agent control plane",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "agent",
         "full"
@@ -564,6 +872,10 @@
       "description": "The node's agent harness as a standard workload container on loopback, published through its tunnel.",
       "id": "agents.dsh",
       "name": "Node web UI (DeepSeek Harness)",
+      "package": {
+        "instanceModel": "singleton-per-machine",
+        "role": "application"
+      },
       "profiles": [
         "agent",
         "full"
@@ -612,6 +924,10 @@
       "description": "Self-hosted workflow automation on localhost, for assistant tasks.",
       "id": "assistant.n8n",
       "name": "Automation hub (n8n)",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "assistant",
         "full"
@@ -626,6 +942,10 @@
       "description": "restic snapshots of config, state and agent workspaces on a timer.",
       "id": "backup.restic",
       "name": "Encrypted offsite backups",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "worker",
         "agent",
@@ -642,6 +962,10 @@
       "description": "Runs the worker agent so the AlwaysWork console can manage this box.",
       "id": "control.join",
       "name": "Control-plane agent",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "worker",
         "agent",
@@ -658,6 +982,10 @@
       "description": "Base packages, firewall, kernel hardening, secret store, update timer.",
       "id": "core",
       "name": "Core foundation",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "foundation",
         "worker",
@@ -673,6 +1001,10 @@
       "description": "Node, Python and pnpm for building and testing on the box.",
       "id": "dev.toolchain",
       "name": "Development toolchain",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "full"
       ],
@@ -686,6 +1018,10 @@
       "description": "Uptime Kuma bound to localhost; front it with access.tunnel.",
       "id": "obs.uptime",
       "name": "Uptime monitoring",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "worker",
         "agent",
@@ -702,6 +1038,10 @@
       "description": "Docker engine with hardened defaults and no socket exposure to workers.",
       "id": "runtime.docker",
       "name": "Docker runtime",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "worker",
         "agent",
@@ -718,6 +1058,10 @@
       "description": "Daemonless, rootless container runtime. Best isolation, no root daemon.",
       "id": "runtime.podman",
       "name": "Podman runtime",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
       "profiles": [
         "full"
       ],
@@ -731,6 +1075,10 @@
       "description": "PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps), exposed through the tunnel for Hyperdrive.",
       "id": "services.postgres",
       "name": "PostgreSQL",
+      "package": {
+        "instanceModel": "singleton-per-machine",
+        "role": "application"
+      },
       "profiles": [
         "full"
       ],
@@ -796,7 +1144,8 @@
             "kind": "tcp",
             "name": "PostgreSQL",
             "port": 5432,
-            "port_config": "port"
+            "port_config": "port",
+            "protocol": "postgresql"
           }
         ]
       }
@@ -805,6 +1154,10 @@
       "description": "Chromium on the node for the agent (CDP for the harness, noVNC for a human), a persistent profile, published through the tunnel.",
       "id": "tools.browser",
       "name": "Agent browser",
+      "package": {
+        "instanceModel": "singleton-per-machine",
+        "role": "application"
+      },
       "profiles": [
         "full"
       ],

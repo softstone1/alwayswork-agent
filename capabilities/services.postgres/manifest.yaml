@@ -11,7 +11,7 @@ workload:
     repo: docker.io/library/postgres
     version: { source: pinned, pinned: "16" }   # config key: version (major), image (override)
   surfaces:
-    - { id: postgres, kind: tcp, port: 5432, port_config: port, name: PostgreSQL }
+    - { id: postgres, kind: tcp, protocol: postgresql, port: 5432, port_config: port, name: PostgreSQL }
   sidecars:
     - id: postgres-admin
       name: PostgreSQL admin (pgweb)
