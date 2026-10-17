@@ -175,6 +175,9 @@ control_health_json() {
   # Last update result (lib/updates.sh): what a rollout wave waits for.
   local upd; upd="$(declare -F upd_result_json >/dev/null && upd_result_json || printf null)"
   [[ "$upd" != "null" ]] && _health_raw update "$upd"
+  # Operator SSH via Access for Infrastructure (lib/infra.sh): address,
+  # sshd state and CA fingerprint only.
+  declare -F infra_health_json >/dev/null && _health_raw infraAccess "$(infra_health_json 2>/dev/null)"
 
   # A field that jq rejects must be visible, not a silent empty heartbeat.
   local jqerr; jqerr="$(mktemp)"

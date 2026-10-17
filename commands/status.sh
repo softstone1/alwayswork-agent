@@ -32,6 +32,13 @@ cmd_status() {
 
   section "Security"
   fw_status
+  if declare -F infra_sshd_word >/dev/null; then
+    if infra_configured; then
+      kv "infra ssh" "$(infra_sshd_word) on $INFRA_IFACE $(jq -r '.address // "?"' "$(infra_state_file)" 2>/dev/null) (CA $(jq -r '.caFingerprint // "?"' "$(infra_state_file)" 2>/dev/null))"
+    else
+      kv "infra ssh" "off"
+    fi
+  fi
   kv "secrets" "$(sec_backend)"
   if [[ "$(sec_backend)" == "sops" ]]; then
     if sec_exists; then kv "store" "present ($(sec_list | wc -l) keys)"; else kv "store" "not initialised"; fi

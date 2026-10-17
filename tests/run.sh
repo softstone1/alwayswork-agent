@@ -2067,5 +2067,6 @@ check "bootstrap uses the shared ssh policy" 'grep -q "apply_ssh_policy" "$ROOT/
 echo
 check "workload reconciliation and argument boundary regressions" 'bash "$ROOT/tests/workload-lifecycle.sh"'
 check "scoped node update regressions" 'bash "$ROOT/tests/node-updates.sh"'
+check "infraAccess: awinfra0 + dedicated sshd via Access for Infrastructure" 'bash "$ROOT/tests/infra-access.sh" > "$TMP/infra.out" 2>&1 || { grep "FAIL" "$TMP/infra.out"; false; }'
 printf 'passed: %s   failed: %s\n'  "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

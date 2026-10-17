@@ -59,7 +59,7 @@ run() {
   # on a temporary PATH are allowed through.
   if [[ "${AW_TEST:-0}" == "1" ]]; then
     case "$1" in
-      systemctl|systemd-run|useradd|usermod|userdel|ufw|firewall-cmd|pacman|paru|apt-get|apt|dpkg|snapper|hostnamectl|sysctl|podman|docker|btrfs|mount|umount|chown|chmod|shred|ln|cp|rm|mkdir|tee|install)
+      systemctl|systemd-run|useradd|usermod|userdel|passwd|networkctl|ip|ufw|firewall-cmd|pacman|paru|apt-get|apt|dpkg|snapper|hostnamectl|sysctl|podman|docker|btrfs|mount|umount|chown|chmod|shred|ln|cp|rm|mkdir|tee|install)
         local bin; bin="$(command -v "$1" 2>/dev/null || true)"
         case "$bin" in
           /usr/*|/bin/*|/sbin/*)
