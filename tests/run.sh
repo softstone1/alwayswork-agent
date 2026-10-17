@@ -337,6 +337,7 @@ exit 0
 EOS
 check "pending enrolment flag round-trips" 'bash "$TMP/pending.sh" "$ROOT" "$TMP/pend"'
 check "agent exits cleanly while pending"  'grep -q "control_pending" "$ROOT/lib/control.sh" && grep -B1 -A3 "still pending approval" "$ROOT/lib/control.sh" | grep -q "return 0"'
+check "a first delivery that is not fully applied never abandons the enrolment" 'blk="$(sed -n "/^      approved)\$/,/return 0 ;;/{p;/return 0 ;;/q;}" "$ROOT/lib/control.sh")"; [[ -n "$blk" ]] && grep -q control_finish_enrolled <<<"$blk" && ! grep -q "die " <<<"$blk" && ! grep -q "initial apply failed" "$ROOT/lib/control.sh"'
 check "every enrol path finishes in one place" '[[ "$(grep -c "control_finish_enrolled" "$ROOT/lib/control.sh")" -ge 3 ]] && grep -q "control_enroll_resume_once" "$ROOT/commands/provision.sh"'
 check "bounded approval wait is documented"    'grep -q "AW_ENROLL_WAIT" "$ROOT/lib/control.sh" && grep -q "AW_ENROLL_WAIT" "$ROOT/install.sh"'
 
