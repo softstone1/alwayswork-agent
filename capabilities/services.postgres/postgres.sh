@@ -207,7 +207,7 @@ pg_render_env() {
     printf 'POSTGRES_PASSWORD=%s\n' "$(sec_get POSTGRES_PASSWORD)"
     printf 'POSTGRES_DB=%s\n' "$(pg_db)"
     printf 'POSTGRES_USER=postgres\n'
-    printf 'PGDATA=/var/lib/postgresql/data/pgdata\n'
+    printf 'PGDATA=/var/lib/postgresql/pgdata\n'
     printf 'AW_APP_USER=%s\nAW_APP_PASSWORD=%s\n' "$(pg_user)" "$(sec_get POSTGRES_APP_PASSWORD)"
   } > "$tmp"
   mv -f "$tmp" "$dest"; chmod 600 "$dest"
@@ -218,6 +218,11 @@ pg_render_env() {
 pg_render_init() {
   local dir; dir="$(pg_root)/init"
   ensure_dir "$dir"
+  # Mounted read-only into containers whose postgres user is a random host
+  # uid (--userns=auto): it must be world-readable. The installer runs under
+  # umask 077 (cloud-init), which left it 0700, and the image's entrypoint
+  # died listing it ("Permission denied", exit 2). No secrets live here.
+  [[ "$DRY_RUN" == "1" ]] || chmod 0755 "$dir"
   aw_write "$dir/10-app-role.sh" <<'SH'
 #!/bin/sh
 set -e
@@ -330,6 +335,8 @@ pg_render_hba() {
     warn "services.postgres: tls=off — passwords cross the network unencrypted (the tunnel still encrypts the public path)"
   fi
   ensure_dir "$(pg_conf_dir)"
+  # World-readable for the same reason as init/ (pg_hba.conf holds no secret).
+  [[ "$DRY_RUN" == "1" ]] || chmod 0755 "$(pg_conf_dir)"
   aw_write "$(pg_hba_file)" <<HBA
 # Managed by alwayswork (services.postgres); rewritten on every apply.
 # TYPE   DATABASE USER     ADDRESS    METHOD
@@ -349,7 +356,7 @@ pg_workload_vars() {
   WL_DESC="PostgreSQL $(pg_version)"
   WL_PUBLISH=("$(pg_port):5432")
   local br=0; pg_br_on && br=1
-  WL_VOLUMES=("$(pg_data):/var/lib/postgresql/data:U" "$(pg_root)/init:/docker-entrypoint-initdb.d:ro" "$(pg_conf_dir):$PG_CONF_MNT:ro")
+  WL_VOLUMES=("$(pg_data):/var/lib/postgresql:U" "$(pg_root)/init:/docker-entrypoint-initdb.d:ro" "$(pg_conf_dir):$PG_CONF_MNT:ro")
   WL_ARGS=(postgres -c "hba_file=$PG_CONF_MNT/pg_hba.conf" -c password_encryption=scram-sha-256)
   if [[ "$(pg_tls)" == "on" ]]; then
     WL_VOLUMES+=("$(pg_tls_srv_dir):$PG_TLS_MNT:ro,U")
@@ -736,7 +743,11 @@ PG_BR_VERSION="2.59.3"                # Containerfile ARG PGBACKREST_VERSION
 PG_BR_MNT="/etc/pgbackrest"           # where the container reads pgbackrest.conf
 PG_BR_SECRETS=(PGBACKREST_R2_ACCESS_KEY_ID PGBACKREST_R2_SECRET_ACCESS_KEY PGBACKREST_CIPHER_PASS)
 PG_BR_BIN="${AW_BIN:-/usr/local/bin/alwayswork}"
-PG_PGDATA="/var/lib/postgresql/data/pgdata"
+# The data volume is mounted one level up (/var/lib/postgresql) with PGDATA
+# below it: postgres:18+ refuses a mount at /var/lib/postgresql/data, and
+# the host side stays <data>/pgdata for every major, so 16/17 data keeps
+# working unchanged.
+PG_PGDATA="/var/lib/postgresql/pgdata"
 
 pg_backup_mode() { local b; b="$(cap_config backup)"; [[ -n "$b" ]] || b=off; case "$b" in off|pgbackrest) printf '%s' "$b" ;; *) die "services.postgres: bad backup '$b' (off|pgbackrest)" ;; esac; }
 pg_br_on() { [[ "$(pg_backup_mode)" == "pgbackrest" ]]; }
@@ -1040,7 +1051,7 @@ pg_drill_script() {
 #!/bin/sh
 # Managed by alwayswork (services.postgres): restore drill. Scratch data only.
 set -eu
-stanza="$1"; db="$2"; D=/var/lib/postgresql/data/pgdata
+stanza="$1"; db="$2"; D=/var/lib/postgresql/pgdata
 mkdir -p -m 0700 "$D"
 pgbackrest --stanza="$stanza" --repo=1 --pg1-path="$D" restore
 postgres -D "$D" -c archive_mode=off -c "listen_addresses=" -c unix_socket_directories=/tmp \
@@ -1086,7 +1097,7 @@ pg_drill() {
   pg_drill_script > "$scratch/drill.sh"; chmod 755 "$scratch/drill.sh"
   out="$(mktemp)"
   pg_br_run "$PG_DRILL_TIMEOUT" "alwayswork-postgres-drill" \
-    --volume "$scratch/data:/var/lib/postgresql/data:U" \
+    --volume "$scratch/data:/var/lib/postgresql:U" \
     --volume "$scratch/conf:$PG_BR_MNT:ro,U" \
     --volume "$(pg_conf_dir):$PG_CONF_MNT:ro" \
     --volume "$scratch/drill.sh:/usr/local/bin/alwayswork-drill:ro" \
@@ -1152,7 +1163,7 @@ pg_br_restore() {
   pg_br_render "$conf" || die "postgres: cannot render the restore config (previous data at $aside)"
   # shellcheck disable=SC2016  # $0/$@ belong to the container's shell
   if ! pg_br_run "${PG_RESTORE_TIMEOUT:-21600}" "alwayswork-postgres-restore" \
-      --volume "$(pg_data):/var/lib/postgresql/data:U" \
+      --volume "$(pg_data):/var/lib/postgresql:U" \
       --volume "$conf:$PG_BR_MNT:ro,U" \
       --entrypoint /bin/sh "$(pg_image)" -c 'mkdir -p -m 0700 "$0" && exec pgbackrest "$@" restore' "$PG_PGDATA" "${args[@]}"; then
     run mv "$(pg_data)" "$failed"; run mv "$aside" "$(pg_data)"

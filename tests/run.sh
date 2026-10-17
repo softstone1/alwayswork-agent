@@ -352,6 +352,8 @@ check "failing units carry a redacted log tail" '
   chmod +x "$d/systemctl" "$d/journalctl"
   out="$(PATH="$d:$PATH" AW_TEST=1 AW_TEST_UNITS=1 bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; health_failing_units_json")"; rm -rf "$d"
   jq -e "length == 1 and .[0].unit == \"alwayswork-postgres.service\" and .[0].sub == \"auto-restart\" and .[0].restarts == 7 and (.[0].logTail | test(\"private key\"))" <<<"$out" >/dev/null && ! grep -q hunter2 <<<"$out"'
+check "postgres init/ and conf/ are world-readable (userns=auto containers read them)" 'grep -q "chmod 0755 \"\$dir\"" "$ROOT/capabilities/services.postgres/postgres.sh" && grep -q "chmod 0755 \"\$(pg_conf_dir)\"" "$ROOT/capabilities/services.postgres/postgres.sh"'
+check "postgres data mounts one level up (postgres:18 layout), PGDATA below it" 'grep -q "PG_PGDATA=\"/var/lib/postgresql/pgdata\"" "$ROOT/capabilities/services.postgres/postgres.sh" && ! grep -q ":/var/lib/postgresql/data:U" "$ROOT/capabilities/services.postgres/postgres.sh"'
 check "every enrol path finishes in one place" '[[ "$(grep -c "control_finish_enrolled" "$ROOT/lib/control.sh")" -ge 3 ]] && grep -q "control_enroll_resume_once" "$ROOT/commands/provision.sh"'
 check "bounded approval wait is documented"    'grep -q "AW_ENROLL_WAIT" "$ROOT/lib/control.sh" && grep -q "AW_ENROLL_WAIT" "$ROOT/install.sh"'
 
@@ -1195,7 +1197,7 @@ if have yq; then
   check "pg: suspicious names are refused" \
     'yq -i ".capabilities.config.services.postgres.db = \"app; drop\"" "$TMP/pg/etc/worker.yaml" && ! pg_probe pg_db >/dev/null 2>&1; yq -i "del(.capabilities.config.services.postgres.db)" "$TMP/pg/etc/worker.yaml"'
   check "pg: unit is a writable-data workload with a healthcheck, loopback publish, data volume" \
-    'pg_probe pg_write_unit >/dev/null 2>&1 && u="$TMP/pg/systemd/alwayswork-postgres.service" && grep -q -- "--userns=auto" "$u" && ! grep -q -- "--read-only" "$u" && grep -q -- "--health-cmd \"pg_isready -U postgres -h 127.0.0.1\"" "$u" && grep -q -- "--health-on-failure=stop" "$u" && grep -q -- "--publish 127.0.0.1:5432:5432" "$u" && grep -q -- "--volume $TMP/pg/state/services/postgres/data:/var/lib/postgresql/data:U" "$u" && grep -q -- "--user 999:999" "$u" && grep -q -- "--shm-size 256m" "$u" && grep -q "docker.io/library/postgres:16" "$u"'
+    'pg_probe pg_write_unit >/dev/null 2>&1 && u="$TMP/pg/systemd/alwayswork-postgres.service" && grep -q -- "--userns=auto" "$u" && ! grep -q -- "--read-only" "$u" && grep -q -- "--health-cmd \"pg_isready -U postgres -h 127.0.0.1\"" "$u" && grep -q -- "--health-on-failure=stop" "$u" && grep -q -- "--publish 127.0.0.1:5432:5432" "$u" && grep -q -- "--volume $TMP/pg/state/services/postgres/data:/var/lib/postgresql:U" "$u" && grep -q -- "--user 999:999" "$u" && grep -q -- "--shm-size 256m" "$u" && grep -q "docker.io/library/postgres:16" "$u"'
   check "pg: memory_mb override lands as a container budget" \
     'yq -i ".capabilities.config.services.postgres.memory_mb = 3072" "$TMP/pg/etc/worker.yaml" && pg_probe pg_write_unit >/dev/null 2>&1 && grep -q -- "--memory 3072m" "$TMP/pg/systemd/alwayswork-postgres.service" && yq -i "del(.capabilities.config.services.postgres.memory_mb)" "$TMP/pg/etc/worker.yaml"'
   check "pg: init script creates the app role as owner, never hardcodes a password" \
@@ -1338,7 +1340,7 @@ bk_t_conf() {
            repo1-path=/kitchen/app repo1-retention-full-type=time repo1-retention-full=14 \
            repo2-type=s3 repo2-path=/kitchen/app-monthly repo2-cipher-type=aes-256-cbc repo2-retention-full-type=count repo2-retention-full=12 \
            repo2-retention-archive-type=full repo2-retention-archive=1 archive-async=n log-level-file=off \
-           '[app]' pg1-path=/var/lib/postgresql/data/pgdata pg1-socket-path=/var/run/postgresql; do
+           '[app]' pg1-path=/var/lib/postgresql/pgdata pg1-socket-path=/var/run/postgresql; do
     grep -qxF -- "$l" "$f" || { echo "missing: $l"; r=1; }
   done
   # An unchanged config is not rewritten (the container owns the live file).
@@ -1422,7 +1424,7 @@ bk_t_drill() {
   bk_probe pg_drill >/dev/null 2>&1 || return 1
   a="$(grep "^run " "$TMP/bklog.argv")"
   grep -qF -- "--name alwayswork-postgres-drill" <<<"$a" && grep -qF -- "--userns=auto" <<<"$a" && grep -qF -- "--user 999:999" <<<"$a" && grep -qF -- "--cap-drop ALL" <<<"$a" || r=1
-  grep -qF -- "--volume $TMP/pg/state/services/postgres/drill/data:/var/lib/postgresql/data:U" <<<"$a" && grep -qF -- "--volume $TMP/pg/state/services/postgres/drill/conf:/etc/pgbackrest:ro,U" <<<"$a" || r=1
+  grep -qF -- "--volume $TMP/pg/state/services/postgres/drill/data:/var/lib/postgresql:U" <<<"$a" && grep -qF -- "--volume $TMP/pg/state/services/postgres/drill/conf:/etc/pgbackrest:ro,U" <<<"$a" || r=1
   grep -qF -- "--entrypoint /bin/sh localhost/alwayswork-postgres:" <<<"$a" && grep -qF "/usr/local/bin/alwayswork-drill app app" <<<"$a" || r=1
   # Never the live data directory, never a published port, never a secret.
   ! grep -qF "$data" "$TMP/bklog.argv" && ! grep -qF -- "--publish" <<<"$a" && ! grep -q "R2-Secret" "$TMP/bklog.argv" || r=1
@@ -1454,8 +1456,8 @@ bk_t_restore() {
   aside="$(ls -d "$data".before-restore-* 2>/dev/null | head -1)"
   [[ -n "$aside" && -f "$aside/marker" && -d "$data" && ! -f "$data/marker" ]] || { echo "aside: $aside"; r=1; }
   a="$(grep "^run " "$TMP/bklog.argv")"
-  grep -qF -- "--name alwayswork-postgres-restore" <<<"$a" && grep -qF -- "--volume $data:/var/lib/postgresql/data:U" <<<"$a" || r=1
-  grep -qF -- "--stanza=app --repo=1 --pg1-path=/var/lib/postgresql/data/pgdata --type=time --target=2026-10-17 09:30:00+00 --target-action=promote" <<<"$a" || r=1
+  grep -qF -- "--name alwayswork-postgres-restore" <<<"$a" && grep -qF -- "--volume $data:/var/lib/postgresql:U" <<<"$a" || r=1
+  grep -qF -- "--stanza=app --repo=1 --pg1-path=/var/lib/postgresql/pgdata --type=time --target=2026-10-17 09:30:00+00 --target-action=promote" <<<"$a" || r=1
   grep -qF "pg_is_in_recovery" "$TMP/bklog.argv" && grep -qF "WHERE datname = 'app'" "$TMP/bklog.argv" || r=1
   [[ ! -e "$TMP/pg/state/services/postgres/restore.lock" && ! -e "$TMP/pg/state/services/postgres/restore-conf" ]] || r=1
   ! grep -q "R2-Secret" "$TMP/bklog.argv" || r=1
