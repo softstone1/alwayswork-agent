@@ -345,6 +345,13 @@ check "cloudflared QUIC client sockets are not listeners; systemd on :22 is" '
   d="$(mktemp -d)"; printf "%s\n" "#!/bin/sh" "cat <<OUT" "udp UNCONN 0 0 *:33774 *:* users:((\"cloudflared\",pid=9,fd=7))" "tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:((\"systemd\",pid=1,fd=185))" "OUT" > "$d/ss"; chmod +x "$d/ss"
   out="$(PATH="$d:$PATH" bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; health_listeners_json" 2>/dev/null)"; rm -rf "$d"
   grep -q "\"port\":22" <<<"$out" && ! grep -q cloudflared <<<"$out"'
+check "failing units carry a redacted log tail" '
+  d="$(mktemp -d)"
+  printf "%s\n" "#!/bin/sh" "case \"\$1\" in" "  list-units) echo \"alwayswork-postgres.service loaded activating auto-restart x\"; echo \"alwayswork-agent.service loaded active running y\" ;;" "  show) u=\"\$5\"; case \"\$3\" in ActiveState) [ \"\$u\" = alwayswork-agent.service ] && echo active || echo activating ;; SubState) [ \"\$u\" = alwayswork-agent.service ] && echo running || echo auto-restart ;; NRestarts) [ \"\$u\" = alwayswork-agent.service ] && echo 0 || echo 7 ;; esac ;;" "esac" > "$d/systemctl"
+  printf "%s\n" "#!/bin/sh" "echo \"FATAL: could not load private key file\"" "echo \"connecting with password=hunter2\"" > "$d/journalctl"
+  chmod +x "$d/systemctl" "$d/journalctl"
+  out="$(PATH="$d:$PATH" AW_TEST=1 AW_TEST_UNITS=1 bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; health_failing_units_json")"; rm -rf "$d"
+  jq -e "length == 1 and .[0].unit == \"alwayswork-postgres.service\" and .[0].sub == \"auto-restart\" and .[0].restarts == 7 and (.[0].logTail | test(\"private key\"))" <<<"$out" >/dev/null && ! grep -q hunter2 <<<"$out"'
 check "every enrol path finishes in one place" '[[ "$(grep -c "control_finish_enrolled" "$ROOT/lib/control.sh")" -ge 3 ]] && grep -q "control_enroll_resume_once" "$ROOT/commands/provision.sh"'
 check "bounded approval wait is documented"    'grep -q "AW_ENROLL_WAIT" "$ROOT/lib/control.sh" && grep -q "AW_ENROLL_WAIT" "$ROOT/install.sh"'
 
