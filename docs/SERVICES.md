@@ -31,8 +31,8 @@ What it does:
 | Reach | published to `127.0.0.1:5432` only; reported to the control plane as `expose.services`, which adds `<node>-postgres.<base>` → `tcp://127.0.0.1:5432` to the node's tunnel |
 
 Config keys beyond the basics: `roles`, `tls`, `hostnames`, `admin`,
-`admin_port`, `memory_mb` (see the header of
-`capabilities/services.postgres/postgres.sh`).
+`admin_port`, `memory_mb`, `backup` and the `backup_*` keys (see the header
+of `capabilities/services.postgres/postgres.sh` and [Backups](#backups-pgbackrest-to-r2)).
 
 ### TLS
 
@@ -110,7 +110,10 @@ Every apply (re)creates, in `db`, owned by `postgres`: the table
 `disk_free_bytes`, `disk_total_bytes` (the data directory, refreshed on apply
 and by the healthcheck, which never fails on it), `last_backup_at`,
 `last_backup_ok`, `last_restore_drill_at`, `last_restore_drill_ok` (null until
-backups report them), `updated_at`. Every declared role gets `USAGE` on
+backups report them), `updated_at`, then `last_backup_kind`,
+`last_backup_error`, `last_restore_drill_error` (columns are only ever
+appended). With `backup=pgbackrest`, `archive_lag_seconds` is the WAL lag
+(`pg_stat_archiver`). Every declared role gets `USAGE` on
 schema `aw` and `SELECT` on `aw.status` (not on `aw.facts`).
 
 ### Heartbeat
@@ -121,7 +124,9 @@ The `postgres` entry of `expose.services` carries an extra object:
 "postgres": {
   "database": "shop",
   "tls": { "caPem": "-----BEGIN CERTIFICATE-----…", "caSha256": "<sha256 of the CA cert DER, 64 hex>" },
-  "roles": [ { "name": "shop_app", "secretSha256": "<first 16 hex of sha256(password)>" } ]
+  "roles": [ { "name": "shop_app", "secretSha256": "<first 16 hex of sha256(password)>" } ],
+  "backup": { "mode": "pgbackrest", "lastBackupAt": "2026-10-17T03:04:11Z", "lastBackupOk": true,
+              "lastDrillAt": "2026-10-15T04:07:52Z", "lastDrillOk": true }
 }
 ```
 
@@ -129,6 +134,8 @@ The `postgres` entry of `expose.services` carries an extra object:
 last reconcile succeeded with the password fingerprinted, so the control
 plane can tell a rotation landed. Nothing secret is in it: the CA
 certificate is public and a password appears only as that fingerprint.
+`backup.mode` is `off` or `pgbackrest`; the times and results are null until
+a run reports them (no repository location, no key).
 
 ### Web admin
 
@@ -147,14 +154,181 @@ aw service list                           # every service, health
 aw service status postgres
 aw service logs postgres [lines]
 aw service snapshot postgres [label]      # CHECKPOINT + read-only btrfs snapshot of the data subvolume
-aw service backup postgres                # pg_dumpall | gzip -> backups/ (last 14 kept; backup.restic ships them offsite)
+aw service backup postgres                # backup=off: pg_dumpall | gzip -> backups/ (last 14 kept; backup.restic ships them offsite)
+                                          # backup=pgbackrest: a differential now (--full, --incr, --monthly)
 aw service restore postgres <file.sql.gz>
+aw service restore postgres --to '2026-10-17 09:30:00+00' --yes   # PITR (backup=pgbackrest), see the runbook below
+aw service drill postgres                 # restore drill now (backup=pgbackrest)
 aw service upgrade postgres 17            # snapshot + dump + pin the new major, then prints the pg_upgrade sequence
 aw service psql postgres -c 'select 1'
 ```
 
-`aw disable services.postgres` removes the unit and container and keeps
-the data, snapshots and dumps; `AW_PURGE=1` removes them too.
+`aw disable services.postgres` removes the unit and container (and the
+backup schedules and pgBackRest config) and keeps the data, snapshots and
+dumps; `AW_PURGE=1` removes them too. The R2 repository is never touched by
+the node outside pgBackRest's own retention.
+
+### Backups (pgBackRest to R2)
+
+`backup=pgbackrest` turns a dump-only database into one with continuous WAL
+archiving and point-in-time recovery, to an S3 repository on Cloudflare R2,
+encrypted on the node before it leaves (`aes-256-cbc`, pgBackRest's
+repository cipher).
+
+```bash
+sudo aw enable services.postgres --backup pgbackrest \
+  --backup_endpoint https://<account-id>.r2.cloudflarestorage.com --backup_bucket alwayswork-pg
+```
+
+| Key | Default | |
+|---|---|---|
+| `backup` | `off` | `off` (dumps only) or `pgbackrest` |
+| `backup_endpoint` | — | `https://<account-id>.r2.cloudflarestorage.com` (required) |
+| `backup_bucket` | — | the R2 bucket (required) |
+| `backup_path` | `/<node>/<db>` | repository path; monthly fulls go to `<backup_path>-monthly`. Set it explicitly if the node may be renamed |
+| `backup_region` | `auto` | R2 takes `auto` |
+| `backup_retention_full_weeks` | `2` | PITR window in weeks (2 → 14 days) |
+| `backup_monthly_keep` | `12` | monthly fulls kept; `0` = no monthly repository |
+
+What runs:
+
+| | |
+|---|---|
+| WAL | `archive_mode=on`, `archive_command='pgbackrest --stanza=<db> archive-push %p'`, `archive_timeout=60`, `wal_level=replica` — only while `backup=pgbackrest` |
+| Weekly full | Sunday 03:00 node-local → repo1 |
+| Daily differential | Monday–Saturday 03:00 → repo1 |
+| Monthly full | 1st of the month 05:00 → repo2 |
+| Restore drill | Wednesday 04:00 |
+
+All are systemd timers (`alwayswork-postgres-backup-{full,diff,monthly}.timer`,
+`alwayswork-postgres-restore-drill.timer`; `RandomizedDelaySec=10m`,
+`Persistent=true`) running `aw service backup postgres --full|--diff|--monthly`
+and `aw service drill postgres`. On first success of `stanza-create` +
+`check` (on apply) the first full backup starts right away.
+
+Retention. pgBackRest keeps retention per repository, so "14 days of PITR"
+and "a monthly full for a year" are two repositories in the same bucket:
+
+| | Path | Retention |
+|---|---|---|
+| repo1 | `<backup_path>` | `retention-full-type=time`, `retention-full=14`: every full needed to reach 14 days back is kept, with its differentials and all WAL in between — PITR anywhere in the window |
+| repo2 | `<backup_path>-monthly` | `retention-full-type=count`, `retention-full=12`; WAL (`retention-archive-type=full`, `1`) only for the newest monthly plus what each older one needs to be consistent — each monthly restores to its own end point |
+
+`archive-push` sends WAL to both repositories (pgBackRest pushes to every
+configured repo); repo2 expires it at the next monthly. Differentials expire
+with their full.
+
+**Image.** pgBackRest has to run inside the PostgreSQL container:
+`archive_command` runs there and a backup reads `PGDATA`. There is no
+maintained image with the official PostgreSQL build and pgBackRest
+(pgBackRest's own project publishes none; vendor images bundle their own
+PostgreSQL builds, licences or operators), so the node builds one with
+`podman build` from `capabilities/services.postgres/Containerfile`:
+`FROM` exactly the image it would otherwise run (pinned major, channel
+version, or `image` override — digest form welcome) plus pgBackRest
+**2.59.3** from the PGDG apt repository the official image already trusts
+(same signing key), resolved through `apt-archive.postgresql.org` so the
+pin still installs after PGDG moves on, and checked with `pgbackrest
+version`. The result is `localhost/alwayswork-postgres:<tag>-pgbackrest2.59.3-<hash>`
+(hash over the base ref, the pin and the Containerfile). The container
+carries `dev.alwayswork.base_image=<base>`, which is what image-update
+tracking compares with the wanted image, so `aw update` and channels work as
+before: a new base is a new tag and a rebuild. `pull=always` rebuilds
+against a newer base on every apply.
+
+**Secrets.** Three group secrets — delivered sealed, never generated and
+never node-owned:
+
+| Key | |
+|---|---|
+| `PGBACKREST_R2_ACCESS_KEY_ID` | R2 API token access key id |
+| `PGBACKREST_R2_SECRET_ACCESS_KEY` | R2 API token secret |
+| `PGBACKREST_CIPHER_PASS` | repository passphrase — **keep a copy outside the fleet**: without it the backups cannot be read |
+
+Without all three, preflight and apply refuse with the missing names and
+archiving is never turned on. They reach pgBackRest only through
+`/var/lib/alwayswork/services/postgres/pgbackrest/pgbackrest.conf` (0600, in
+a 0700 directory, mounted read-only into the container at
+`/etc/pgbackrest`), never through argv, a unit file, a log line or the
+heartbeat; errors recorded in `aw.facts` are redacted. Rotating the R2 key is
+a new group secret and an apply (the changed config restarts the container).
+The cipher passphrase cannot be rotated in place for an existing repository:
+use a new `backup_path`.
+
+Set up R2 once per fleet:
+
+1. Cloudflare dashboard → R2 → **Create bucket** (e.g. `alwayswork-pg`;
+   location automatic). No public access.
+2. R2 → **Manage API tokens** → **Create API token**: permission **Object Read
+   & Write**, **Apply to specific buckets only** → that bucket. Copy the
+   access key id and secret (shown once). The endpoint is
+   `https://<account-id>.r2.cloudflarestorage.com`.
+3. Put the three secrets on the node's group with the control plane's
+   secrets API (operator auth — Access service token shown; values from a
+   file, not the command line):
+
+   ```bash
+   umask 077; cat > /tmp/pg-backup-secrets.json <<'JSON'
+   { "PGBACKREST_R2_ACCESS_KEY_ID": "<access key id>",
+     "PGBACKREST_R2_SECRET_ACCESS_KEY": "<secret access key>",
+     "PGBACKREST_CIPHER_PASS": "<openssl rand -base64 48>" }
+   JSON
+   curl -fsS -X PUT "https://<control>/v1/admin/groups/<group-id>/secrets" \
+     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+     -H 'content-type: application/json' --data @/tmp/pg-backup-secrets.json
+   shred -u /tmp/pg-backup-secrets.json
+   ```
+
+4. Set `backup: pgbackrest` and the `backup_*` keys in the group's
+   `services.postgres` config (or `aw enable … --backup pgbackrest …` on the
+   node). The next delivery carries the sealed secrets and the apply turns on
+   archiving, creates the stanza, checks it and starts the first full.
+
+**Restore drill.** Weekly, `aw service drill postgres` restores the latest
+backup plus all archived WAL from repo1 into
+`/var/lib/alwayswork/services/postgres/drill/` inside a throwaway container
+of the same image (`alwayswork-postgres-drill`: `userns=auto`, uid 999, no
+capabilities, no published port, the workload network only to reach R2, its
+own copy of the config), starts PostgreSQL socket-only with
+`archive_mode=off` (a drill never writes to the repository), waits for
+recovery to finish, runs `SELECT count(*) FROM pg_database` and checks the
+configured database is there, stops, and deletes the scratch copy whatever
+happened. It refuses to start with less than 1.2× the data directory free
+and is cut off after 30 minutes. It never touches the live data directory.
+The result is `last_restore_drill_at/ok/error` in `aw.facts` and
+`lastDrillAt/Ok` on the heartbeat.
+
+**Recovery runbook** (point-in-time):
+
+1. Pick the target: `aw service status postgres` (last backup), or the
+   moment just before the incident, in UTC, e.g. `2026-10-17 09:30:00+00`.
+   Must be inside the PITR window.
+2. `sudo aw service restore postgres --to '2026-10-17 09:30:00+00' --yes`
+   (`--latest` replays to the end of the archive instead). Without `--yes` it
+   refuses. It stops `alwayswork-postgres`, **moves** the data directory to
+   `data.before-restore-<stamp>` (never deletes it), holds a lock so no apply
+   restarts the service meanwhile, restores into a fresh directory with
+   `pgbackrest restore --type=time --target=… --target-action=promote` in a
+   throwaway container, starts the service (PostgreSQL replays WAL from R2
+   to the target and promotes), waits until it is out of recovery and checks
+   the database exists. A failed restore puts the previous directory back and
+   starts it (the attempt is kept as `data.failed-restore-<stamp>`). If the
+   node dies mid-restore, apply keeps refusing while
+   `/var/lib/alwayswork/services/postgres/restore.lock` exists: re-run the
+   restore, or move `data.before-restore-<stamp>` back to `data`, then delete
+   the lock.
+3. Verify the application, then remove `data.before-restore-<stamp>`
+   yourself. A full backup of the new timeline starts automatically.
+4. From a lost node: enable `services.postgres` on a new node with the same
+   `db`, `backup_*` keys (`backup_path` set to the old node's) and group
+   secrets, then run step 2 there before the application writes to it. Until
+   then its apply warns that `stanza-create` does not match the repository —
+   expected: pgBackRest refuses to archive a different cluster into it.
+
+Backups on record: `sudo podman exec alwayswork-postgres pgbackrest
+--stanza=<db> info`. A monthly full (repo2) is restored by hand along the
+same steps, with pgBackRest's `--repo=2 --set=<backup label>` in place of
+`--type=time`; the agent's runbook covers it.
 
 ## Reaching it from an application on Cloudflare (Hyperdrive)
 

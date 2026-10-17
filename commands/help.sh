@@ -32,7 +32,7 @@ OPERATIONS
   reset [--purge]           Forget this identity so the node can re-join
   agent [interval]          Report state and reconcile (run as a service)
   service list              Service workloads on this node (postgres, ...)
-  service <action> <id>     status|logs|snapshot|backup|restore|upgrade|psql
+  service <action> <id>     status|logs|snapshot|backup|restore|drill|upgrade|psql
   package [list|reapply]    Packages delivered by the control plane (oci, capability, distro)
   config show|get|set       Node-local settings in worker.yaml (e.g. aw config set .updates.guard false)
   bridge --once             Serve the harness's allowlisted requests (path unit)

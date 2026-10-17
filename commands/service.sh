@@ -2,7 +2,7 @@
 # aw service — operate service workloads (SYSTEM_SPEC §12.7).
 #
 #   aw service list
-#   aw service status|logs|snapshot|backup|restore|upgrade|psql <id> [args]
+#   aw service status|logs|snapshot|backup|restore|drill|upgrade|psql <id> [args]
 #
 # Every action is the same audited path an agent uses through its tools:
 # the harness's alwayswork plugin calls exactly these commands.
@@ -13,6 +13,9 @@ cmd_service() {
     -h|--help|help)
       info "usage: aw service list"
       info "       aw service status|logs|snapshot|backup|restore <file>|upgrade <major>|psql <id> [args]"
+      info "       aw service backup postgres [--diff|--full|--incr|--monthly]   (backup=pgbackrest)"
+      info "       aw service restore postgres --to '<time>' --yes | --latest --yes   (point-in-time)"
+      info "       aw service drill postgres                                   (restore drill)"
       return 0 ;;
     list)
       cfg_require; cfg_need
