@@ -1091,6 +1091,74 @@ pg_t_heartbeat_off() {
   pg_probe wl_unreport_manifest_surfaces services.postgres >/dev/null 2>&1
   return "$r"
 }
+# podman for the metrics sample: `exec` counts itself, logs argv and stdin,
+# and answers one canned json_build_object row (plus a key the sample must
+# drop) — or fails like a server that is down.
+cat > "$TMP/pgbin/podman-metrics" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == exec ]] || exit 0
+printf '%s\n' "$*" >> "$PG_LOG.argv"
+cat >> "$PG_LOG.stdin"
+printf 'x\n' >> "$PG_LOG.count"
+[[ -n "${PG_DOWN:-}" ]] && { echo 'psql: error: connection to server on socket failed' >&2; exit 2; }
+printf '%s\n' '{"serverVersion" : "17.6", "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "query" : "SELECT q-Secret-7"}'
+EOS
+mkdir -p "$TMP/pgmbin"; cp "$TMP/pgbin/podman-metrics" "$TMP/pgmbin/podman"; chmod +x "$TMP/pgmbin/podman"
+pg_mprobe() { PATH="$TMP/pgmbin:$PATH" PG_LOG="$TMP/pgmlog" PG_FAKE_SEC="$TMP/pg/sec" pg_probe "$@"; }
+pg_mcount() { wc -l < "$TMP/pgmlog.count" 2>/dev/null | tr -d ' ' || echo 0; }
+pg_t_metrics() {
+  local c="$TMP/pg/state/postgres-metrics.json" j
+  rm -f "$TMP/pgmlog".* "$c"; mkdir -p "$TMP/pg/state/services/postgres/data"
+  j="$(pg_mprobe pg_metrics_json)" || return 1
+  jq -e '(keys_unsorted) == ["at","up","serverVersion","uptimeSec","connections","maxConnections","activeQueries",
+          "dbSizeBytes","diskFreeBytes","diskTotalBytes","cacheHitRatio","xactCommit","xactRollback","deadlocks",
+          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots"]
+     and .up == true and .serverVersion == "17.6" and .connections == 7 and .cacheHitRatio == 0.9934
+     and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+     and (.diskFreeBytes | type) == "number" and .diskTotalBytes >= .diskFreeBytes and .walArchivedCount == null' <<<"$j" >/dev/null || { echo "$j"; return 1; }
+  # One psql, over the socket as postgres, in the configured db, logging off.
+  grep -qF "exec -i alwayswork-postgres psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d app" "$TMP/pgmlog.argv" || return 1
+  grep -qF "SET log_statement = 'none';" "$TMP/pgmlog.stdin" && grep -qF "SELECT json_build_object(" "$TMP/pgmlog.stdin" || return 1
+  [[ "$(pg_mcount)" == 1 ]] || return 1
+  # Cached for 60 s: a second sample within the window does not touch the db.
+  [[ "$(pg_mprobe pg_metrics_json)" == "$j" && "$(pg_mcount)" == 1 ]] || return 1
+  touch -t 200001010000 "$c"
+  pg_mprobe pg_metrics_json >/dev/null && [[ "$(pg_mcount)" == 2 ]] || return 1
+  [[ "$(pg_mode "$c")" == 644 ]] || return 1
+  return 0
+}
+pg_t_metrics_down() {
+  local c="$TMP/pg/state/postgres-metrics.json" j
+  rm -f "$TMP/pgmlog".* "$c"
+  j="$(PG_DOWN=1 pg_mprobe pg_metrics_json)" || return 1
+  jq -e '(keys_unsorted) == ["at","up"] and .up == false' <<<"$j" >/dev/null || { echo "$j"; return 1; }
+  # Down is cached too: a fast heartbeat never retries within the window.
+  PG_DOWN=1 pg_mprobe pg_metrics_json >/dev/null && [[ "$(pg_mcount)" == 1 ]] || return 1
+  # No podman at all is down, not an error.
+  rm -f "$c"
+  j="$(PATH="/usr/bin:/bin" pg_probe pg_metrics_json)" && jq -e '.up == false' <<<"$j" >/dev/null
+}
+pg_t_metrics_heartbeat() {
+  local c="$TMP/pg/state/postgres-metrics.json" j
+  rm -f "$TMP/pgmlog".* "$c"
+  printf 'POSTGRES_APP_PASSWORD=app-Secret-1\n' > "$TMP/pg/sec"
+  pg_cfg 'del(.capabilities.config.services.postgres.roles)'
+  pg_probe wl_report_manifest_surfaces services.postgres >/dev/null 2>&1 && pg_mprobe pg_report >/dev/null 2>&1 || return 1
+  jq -e '.postgres.metrics.up == true' "$TMP/pg/state/services/postgres.json" >/dev/null || return 1
+  # Each heartbeat refreshes it (through the 60 s cache); the existing fields stay.
+  touch -t 200001010000 "$c"
+  j="$(AW_TEST_PODMAN=1 pg_mprobe wl_services_json)" || return 1
+  jq -e '.[0].postgres | .database == "app" and has("roles") and has("backup") and .metrics.up == true and .metrics.replicationSlots == 1' <<<"$j" >/dev/null || { echo "$j"; return 1; }
+  [[ "$(pg_mcount)" == 2 ]] || return 1
+  # No secret, no password, no query text anywhere the heartbeat reads.
+  ! grep -qF -e "Secret-" -e "query" <<<"$j" || return 1
+  ! grep -qF -e "Secret-" -e '"query"' "$c" || return 1
+  ! grep -qF "Secret-" "$TMP/pgmlog.argv" "$TMP/pgmlog.stdin" || return 1
+  j="$(AW_TEST_PODMAN=1 PG_DOWN=1 pg_mprobe eval 'rm -f "$AW_STATE/postgres-metrics.json"; wl_services_json')" || return 1
+  jq -e '.[0].postgres.metrics | keys == ["at","up"] and .up == false' <<<"$j" >/dev/null || { echo "$j"; return 1; }
+  pg_probe wl_unreport_manifest_surfaces services.postgres >/dev/null 2>&1
+  rm -f "$c"
+}
 pg_t_admin() {
   local e="$TMP/pg/etc/postgres-admin.env" r=0
   [[ "$(pg_probe pg_admin)" == "off" ]] || r=1
@@ -1171,6 +1239,9 @@ if have yq; then
   check "pg: a bad roles declaration never reconciles (a typo disables no role)" \
     'rm -f "$TMP/pglog".*; pg_cfg ".capabilities.config.services.postgres.roles = \"Bad Name\"" && ! pg_rprobe pg_reconcile >/dev/null 2>&1; r=$?; pg_cfg "del(.capabilities.config.services.postgres.roles)"; (( r == 0 )) && [[ ! -e "$TMP/pglog.stdin" ]]'
   check "pg: heartbeat — tls omitted when tls=off; undeclared roles drop out" 'pg_t_heartbeat_off'
+  check "pg: metrics — one psql row (socket, logging off) plus host disk, in the contract shape; cached 60 s" 'pg_t_metrics'
+  check "pg: metrics — down or psql failing is {at, up:false} only, cached too" 'pg_t_metrics_down'
+  check "pg: metrics — every heartbeat carries postgres.metrics beside the existing fields; no secret or query text" 'pg_t_metrics_heartbeat'
   check "pg: the web admin is off by default; on/pgweb enable it, over sslmode=require while tls=on" 'pg_t_admin && grep -q "enabled_default: false" "$ROOT/capabilities/services.postgres/manifest.yaml"'
   check "pg: apply reconciles and reports; the healthcheck refreshes disk facts but never fails on them" \
     'grep -q "pg_status_facts >/dev/null 2>&1 || true" "$ROOT/capabilities/services.postgres/healthcheck.sh" && grep -q "^pg_reconcile" "$ROOT/capabilities/services.postgres/install.sh" && grep -q "^pg_report" "$ROOT/capabilities/services.postgres/install.sh"'

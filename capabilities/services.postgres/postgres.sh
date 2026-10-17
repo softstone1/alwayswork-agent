@@ -35,7 +35,8 @@
 # absent but a delivered value wins: that is how the control plane rotates,
 # and the next apply ALTERs the role. Every apply reconciles roles, the `aw`
 # schema (aw.facts, aw.status) and the heartbeat's `postgres` object
-# (database, CA certificate, per-role password fingerprints, backup state —
+# (database, CA certificate, per-role password fingerprints, backup state,
+# live metrics sampled at most once a minute —
 # never a secret). backup=pgbackrest needs three group secrets, delivered
 # sealed and never node-owned: PGBACKREST_R2_ACCESS_KEY_ID,
 # PGBACKREST_R2_SECRET_ACCESS_KEY, PGBACKREST_CIPHER_PASS. Without them apply
@@ -546,11 +547,80 @@ pg_report_json() {
   jq -nc --arg db "$(pg_db)" --argjson tls "$tls" --argjson roles "$roles" --argjson backup "$backup" \
     '{database:$db} + (if $tls == null then {} else {tls:$tls} end) + {roles:$roles, backup:$backup}'
 }
+# Key metrics for the control plane's Databases view: the heartbeat's
+# postgres.metrics. One psql over the socket (peer, statement logging off)
+# returns one json_build_object row; disk is df of the data directory, host
+# side. Counters (xact*, deadlocks, wal*) are cumulative since the last stats
+# reset — the control plane takes deltas. Down, or psql failing / timing out
+# (5 s), is {at, up:false} and nothing else. Sampled at most once per
+# PG_METRICS_TTL seconds (60): the result is cached in
+# $AW_STATE/postgres-metrics.json, so a fast heartbeat never hammers the
+# database. Never a secret, a role password or query text.
+PG_METRICS_TTL="${PG_METRICS_TTL:-60}"
+PG_METRICS_SQL="SELECT json_build_object(
+  'serverVersion', current_setting('server_version'),
+  'uptimeSec', extract(epoch FROM now() - pg_postmaster_start_time())::bigint,
+  'connections', (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::int,
+  'maxConnections', current_setting('max_connections')::int,
+  'activeQueries', (SELECT count(*) FROM pg_stat_activity
+                     WHERE backend_type = 'client backend' AND state = 'active' AND pid <> pg_backend_pid())::int,
+  'dbSizeBytes', pg_database_size(current_database()),
+  'cacheHitRatio', CASE WHEN d.blks_hit + d.blks_read = 0 THEN NULL
+                        ELSE round(d.blks_hit::numeric / (d.blks_hit + d.blks_read), 4) END,
+  'xactCommit', d.xact_commit, 'xactRollback', d.xact_rollback, 'deadlocks', d.deadlocks,
+  'longestQuerySec', (SELECT round(extract(epoch FROM max(now() - query_start))::numeric, 1) FROM pg_stat_activity
+                       WHERE backend_type = 'client backend' AND state = 'active' AND pid <> pg_backend_pid()),
+  'longestTxSec', (SELECT round(extract(epoch FROM max(now() - xact_start))::numeric, 1) FROM pg_stat_activity
+                    WHERE backend_type = 'client backend' AND xact_start IS NOT NULL AND pid <> pg_backend_pid()),
+  'walArchivedCount', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL ELSE a.archived_count END,
+  'walFailedCount', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL ELSE a.failed_count END,
+  'lastArchivedAt', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL
+                         ELSE to_char(a.last_archived_time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') END,
+  'archiveLagSec', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL
+                        ELSE round(extract(epoch FROM now() - a.last_archived_time)::numeric, 1) END,
+  'replicationSlots', (SELECT count(*) FROM pg_replication_slots)::int)
+  FROM pg_stat_database d, pg_stat_archiver a WHERE d.datname = current_database();"
+pg_metrics_file() { printf '%s' "$AW_STATE/postgres-metrics.json"; }
+pg_metrics_sample() {
+  local db at row free="" total="" t=()
+  at="$(pg_now)"
+  db="$(pg_db 2>/dev/null)" || db=""
+  have timeout && t=(timeout 5)
+  if [[ -n "$db" ]] && have podman \
+    && row="$(printf '%s\n%s\n' "$PG_SQL_QUIET" "$PG_METRICS_SQL" \
+      | ${t[@]+"${t[@]}"} podman exec -i "$(pg_container)" psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d "$db" 2>/dev/null)" \
+    && jq -e 'type == "object" and (.serverVersion | type) == "string"' <<<"$row" >/dev/null 2>&1; then
+    read -r total free < <(df -Pk "$(pg_data)" 2>/dev/null | awk 'NR == 2 { print $2 * 1024, $4 * 1024 }')
+    [[ "$free" =~ ^[0-9]+$ ]] || free=null
+    [[ "$total" =~ ^[0-9]+$ ]] || total=null
+    jq -c --arg at "$at" --argjson free "$free" --argjson total "$total" '
+      {at:$at, up:true, serverVersion, uptimeSec, connections, maxConnections, activeQueries,
+       dbSizeBytes, diskFreeBytes:$free, diskTotalBytes:$total, cacheHitRatio,
+       xactCommit, xactRollback, deadlocks, longestQuerySec, longestTxSec,
+       walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots}' <<<"$row"
+  else
+    jq -nc --arg at "$at" '{at:$at, up:false}'
+  fi
+}
+pg_metrics_json() {
+  local f m now mt
+  f="$(pg_metrics_file)"
+  if [[ -s "$f" ]]; then
+    now="$(date +%s)"; mt="$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)"
+    if (( now - mt >= 0 && now - mt < PG_METRICS_TTL )) && m="$(jq -ce 'select(type == "object" and has("up"))' "$f" 2>/dev/null)"; then
+      printf '%s\n' "$m"; return 0
+    fi
+  fi
+  m="$(pg_metrics_sample)" || m="$(jq -nc --arg at "$(pg_now)" '{at:$at, up:false}')"
+  [[ "$DRY_RUN" == "1" ]] || { printf '%s\n' "$m" | aw_write "$f" && chmod 644 "$f" 2>/dev/null; } || true
+  printf '%s\n' "$m"
+}
 pg_report() {
   local f out pg
   f="$(wl_services_dir)/$PG_ID.json"
   [[ -f "$f" && "$DRY_RUN" != "1" ]] || return 0
   pg="$(pg_report_json)" || return 1
+  pg="$(jq -c --argjson m "$(pg_metrics_json)" '. + {metrics:$m}' <<<"$pg")" || return 1
   out="$(jq -c --argjson pg "$pg" '. + {postgres:$pg}' "$f")" || return 1
   printf '%s\n' "$out" | aw_write "$f"
   chmod 644 "$f" 2>/dev/null || true

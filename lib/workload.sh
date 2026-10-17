@@ -277,7 +277,7 @@ wl_unreport_service() { run rm -f "$(wl_services_dir)/$1.json"; }
 
 # The set the heartbeat carries, with live health from podman where it runs.
 wl_services_json() {
-  local d f id health
+  local d f id health metrics
   d="$(wl_services_dir)"
   [[ -d "$d" ]] || { printf '[]'; return 0; }
   for f in "$d"/*.json; do
@@ -288,8 +288,26 @@ wl_services_json() {
       health="$(podman inspect --format '{{.State.Health.Status}}' "$(wl_container "$id")" 2>/dev/null || true)"
       [[ -n "$health" ]] || health="$(podman inspect --format '{{.State.Status}}' "$(wl_container "$id")" 2>/dev/null || echo unknown)"
     fi
-    jq -c --arg h "$health" '. + {health:$h}' "$f" 2>/dev/null
+    if [[ "$id" == "postgres" ]] && jq -e 'has("postgres")' "$f" >/dev/null 2>&1 \
+      && [[ -z "${AW_TEST:-}" || -n "${AW_TEST_PODMAN:-}" ]] && metrics="$(wl_pg_metrics_json)"; then
+      jq -c --arg h "$health" --argjson m "$metrics" '. + {health:$h} | .postgres.metrics = $m' "$f" 2>/dev/null
+    else
+      jq -c --arg h "$health" '. + {health:$h}' "$f" 2>/dev/null
+    fi
   done | jq -sc '.'
+}
+
+# The postgres service's live metrics for every heartbeat (cached 60 s by
+# pg_metrics_json, so a fast tick never hammers the database). Sourced in a
+# subshell: the capability's helpers stay out of the agent's namespace.
+wl_pg_metrics_json() {
+  declare -F cap_config >/dev/null || return 1
+  local dir="$AW_ROOT/capabilities/services.postgres" m
+  [[ -f "$dir/postgres.sh" ]] || return 1
+  # shellcheck disable=SC1091
+  m="$(export CAP_ID=services.postgres CAP_DIR="$dir"; source "$dir/postgres.sh" && pg_metrics_json 2>/dev/null)" || return 1
+  jq -e 'type == "object" and has("up")' <<<"$m" >/dev/null 2>&1 || return 1
+  printf '%s' "$m"
 }
 
 # Every AlwaysWork container on this node with live usage, for the heartbeat

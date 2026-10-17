@@ -129,7 +129,14 @@ The `postgres` entry of `expose.services` carries an extra object:
   "tls": { "caPem": "-----BEGIN CERTIFICATE-----…", "caSha256": "<sha256 of the CA cert DER, 64 hex>" },
   "roles": [ { "name": "shop_app", "secretSha256": "<first 16 hex of sha256(password)>" } ],
   "backup": { "mode": "pgbackrest", "lastBackupAt": "2026-10-17T03:04:11Z", "lastBackupOk": true,
-              "lastDrillAt": "2026-10-15T04:07:52Z", "lastDrillOk": true }
+              "lastDrillAt": "2026-10-15T04:07:52Z", "lastDrillOk": true },
+  "metrics": { "at": "2026-10-17T09:30:00Z", "up": true, "serverVersion": "17.6", "uptimeSec": 86400,
+               "connections": 7, "maxConnections": 100, "activeQueries": 2,
+               "dbSizeBytes": 123456789, "diskFreeBytes": 52613349376, "diskTotalBytes": 107374182400,
+               "cacheHitRatio": 0.9934, "xactCommit": 5000, "xactRollback": 12, "deadlocks": 0,
+               "longestQuerySec": 3.2, "longestTxSec": 41.0,
+               "walArchivedCount": 812, "walFailedCount": 0, "lastArchivedAt": "2026-10-17T09:29:41Z", "archiveLagSec": 19.0,
+               "replicationSlots": 0 }
 }
 ```
 
@@ -139,6 +146,24 @@ plane can tell a rotation landed. Nothing secret is in it: the CA
 certificate is public and a password appears only as that fingerprint.
 `backup.mode` is `off` or `pgbackrest`; the times and results are null until
 a run reports them (no repository location, no key).
+
+`metrics` feeds the control plane's Databases view and travels with every
+heartbeat. It is one `psql` over the container socket as `postgres` (peer,
+statement logging off, bounded to 5 s) returning one `json_build_object` row
+for `db`, plus `diskFreeBytes`/`diskTotalBytes` from `df` of the data
+directory on the host. `at` is when it was sampled (UTC): the sample is cached
+in `/var/lib/alwayswork/postgres-metrics.json` and reused for 60 s, so a fast
+heartbeat never hammers the database. `connections` and `activeQueries` count
+client backends (`activeQueries` and the `longest*` ages leave out the sample
+itself); `cacheHitRatio` is `blks_hit / (blks_hit + blks_read)` for `db`
+(null before any block is read); `longestQuerySec` / `longestTxSec` are the
+oldest active statement and open transaction (null when none). `xactCommit`,
+`xactRollback`, `deadlocks`, `walArchivedCount` and `walFailedCount` are
+cumulative since the last statistics reset — the control plane takes deltas.
+The `wal*`, `lastArchivedAt` and `archiveLagSec` fields are null while
+archiving is off (`backup=off`). When the server is down or `psql` fails or
+times out, `metrics` is only `{"at": …, "up": false}`. No secret, role
+password or query text is ever in it.
 
 ### Web admin
 
