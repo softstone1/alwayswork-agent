@@ -357,8 +357,15 @@ infra_converge() {
     config_changed=1
     printf '%s\n' "$rendered" | aw_write "$cand"
     run chmod 0600 "$cand" 2>/dev/null || true
-    if [[ "$DRY_RUN" != "1" ]] && ! "$sshd" -t -f "$cand" >/dev/null 2>&1; then
-      err "control: the candidate sshd config was rejected by sshd -t; the previous infra sshd config stays in place"
+    # sshd -t refuses to run without its privilege-separation directory
+    # ("Missing privilege separation directory: /run/sshd", exit 255). The
+    # distro's ssh.service creates it, and the SSH lockdown stops that
+    # service — so on a locked-down node the check failed for a reason that
+    # had nothing to do with the config (live on Ubuntu 26.04, 2026-10-17).
+    [[ "$DRY_RUN" == "1" ]] || install -d -m 0755 /run/sshd 2>/dev/null || true
+    local why=""
+    if [[ "$DRY_RUN" != "1" ]] && ! why="$("$sshd" -t -f "$cand" 2>&1)"; then
+      err "control: the candidate sshd config was rejected by sshd -t (${why:0:300}); the previous infra sshd config stays in place"
       run rm -f "$cand"
       _infra_write_state_failed
       return 0
