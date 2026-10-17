@@ -2001,7 +2001,7 @@ echo "== listener audit =="
 # health.listeners (issue #16): a stubbed ss and podman on PATH; the stubs
 # answer only under AW_TEST_PODMAN (podman) — ss is always the stub here.
 mkdir -p "$TMP/lsbin"
-cp "$ROOT/tests/fixtures/ss-stub.sh" "$TMP/lsbin/ss"; cp "$ROOT/tests/fixtures/podman-stub.sh" "$TMP/lsbin/podman"; chmod +x "$TMP/lsbin/"*
+cp "$ROOT/tests/fixtures/ss-stub.sh" "$TMP/lsbin/ss"; cp "$ROOT/tests/fixtures/ip-stub.sh" "$TMP/lsbin/ip"; cp "$ROOT/tests/fixtures/podman-stub.sh" "$TMP/lsbin/podman"; chmod +x "$TMP/lsbin/"*
 ls_probe() { PATH="$TMP/lsbin:$PATH" bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; $1"; }
 LS_ALL="$(AW_TEST_PODMAN=1 ls_probe health_listeners_json)"
 check "listeners: v4/v6/wildcard binds reported with process names" \
@@ -2016,6 +2016,14 @@ check "listeners: the alwayswork podman network (v4 and v6 subnets) is excluded"
   '! jq -e "any(.[]; .addr == \"10.89.0.1\" or .addr == \"fd00:aa::1\")" <<<"$LS_ALL" >/dev/null'
 check "listeners: without the network inspect, container-network binds are reported" \
   '[[ "$(ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.89.0.1\" or .addr == \"fd00:aa::1\")] | length")" == "2" ]]'
+check "listeners: binds on awinfra0 and CloudflareWARP (v4 and v6) are excluded" \
+  '! jq -e "any(.[]; .addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))" <<<"$LS_ALL" >/dev/null'
+check "listeners: without awinfra0, its bind is reported (WARP still excluded)" \
+  '[[ "$(IP_NO_AWINFRA=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\"))) | .addr] | join(\",\")")" == "10.255.0.7" ]]'
+check "listeners: without CloudflareWARP, its binds are reported (awinfra0 still excluded)" \
+  '[[ "$(IP_NO_WARP=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))] | length")" == "2" ]]'
+check "listeners: wildcard binds stay reported with the private interfaces present" \
+  'jq -e "any(.[]; .addr == \"0.0.0.0\") and any(.[]; .addr == \"::\")" <<<"$LS_ALL" >/dev/null'
 check "listeners: the DHCP client socket (udp 68) is excluded" \
   '! jq -e "any(.[]; .port == 68)" <<<"$LS_ALL" >/dev/null'
 check "listeners: non-LISTEN tcp states are ignored" \

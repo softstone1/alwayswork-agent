@@ -144,8 +144,14 @@ built from `ss -Htulnp`:
 - Listed: TCP sockets in `LISTEN` and bound UDP sockets (`UNCONN`) whose
   address is neither loopback (`127.0.0.0/8`, `::1`) nor inside the
   `alwayswork` podman network's subnets (`podman network inspect
-  alwayswork`; skipped when podman or the network is absent). Wildcard binds
-  (`0.0.0.0`, `::`, `*`) are exactly the exposure looked for and are listed.
+  alwayswork`; skipped when podman or the network is absent), nor an
+  address of the private infrastructure interfaces when they exist
+  (`ip -o addr show dev <name>`): `awinfra0`, the dummy interface holding a
+  /32 from `10.255.0.0/16` routed only through the node's Cloudflare Tunnel
+  (phase N2 binds sshd there), and `CloudflareWARP`, the Cloudflare Mesh /
+  Cloudflare One Client interface reachable only through Cloudflare policy.
+  Wildcard binds (`0.0.0.0`, `::`, `*`) are exactly the exposure looked for
+  and are listed.
 - `addr` is printed without IPv6 brackets or `%iface` scope suffixes;
   `process` is the command name `ss -p` shows (empty when it cannot see it).
 - The DHCP client socket (udp 68) is excluded: a client, not a service.

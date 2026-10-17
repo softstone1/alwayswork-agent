@@ -143,13 +143,38 @@ _health_container_subnets() {
     | jq -r '[.. | objects | .subnet? // empty | strings] | unique | .[]' 2>/dev/null || true
 }
 
+# Addresses of the private infrastructure interfaces, one per line; nothing
+# for an interface that does not exist. A socket bound there is not an
+# exposure:
+#   awinfra0        a dummy interface holding a /32 from 10.255.0.0/16 that
+#                   is routed only through the node's Cloudflare Tunnel
+#                   (NETWORK_SECURITY N2 binds sshd there)
+#   CloudflareWARP  the Cloudflare Mesh / Cloudflare One Client (WARP)
+#                   interface, reachable only through Cloudflare policy
+_HEALTH_PRIVATE_IFACES=(awinfra0 CloudflareWARP)
+_health_mesh_addrs() {
+  have ip || return 0
+  local dev
+  for dev in "${_HEALTH_PRIVATE_IFACES[@]}"; do
+    ip -o addr show dev "$dev" 2>/dev/null \
+      | awk '$3 == "inet" || $3 == "inet6" { sub(/\/.*/, "", $4); print $4 }' 2>/dev/null || true
+  done
+}
+
+# _health_same_addr <a> <b> — equal addresses (IPv6 compared expanded).
+_health_same_addr() {
+  [[ "$1" == "$2" ]] && return 0
+  local x y
+  x="$(_health_v6_hex "$1")" && y="$(_health_v6_hex "$2")" && [[ "$x" == "$y" ]]
+}
+
 # health_listeners_json — the health.listeners array (max 32). Fails (prints
 # nothing) when `ss` is unavailable, so the field is omitted, not [] .
 health_listeners_json() {
   have ss || return 1
   local out
   out="$(ss -Htulnp 2>/dev/null)" || return 1
-  local subnets; subnets="$(_health_container_subnets)"
+  local subnets mesh m; subnets="$(_health_container_subnets)"; mesh="$(_health_mesh_addrs)"
   local netid state local_ rest addr port proc s skip rows=""
   while read -r netid state _ _ local_ _ rest; do
     case "$netid:$state" in tcp:LISTEN|udp:UNCONN) ;; *) continue ;; esac
@@ -165,6 +190,13 @@ health_listeners_json() {
       [[ -n "$s" ]] || continue
       if _health_in_cidr "$addr" "$s"; then skip=1; break; fi
     done <<<"$subnets"
+    # Bound to an awinfra0 / CloudflareWARP address: reachable only through
+    # the tunnel or Cloudflare policy. Wildcards never match an interface
+    # address, so they stay reported.
+    while IFS= read -r m; do
+      [[ -n "$m" ]] || continue
+      if _health_same_addr "$addr" "$m"; then skip=1; break; fi
+    done <<<"$mesh"
     (( skip )) && continue
     proc=""
     [[ "$rest" =~ users:\(\(\"([^\"]*)\" ]] && proc="${BASH_REMATCH[1]}"
