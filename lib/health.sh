@@ -56,6 +56,164 @@ health_doctor_refresh() {
   ASSUME_YES=1 NO_COLOR=1 "$AW_ROOT/bin/alwayswork" doctor >/dev/null 2>&1 </dev/null || true
 }
 
+# --- listener audit (issue #16, NETWORK_SECURITY N1) -------------------------
+# A node accepts no inbound connections: everything it serves is reached
+# through the outbound tunnel or published on 127.0.0.1. health.listeners
+# names every socket that breaks that rule — TCP LISTEN / UDP bound sockets
+# whose address is neither loopback nor inside the `alwayswork` podman
+# network. Wildcard binds (0.0.0.0, ::, *) are exactly the exposure looked
+# for, so they are reported.
+
+# _health_v4_int <a.b.c.d> — the address as one integer, or fails.
+_health_v4_int() {
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  local i n=0
+  for i in 1 2 3 4; do
+    (( 10#${BASH_REMATCH[i]} <= 255 )) || return 1
+    n=$(( n * 256 + 10#${BASH_REMATCH[i]} ))
+  done
+  printf '%s' "$n"
+}
+
+# _health_v6_hex <addr> — the address as 32 lowercase hex digits, or fails.
+# Accepts "::" compression and a trailing dotted quad (::ffff:1.2.3.4).
+_health_v6_hex() {
+  local a h t g out="" fill=0 hg=() tg=()
+  a="$(printf '%s' "$1" | tr 'A-F' 'a-f')"
+  if [[ "$a" =~ ^(.*:)([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    local pre="${BASH_REMATCH[1]}" n
+    n="$(_health_v4_int "${BASH_REMATCH[2]}")" || return 1
+    a="${pre}$(printf '%x:%x' $(( n >> 16 )) $(( n & 65535 )))"
+  fi
+  [[ "$a" =~ ^[0-9a-f:]+$ && "$a" == *:* ]] || return 1
+  if [[ "$a" == *::* ]]; then
+    h="${a%%::*}"; t="${a#*::}"
+    [[ "$t" != *::* ]] || return 1
+    [[ -n "$h" ]] && IFS=: read -ra hg <<<"$h"
+    [[ -n "$t" ]] && IFS=: read -ra tg <<<"$t"
+    fill=$(( 8 - ${#hg[@]} - ${#tg[@]} ))
+    (( fill >= 1 )) || return 1
+  else
+    IFS=: read -ra hg <<<"$a"
+    (( ${#hg[@]} == 8 )) || return 1
+  fi
+  for g in "${hg[@]}"; do [[ "$g" =~ ^[0-9a-f]{1,4}$ ]] || return 1; out+="$(printf '%04x' "0x$g")"; done
+  while (( fill-- > 0 )); do out+="0000"; done
+  for g in "${tg[@]}"; do [[ "$g" =~ ^[0-9a-f]{1,4}$ ]] || return 1; out+="$(printf '%04x' "0x$g")"; done
+  [[ ${#out} -eq 32 ]] || return 1
+  printf '%s' "$out"
+}
+
+# _health_in_cidr <addr> <cidr> — 0 when addr lies inside cidr (same family).
+_health_in_cidr() {
+  local addr="$1" net="${2%/*}" bits="${2##*/}" a n
+  [[ "$2" == */* && "$bits" =~ ^[0-9]+$ ]] || return 1
+  if a="$(_health_v4_int "$addr")"; then
+    n="$(_health_v4_int "$net")" || return 1
+    (( bits <= 32 )) || return 1
+    local mask=$(( bits == 0 ? 0 : (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+    (( (a & mask) == (n & mask) ))
+    return
+  fi
+  a="$(_health_v6_hex "$addr")" || return 1
+  n="$(_health_v6_hex "$net")" || return 1
+  (( bits <= 128 )) || return 1
+  local full=$(( bits / 4 )) rest=$(( bits % 4 ))
+  [[ "${a:0:full}" == "${n:0:full}" ]] || return 1
+  (( rest == 0 )) && return 0
+  local m=$(( (0xF << (4 - rest)) & 0xF ))
+  (( (0x${a:full:1} & m) == (0x${n:full:1} & m) ))
+}
+
+# _health_loopback <addr> — 127.0.0.0/8, ::1, and v4-mapped 127.x.
+_health_loopback() {
+  local a="$1"
+  [[ "$a" =~ ^::[fF]{4}:([0-9.]+)$ ]] && a="${BASH_REMATCH[1]}"
+  _health_in_cidr "$a" 127.0.0.0/8 && return 0
+  [[ "$(_health_v6_hex "$a" 2>/dev/null)" == "00000000000000000000000000000001" ]]
+}
+
+# The `alwayswork` podman network's subnets (netavark `.subnets[].subnet`
+# or CNI `ipam.ranges`), one per line. Nothing when podman or the network is
+# absent. Under AW_TEST podman is only consulted when AW_TEST_PODMAN is set.
+_health_container_subnets() {
+  have podman || return 0
+  [[ -z "${AW_TEST:-}" || -n "${AW_TEST_PODMAN:-}" ]] || return 0
+  podman network inspect alwayswork 2>/dev/null \
+    | jq -r '[.. | objects | .subnet? // empty | strings] | unique | .[]' 2>/dev/null || true
+}
+
+# Addresses of the private infrastructure interfaces, one per line; nothing
+# for an interface that does not exist. A socket bound there is not an
+# exposure:
+#   awinfra0        a dummy interface holding a /32 from 10.255.0.0/16 that
+#                   is routed only through the node's Cloudflare Tunnel
+#                   (NETWORK_SECURITY N2 binds sshd there)
+#   CloudflareWARP  the Cloudflare Mesh / Cloudflare One Client (WARP)
+#                   interface, reachable only through Cloudflare policy
+_HEALTH_PRIVATE_IFACES=(awinfra0 CloudflareWARP)
+_health_mesh_addrs() {
+  have ip || return 0
+  local dev
+  for dev in "${_HEALTH_PRIVATE_IFACES[@]}"; do
+    ip -o addr show dev "$dev" 2>/dev/null \
+      | awk '$3 == "inet" || $3 == "inet6" { sub(/\/.*/, "", $4); print $4 }' 2>/dev/null || true
+  done
+}
+
+# _health_same_addr <a> <b> — equal addresses (IPv6 compared expanded).
+_health_same_addr() {
+  [[ "$1" == "$2" ]] && return 0
+  local x y
+  x="$(_health_v6_hex "$1")" && y="$(_health_v6_hex "$2")" && [[ "$x" == "$y" ]]
+}
+
+# health_listeners_json — the health.listeners array (max 32). Fails (prints
+# nothing) when `ss` is unavailable, so the field is omitted, not [] .
+health_listeners_json() {
+  have ss || return 1
+  local out
+  out="$(ss -Htulnp 2>/dev/null)" || return 1
+  local subnets mesh m; subnets="$(_health_container_subnets)"; mesh="$(_health_mesh_addrs)"
+  local netid state local_ rest addr port proc s skip rows=""
+  while read -r netid state _ _ local_ _ rest; do
+    case "$netid:$state" in tcp:LISTEN|udp:UNCONN) ;; *) continue ;; esac
+    port="${local_##*:}"; addr="${local_%:*}"
+    [[ "$port" =~ ^[0-9]+$ && -n "$addr" ]] || continue
+    addr="${addr#\[}"; addr="${addr%\]}"; addr="${addr%%\%*}"
+    [[ -n "$addr" ]] || continue
+    # The DHCP client's socket (udp 68) is a client, not a service.
+    [[ "$netid" == udp && "$port" == 68 ]] && continue
+    _health_loopback "$addr" && continue
+    skip=0
+    while IFS= read -r s; do
+      [[ -n "$s" ]] || continue
+      if _health_in_cidr "$addr" "$s"; then skip=1; break; fi
+    done <<<"$subnets"
+    # Bound to an awinfra0 / CloudflareWARP address: reachable only through
+    # the tunnel or Cloudflare policy. Wildcards never match an interface
+    # address, so they stay reported.
+    while IFS= read -r m; do
+      [[ -n "$m" ]] || continue
+      if _health_same_addr "$addr" "$m"; then skip=1; break; fi
+    done <<<"$mesh"
+    (( skip )) && continue
+    proc=""
+    [[ "$rest" =~ users:\(\(\"([^\"]*)\" ]] && proc="${BASH_REMATCH[1]}"
+    rows+="${netid}"$'\t'"${addr}"$'\t'"${port}"$'\t'"${proc}"$'\n'
+  done <<<"$out"
+  printf '%s' "$rows" | jq -Rsc '[split("\n")[] | select(length > 0) | split("\t")
+      | {proto: .[0], addr: .[1], port: (.[2] | tonumber), process: (.[3] // "")}]
+    | unique_by([.proto, .addr, .port]) | .[:32]'
+}
+
+# health_listener_lines < listeners-json — one "addr:port/proto (process)" per entry;
+# IPv6 addresses are bracketed so the port reads unambiguously.
+health_listener_lines() {
+  jq -r '.[] | (if (.addr | test(":")) then "[" + .addr + "]" else .addr end)
+    + ":" + (.port | tostring) + "/" + .proto + " (" + (if .process == "" then "unknown" else .process end) + ")"' 2>/dev/null
+}
+
 _health_unit_active() { have systemctl && systemctl is-active --quiet "$1" 2>/dev/null; }
 
 control_health_json() {
@@ -153,6 +311,10 @@ control_health_json() {
   if have ip; then
     _health_str lanIp "$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
   fi
+
+  # Sockets reachable from outside loopback and the container network
+  # (omitted when ss is unavailable; [] when it ran and found none).
+  local lsn; if lsn="$(health_listeners_json 2>/dev/null)"; then _health_raw listeners "$lsn"; fi
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
   # Inventory (capacity, not load): what this box is made of.

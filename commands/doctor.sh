@@ -115,6 +115,27 @@ cmd_doctor() {
     _dwarn "no container engine configured" "enable runtime.docker or runtime.podman when needed"
   fi
 
+  # --- listeners ------------------------------------------------------------
+  # Nodes accept no inbound connections (tunnel out, publish on 127.0.0.1).
+  # All exposed sockets are ONE finding, so an exposed node keeps a score that
+  # still lets it take the update that fixes it. The list is kept short enough
+  # that the recorded finding (cut at 200 chars) keeps its explanation:
+  # 130 + ", +NN more" + the fixed text stays under 200 bytes.
+  local lsn l list="" more=0
+  if lsn="$(health_listeners_json 2>/dev/null)"; then
+    if [[ "$lsn" == "[]" ]]; then _dpass "nothing listens outside loopback and the container network"
+    else
+      while IFS= read -r l; do
+        [[ -n "$l" ]] || continue
+        if (( more == 0 && ${#list} + ${#l} <= 130 )); then list+="${list:+, }$l"; else more=$(( more + 1 )); fi
+      done < <(health_listener_lines <<<"$lsn")
+      (( more > 0 )) && list+=", +$more more"
+      _dfail "listening on $list" "nodes accept no inbound connections"
+    fi
+  else
+    _dwarn "listener audit unavailable (ss not found)" "install iproute2"
+  fi
+
   if have arch-audit; then
     local vuln; vuln="$(arch-audit --quiet 2>/dev/null | wc -l)"
     if (( vuln > 0 )); then _dwarn "${vuln} known-vulnerable package(s)" "run: sudo aw update"
