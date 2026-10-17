@@ -1172,6 +1172,277 @@ if have yq; then
   check "aw service list shows nothing enabled"   'run_aw service list && has "none"'
   check "aw service refuses unknown ids"           '! run_aw service status nope 2>/dev/null'
 fi
+# --- services.postgres backups (pgBackRest, #14) ---------------------------------
+# A podman that records every call (argv, and stdin of `exec`) and answers
+# like pgBackRest and psql would; BR_FAIL makes a backup fail with that text
+# in its error, BR_RUN_FAIL makes a throwaway container fail.
+mkdir -p "$TMP/bkbin"
+cat > "$TMP/bkbin/podman" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$PG_LOG.argv"
+case "$1" in
+  exec)
+    in="$(cat)"; [[ -n "$in" ]] && printf '%s\n' "$in" >> "$PG_LOG.stdin"
+    case "$*" in
+      *" pgbackrest "*" backup")
+        if [[ -n "${BR_FAIL:-}" ]]; then echo "P00  ERROR: [039]: access denied: $BR_FAIL" >&2; exit 39; fi
+        echo "P00   INFO: backup command end: completed successfully" ;;
+      *pg_is_in_recovery*) echo f ;;
+      *"WHERE datname"*) echo 1 ;;
+      *"count(*) FROM pg_database"*) echo 3 ;;
+    esac
+    exit 0 ;;
+  run)
+    if [[ -n "${BR_RUN_FAIL:-}" ]]; then echo "AW_DRILL_FAIL $BR_RUN_FAIL"; exit 1; fi
+    [[ "$*" == *alwayswork-drill* ]] && echo "AW_DRILL_OK databases=3"
+    exit 0 ;;
+esac
+exit 0
+EOS
+chmod +x "$TMP/bkbin/podman"
+bk_probe() { PATH="$TMP/bkbin:$PATH" PG_LOG="$TMP/bklog" PG_FAKE_SEC="$TMP/pg/sec" PG_READY_TRIES=1 pg_probe "$@"; }
+bk_on()  { pg_cfg '.capabilities.config.services.postgres.backup = "pgbackrest" | .capabilities.config.services.postgres.backup_endpoint = "https://ACCT.r2.cloudflarestorage.com" | .capabilities.config.services.postgres.backup_bucket = "aw-backups"'; }
+bk_off() { pg_cfg 'del(.capabilities.config.services.postgres.backup) | del(.capabilities.config.services.postgres.backup_endpoint) | del(.capabilities.config.services.postgres.backup_bucket) | del(.capabilities.config.services.postgres.backup_path) | del(.capabilities.config.services.postgres.backup_monthly_keep) | del(.capabilities.config.services.postgres.backup_retention_full_weeks) | del(.capabilities.config.services.postgres.backup_region)'; }
+bk_secrets() { printf 'PGBACKREST_R2_ACCESS_KEY_ID=R2-Secret-Key-1\nPGBACKREST_R2_SECRET_ACCESS_KEY=R2-Secret-Access-2\nPGBACKREST_CIPHER_PASS=R2-Secret-Cipher-3\n' > "$TMP/pg/sec"; }
+bk_reset() { rm -f "$TMP/bklog".*; rm -rf "$TMP/pg/state/services/postgres/pgbackrest" "$TMP/pg/state/services/postgres/backup-status.json" "$TMP/pg/systemd"/alwayswork-postgres-*; mkdir -p "$TMP/pg/systemd" "$TMP/pg/state/services/postgres/data"; }
+bk_t_config() {
+  local v r=0
+  bk_off
+  [[ "$(pg_probe pg_backup_mode)" == "off" ]] || r=1
+  bk_on
+  [[ "$(pg_probe pg_backup_endpoint)" == "acct.r2.cloudflarestorage.com" ]] || r=1
+  [[ "$(pg_probe pg_backup_path)" == "/$(hostname -s | tr '[:upper:]' '[:lower:]')/app" ]] || r=1
+  [[ "$(pg_probe pg_backup_region)" == "auto" && "$(pg_probe pg_backup_retention_days)" == 14 && "$(pg_probe pg_backup_monthly_keep)" == 12 ]] || r=1
+  for v in 'backup = "maybe"' 'backup_endpoint = "http://acct.r2.cloudflarestorage.com"' 'backup_endpoint = "https://acct.r2.cloudflarestorage.com/bucket"' \
+           'backup_endpoint = "https://x;rm"' 'backup_bucket = "Bad_Bucket"' 'backup_path = "/a/../b"' 'backup_path = "a/b"' 'backup_path = "/a/"' \
+           'backup_retention_full_weeks = 0' 'backup_retention_full_weeks = 53' 'backup_retention_full_weeks = "x"' 'backup_monthly_keep = 121' 'backup_region = "Auto Region"'; do
+    bk_on; pg_cfg ".capabilities.config.services.postgres.$v"
+    if pg_probe eval 'pg_backup_mode >/dev/null && pg_backup_endpoint >/dev/null && pg_backup_bucket >/dev/null && pg_backup_path >/dev/null && pg_backup_full_weeks >/dev/null && pg_backup_monthly_keep >/dev/null && pg_backup_region >/dev/null' >/dev/null 2>&1; then echo "accepted: $v"; r=1; fi
+  done
+  bk_on; pg_cfg '.capabilities.config.services.postgres.backup_path = "/kitchen/shop" | .capabilities.config.services.postgres.backup_retention_full_weeks = 3 | .capabilities.config.services.postgres.backup_monthly_keep = 0'
+  [[ "$(pg_probe pg_backup_path)" == "/kitchen/shop" && "$(pg_probe pg_backup_retention_days)" == 21 && "$(pg_probe pg_backup_monthly_keep)" == 0 ]] || r=1
+  bk_off
+  return "$r"
+}
+# Without the three group secrets: preflight and apply refuse by name, and
+# nothing — unit, archive_command, config — is written.
+bk_t_refuse() {
+  local out r=0
+  bk_reset; rm -f "$TMP/pg/systemd/alwayswork-postgres.service"; bk_on
+  printf 'PGBACKREST_R2_ACCESS_KEY_ID=R2-Secret-Key-1\n' > "$TMP/pg/sec"
+  # shellcheck disable=SC2016
+  out="$(bk_probe eval 'f() { source "$CAP_DIR/preflight.sh"; }; f' 2>&1)" && r=1
+  grep -q "PGBACKREST_R2_SECRET_ACCESS_KEY, PGBACKREST_CIPHER_PASS" <<<"$out" && ! grep -q "PGBACKREST_R2_ACCESS_KEY_ID" <<<"$out" || r=1
+  # shellcheck disable=SC2016
+  out="$(bk_probe eval 'f() { source "$CAP_DIR/install.sh"; }; f' 2>&1)" && r=1
+  grep -q "WAL archiving stays off" <<<"$out" || r=1
+  [[ ! -e "$TMP/pg/systemd/alwayswork-postgres.service" && ! -e "$TMP/pg/state/services/postgres/pgbackrest/pgbackrest.conf" ]] || r=1
+  ! grep -q "R2-Secret" <<<"$out" || r=1
+  bk_off
+  return "$r"
+}
+bk_t_conf() {
+  local f="$TMP/pg/state/services/postgres/pgbackrest/pgbackrest.conf" ino r=0 l
+  bk_reset; bk_secrets; bk_on
+  pg_cfg '.capabilities.config.services.postgres.backup_path = "/kitchen/app"'
+  bk_probe pg_br_render >/dev/null 2>&1 || return 1
+  [[ "$(pg_mode "$f")" == 600 && "$(pg_mode "$(dirname "$f")")" == 700 ]] || { echo "mode $(pg_mode "$f")"; r=1; }
+  for l in '[global]' repo1-type=s3 repo1-s3-endpoint=acct.r2.cloudflarestorage.com repo1-s3-bucket=aw-backups repo1-s3-region=auto repo1-s3-uri-style=path \
+           repo1-s3-key=R2-Secret-Key-1 repo1-s3-key-secret=R2-Secret-Access-2 repo1-cipher-type=aes-256-cbc repo1-cipher-pass=R2-Secret-Cipher-3 \
+           repo1-path=/kitchen/app repo1-retention-full-type=time repo1-retention-full=14 \
+           repo2-type=s3 repo2-path=/kitchen/app-monthly repo2-cipher-type=aes-256-cbc repo2-retention-full-type=count repo2-retention-full=12 \
+           repo2-retention-archive-type=full repo2-retention-archive=1 archive-async=n log-level-file=off \
+           '[app]' pg1-path=/var/lib/postgresql/data/pgdata pg1-socket-path=/var/run/postgresql; do
+    grep -qxF -- "$l" "$f" || { echo "missing: $l"; r=1; }
+  done
+  # An unchanged config is not rewritten (the container owns the live file).
+  ino="$(ls -i "$f" | awk '{print $1}')"
+  bk_probe pg_br_render >/dev/null 2>&1; [[ "$(ls -i "$f" | awk '{print $1}')" == "$ino" ]] || r=1
+  pg_cfg '.capabilities.config.services.postgres.backup_monthly_keep = 0'
+  bk_probe pg_br_render >/dev/null 2>&1; ! grep -q '^repo2-' "$f" || r=1
+  bk_off
+  return "$r"
+}
+bk_t_unit() {
+  local u="$TMP/pg/systemd/alwayswork-postgres.service" img r=0
+  bk_reset; bk_secrets; bk_on
+  bk_probe pg_br_render >/dev/null 2>&1 && bk_probe pg_write_unit >/dev/null 2>&1 || return 1
+  img="$(bk_probe pg_image)"
+  [[ "$img" =~ ^localhost/alwayswork-postgres:16-pgbackrest2\.59\.3-[0-9a-f]{8}$ ]] || { echo "image $img"; r=1; }
+  grep -qF -- "-c wal_level=replica -c archive_mode=on -c \"archive_command=pgbackrest --stanza=app archive-push %%p\" -c archive_timeout=60" "$u" || r=1
+  grep -qF -- "--volume $TMP/pg/state/services/postgres/pgbackrest:/etc/pgbackrest:ro,U" "$u" || r=1
+  grep -qF -- "--label dev.alwayswork.base_image=docker.io/library/postgres:16" "$u" && grep -qF "$img postgres -c" "$u" || r=1
+  ! grep -q "R2-Secret" "$u" || r=1
+  # A new base (channel / version) is a new local tag; a digest base works.
+  pg_cfg '.capabilities.config.services.postgres.version = "17"'
+  [[ "$(bk_probe pg_br_image)" == localhost/alwayswork-postgres:17-pgbackrest2.59.3-* && "$(bk_probe pg_br_image)" != "$img" ]] || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.version) | .capabilities.config.services.postgres.image = "docker.io/library/postgres@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d"'
+  [[ "$(bk_probe pg_br_image)" =~ ^localhost/alwayswork-postgres:sha256-ca0bd484cb98-pgbackrest2\.59\.3-[0-9a-f]{8}$ ]] || { echo "digest $(bk_probe pg_br_image)"; r=1; }
+  pg_cfg 'del(.capabilities.config.services.postgres.image)'
+  # The Containerfile's default pin is the one the node builds with.
+  grep -qx "ARG PGBACKREST_VERSION=$(bk_probe eval 'printf %s "$PG_BR_VERSION"')" "$ROOT/capabilities/services.postgres/Containerfile" || r=1
+  bk_off
+  bk_probe pg_write_unit >/dev/null 2>&1
+  ! grep -qE "archive_mode|archive_command|pgbackrest|base_image" "$u" && grep -q "docker.io/library/postgres:16 postgres" "$u" || r=1
+  return "$r"
+}
+bk_t_timers() {
+  local d="$TMP/pg/systemd" r=0
+  bk_reset; bk_secrets; bk_on
+  bk_probe pg_br_timers_apply >/dev/null 2>&1 || return 1
+  grep -qx "OnCalendar=Sun \*-\*-\* 03:00:00" "$d/alwayswork-postgres-backup-full.timer" || r=1
+  grep -qx "OnCalendar=Mon..Sat \*-\*-\* 03:00:00" "$d/alwayswork-postgres-backup-diff.timer" || r=1
+  grep -qx "OnCalendar=\*-\*-01 05:00:00" "$d/alwayswork-postgres-backup-monthly.timer" || r=1
+  grep -qx "OnCalendar=Wed \*-\*-\* 04:00:00" "$d/alwayswork-postgres-restore-drill.timer" || r=1
+  grep -qx "RandomizedDelaySec=10m" "$d/alwayswork-postgres-restore-drill.timer" && grep -qx "Persistent=true" "$d/alwayswork-postgres-backup-full.timer" || r=1
+  grep -qx "ExecStart=/usr/local/bin/alwayswork service backup postgres --full" "$d/alwayswork-postgres-backup-full.service" || r=1
+  grep -qx "ExecStart=/usr/local/bin/alwayswork service backup postgres --monthly" "$d/alwayswork-postgres-backup-monthly.service" || r=1
+  grep -qx "ExecStart=/usr/local/bin/alwayswork service drill postgres" "$d/alwayswork-postgres-restore-drill.service" && grep -qx "Type=oneshot" "$d/alwayswork-postgres-restore-drill.service" || r=1
+  pg_cfg '.capabilities.config.services.postgres.backup_monthly_keep = 0'
+  bk_probe pg_br_timers_apply >/dev/null 2>&1
+  [[ ! -e "$d/alwayswork-postgres-backup-monthly.timer" && ! -e "$d/alwayswork-postgres-backup-monthly.service" && -e "$d/alwayswork-postgres-backup-full.timer" ]] || r=1
+  bk_probe pg_br_render >/dev/null 2>&1
+  bk_probe pg_br_disable >/dev/null 2>&1
+  [[ -z "$(ls "$d" | grep -E 'postgres-(backup|restore)')" && ! -e "$TMP/pg/state/services/postgres/pgbackrest" ]] || r=1
+  bk_off
+  return "$r"
+}
+bk_t_backup() {
+  local st="$TMP/pg/state/services/postgres/backup-status.json" in="$TMP/bklog.stdin" out r=0
+  bk_reset; bk_secrets; bk_on
+  bk_probe pg_backup --full >/dev/null 2>&1 || return 1
+  grep -qxF "exec -i alwayswork-postgres pgbackrest --stanza=app --repo=1 --type=full backup" "$TMP/bklog.argv" || r=1
+  jq -e '.lastBackupOk == true and .lastBackupKind == "full" and .lastBackupError == "" and (.lastBackupAt | test("^[0-9-]{10}T"))' "$st" >/dev/null || r=1
+  grep -qF "INSERT INTO aw.facts" "$in" && grep -qF "('last_backup_ok', convert_from(decode('$(printf true | od -An -tx1 | tr -d ' \n')', 'hex'), 'UTF8'), now())" "$in" \
+    && grep -qF "('last_backup_kind', convert_from(decode('$(printf full | od -An -tx1 | tr -d ' \n')'" "$in" && grep -qF "'last_backup_at'" "$in" && grep -qF "'last_backup_error'" "$in" || r=1
+  bk_probe pg_backup >/dev/null 2>&1 && grep -qxF "exec -i alwayswork-postgres pgbackrest --stanza=app --repo=1 --type=diff backup" "$TMP/bklog.argv" || r=1
+  bk_probe pg_backup --monthly >/dev/null 2>&1 && grep -qxF "exec -i alwayswork-postgres pgbackrest --stanza=app --repo=2 --type=full backup" "$TMP/bklog.argv" || r=1
+  ! bk_probe pg_backup --weird >/dev/null 2>&1 || r=1
+  # A failure is recorded, with the error redacted, and fails the run.
+  out="$(BR_FAIL="key R2-Secret-Access-2 rejected" bk_probe pg_backup --diff 2>&1)" && r=1
+  jq -e '.lastBackupOk == false and .lastBackupKind == "diff" and (.lastBackupError | test("ERROR: \\[039\\]")) and (.lastBackupError | test("\\*\\*\\*"))' "$st" >/dev/null || { cat "$st"; r=1; }
+  ! grep -q "R2-Secret" "$st" <<<"$out" && ! grep -q "R2-Secret" <<<"$out" || r=1
+  ! grep -qF "$(printf R2-Secret-Access-2 | od -An -tx1 | tr -d ' \n')" "$in" || r=1
+  ! grep -q "R2-Secret" "$TMP/bklog.argv" "$in" || r=1
+  bk_off
+  # backup=off keeps the logical dump, which takes no options.
+  ! bk_probe pg_backup --full >/dev/null 2>&1 || r=1
+  return "$r"
+}
+bk_t_drill() {
+  local st="$TMP/pg/state/services/postgres/backup-status.json" data="$TMP/pg/state/services/postgres/data" a r=0
+  bk_reset; bk_secrets; bk_on
+  printf 'x\n' > "$data/marker"
+  bk_probe pg_drill >/dev/null 2>&1 || return 1
+  a="$(grep "^run " "$TMP/bklog.argv")"
+  grep -qF -- "--name alwayswork-postgres-drill" <<<"$a" && grep -qF -- "--userns=auto" <<<"$a" && grep -qF -- "--user 999:999" <<<"$a" && grep -qF -- "--cap-drop ALL" <<<"$a" || r=1
+  grep -qF -- "--volume $TMP/pg/state/services/postgres/drill/data:/var/lib/postgresql/data:U" <<<"$a" && grep -qF -- "--volume $TMP/pg/state/services/postgres/drill/conf:/etc/pgbackrest:ro,U" <<<"$a" || r=1
+  grep -qF -- "--entrypoint /bin/sh localhost/alwayswork-postgres:" <<<"$a" && grep -qF "/usr/local/bin/alwayswork-drill app app" <<<"$a" || r=1
+  # Never the live data directory, never a published port, never a secret.
+  ! grep -qF "$data" "$TMP/bklog.argv" && ! grep -qF -- "--publish" <<<"$a" && ! grep -q "R2-Secret" "$TMP/bklog.argv" || r=1
+  [[ ! -e "$TMP/pg/state/services/postgres/drill" && -f "$data/marker" ]] || r=1
+  jq -e '.lastDrillOk == true and .lastDrillError == ""' "$st" >/dev/null || r=1
+  grep -qF "'last_restore_drill_at'" "$TMP/bklog.stdin" && grep -qF "'last_restore_drill_ok'" "$TMP/bklog.stdin" || r=1
+  # The drilled server never archives into the repository.
+  bk_probe pg_drill_script | grep -qF -- "-c archive_mode=off" && bk_probe pg_drill_script | grep -qF 'listen_addresses=' || r=1
+  # A failing drill is recorded and the scratch copy still goes.
+  BR_RUN_FAIL="database app is not in the restore" bk_probe pg_drill >/dev/null 2>&1 && r=1
+  jq -e '.lastDrillOk == false and (.lastDrillError | test("not in the restore"))' "$st" >/dev/null && [[ ! -e "$TMP/pg/state/services/postgres/drill" ]] || r=1
+  # Not 1.2x the data size free: refused before any container.
+  rm -f "$TMP/bklog".*
+  mkdir -p "$TMP/bkdf"; printf '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/x 100 100 0 100%% /\\n"\n' > "$TMP/bkdf/df"; chmod +x "$TMP/bkdf/df"
+  PATH="$TMP/bkdf:$PATH" bk_probe pg_drill >/dev/null 2>&1 && r=1
+  ! grep -q "^run " "$TMP/bklog.argv" 2>/dev/null && jq -e '.lastDrillOk == false and (.lastDrillError | test("not enough disk"))' "$st" >/dev/null || r=1
+  bk_off
+  return "$r"
+}
+bk_t_restore() {
+  local data="$TMP/pg/state/services/postgres/data" a r=0 aside
+  bk_reset; bk_secrets; bk_on
+  rm -rf "$TMP/pg/state/services/postgres"/data.*; printf 'live\n' > "$data/marker"
+  # Explicit confirmation, a valid target, and backup=pgbackrest.
+  bk_probe pg_restore --to '2026-10-17 09:30:00+00' >/dev/null 2>&1 && r=1
+  bk_probe pg_restore --to 'yesterday; rm -rf /' --yes >/dev/null 2>&1 && r=1
+  [[ ! -e "$TMP/bklog.argv" && -f "$data/marker" ]] || r=1
+  bk_probe pg_restore --to '2026-10-17 09:30:00+00' --yes >/dev/null 2>&1 || r=1
+  aside="$(ls -d "$data".before-restore-* 2>/dev/null | head -1)"
+  [[ -n "$aside" && -f "$aside/marker" && -d "$data" && ! -f "$data/marker" ]] || { echo "aside: $aside"; r=1; }
+  a="$(grep "^run " "$TMP/bklog.argv")"
+  grep -qF -- "--name alwayswork-postgres-restore" <<<"$a" && grep -qF -- "--volume $data:/var/lib/postgresql/data:U" <<<"$a" || r=1
+  grep -qF -- "--stanza=app --repo=1 --pg1-path=/var/lib/postgresql/data/pgdata --type=time --target=2026-10-17 09:30:00+00 --target-action=promote" <<<"$a" || r=1
+  grep -qF "pg_is_in_recovery" "$TMP/bklog.argv" && grep -qF "WHERE datname = 'app'" "$TMP/bklog.argv" || r=1
+  [[ ! -e "$TMP/pg/state/services/postgres/restore.lock" && ! -e "$TMP/pg/state/services/postgres/restore-conf" ]] || r=1
+  ! grep -q "R2-Secret" "$TMP/bklog.argv" || r=1
+  # --latest restores to the end of the archive (no target).
+  rm -f "$TMP/bklog".*; rm -rf "$data".*; printf 'live\n' > "$data/marker"
+  bk_probe pg_restore --latest --yes >/dev/null 2>&1 && ! grep -q -- "--type=time" "$TMP/bklog.argv" || r=1
+  # A failed restore puts the previous data directory back.
+  rm -f "$TMP/bklog".*; rm -rf "$data" "$data".*; mkdir -p "$data"; printf 'live\n' > "$data/marker"
+  BR_RUN_FAIL=x bk_probe pg_restore --latest --yes >/dev/null 2>&1 && r=1
+  [[ -f "$data/marker" && -n "$(ls -d "$data".failed-restore-* 2>/dev/null)" && -z "$(ls -d "$data".before-restore-* 2>/dev/null)" ]] || r=1
+  rm -rf "$data".*
+  bk_off
+  ! bk_probe pg_restore --latest --yes >/dev/null 2>&1 || r=1
+  return "$r"
+}
+bk_t_heartbeat() {
+  local j r=0
+  bk_reset; bk_secrets; bk_on
+  bk_probe pg_backup --full >/dev/null 2>&1 && bk_probe pg_drill >/dev/null 2>&1 || return 1
+  pg_probe wl_report_manifest_surfaces services.postgres >/dev/null 2>&1 && bk_probe pg_report >/dev/null 2>&1 || return 1
+  j="$(pg_probe wl_services_json)"
+  jq -e '.[0].postgres.backup | .mode == "pgbackrest" and .lastBackupOk == true and .lastDrillOk == true and (.lastBackupAt | type) == "string" and (.lastDrillAt | type) == "string"
+    and (keys == ["lastBackupAt", "lastBackupOk", "lastDrillAt", "lastDrillOk", "mode"])' <<<"$j" >/dev/null || { echo "$j"; r=1; }
+  ! grep -rq "R2-Secret" "$TMP/pg/state/services" --include='*.json' || r=1
+  bk_off
+  bk_probe pg_report >/dev/null 2>&1
+  jq -e '.[0].postgres.backup.mode == "off"' <<<"$(pg_probe wl_services_json)" >/dev/null || r=1
+  pg_probe wl_unreport_manifest_surfaces services.postgres >/dev/null 2>&1
+  return "$r"
+}
+bk_t_secrets() {
+  local d="$TMP/pg" out
+  bk_secrets; bk_on; rm -f "$d/state/secrets-node-owned.list"
+  bk_probe pg_ensure_secrets >/dev/null 2>&1
+  ! grep -q PGBACKREST "$d/state/secrets-node-owned.list" || return 1
+  printf 'PGBACKREST_R2_ACCESS_KEY_ID="k"\nPGBACKREST_R2_SECRET_ACCESS_KEY="s"\nPGBACKREST_CIPHER_PASS="c"\n' > "$d/dec"
+  # shellcheck disable=SC2016
+  out="$(pg_probe eval 'source "$AW_ROOT/lib/control.sh"; sec_set() { printf "SET %s\n" "$1"; }; control_import_secrets "$AW_STATE/../dec"' 2>&1)"
+  rm -f "$d/dec"; bk_off
+  [[ "$(grep -c '^SET PGBACKREST_' <<<"$out")" == 3 ]]
+}
+bk_t_updates() {
+  local out
+  mkdir -p "$TMP/bkps"
+  cat > "$TMP/bkps/podman" <<'EOS'
+#!/bin/sh
+[ "$1" = ps ] && printf '[{"Names":["alwayswork-postgres"],"Image":"localhost/alwayswork-postgres:16-pgbackrest2.59.3-0123abcd","Labels":{"alwayswork":"true","dev.alwayswork.base_image":"%s"}}]\n' "$BR_BASE"
+exit 0
+EOS
+  chmod +x "$TMP/bkps/podman"
+  pg_cfg '.capabilities.enabled = ["core", "runtime.podman", "services.postgres"]'
+  out="$(BR_BASE=docker.io/library/postgres:16 PATH="$TMP/bkps:$PATH" AW_TEST_PODMAN=1 pg_probe wl_image_updates_json)"
+  [[ "$out" == "[]" ]] || { echo "$out"; return 1; }
+  out="$(BR_BASE=docker.io/library/postgres:15 PATH="$TMP/bkps:$PATH" AW_TEST_PODMAN=1 pg_probe wl_image_updates_json)"
+  jq -e '.[0] | .workload == "postgres" and .running == "docker.io/library/postgres:15" and .want == "docker.io/library/postgres:16"' <<<"$out" >/dev/null
+}
+if have yq; then
+  check "pg backup: off by default; endpoint/bucket/path/region/retention validated, defaults /<node>/<db>, auto, 14 days, 12 monthly" 'bk_t_config'
+  check "pg backup: without the three group secrets preflight and apply refuse by name, and write no unit, config or archive_command" 'bk_t_refuse'
+  check "pg backup: pgbackrest.conf is 0600 in a 0700 dir — R2 s3 path-style, aes-256-cbc, repo1 14-day time retention, repo2 monthly count 12; unchanged is not rewritten" 'bk_t_conf'
+  check "pg backup: the unit runs the node-built image with archiving on (archive_command, archive_timeout 60, wal_level replica) only while backup=pgbackrest, never a secret" 'bk_t_unit'
+  check "pg backup: timers — full Sun 03:00, diff Mon..Sat 03:00, monthly 1st 05:00, drill Wed 04:00; removed with backup=off" 'bk_t_timers'
+  check "pg backup: on-demand and scheduled runs exec pgBackRest in the live container and record aw.facts; failures are redacted" 'bk_t_backup'
+  check "pg backup: the restore drill uses a scratch container, never the live data dir, checks disk first, records the result" 'bk_t_drill'
+  check "pg backup: PITR restore needs --yes, moves the data dir aside (never deletes), restores to the target, verifies; a failure puts it back" 'bk_t_restore'
+  check "pg backup: heartbeat postgres.backup = {mode, lastBackupAt/Ok, lastDrillAt/Ok}, no secret" 'bk_t_heartbeat'
+  check "pg backup: PGBACKREST_* are group secrets — imported from deliveries, never node-owned" 'bk_t_secrets'
+  check "pg backup: image tracking compares the node-built image's base with the wanted one" 'bk_t_updates'
+  check "pg backup: aw.status keeps its columns and appends last_backup_kind / errors" \
+    'grep -A3 "AS updated_at,$" "$ROOT/capabilities/services.postgres/postgres.sh" | grep -q "AS last_backup_kind,"'
+  check "aw service <action> postgres resolves to the postgres operations" \
+    'pg_probe eval "declare -F postgres_status postgres_backup postgres_restore postgres_drill postgres_psql" >/dev/null'
+fi
 check "heartbeat carries expose.services when present" 'grep -q "expose:{services:" "$ROOT/lib/control.sh" && grep -q "wl_services_json" "$ROOT/lib/control.sh"'
 check "service command is dispatched and documented" 'grep -q "|service|" "$ROOT/bin/alwayswork" && run_aw help && has "service <action> <id>"'
 

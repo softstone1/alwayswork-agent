@@ -1072,7 +1072,7 @@
       "workload": null
     },
     {
-      "description": "PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps), exposed through the tunnel for Hyperdrive.",
+      "description": "PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps, optional pgBackRest WAL archiving and PITR to R2), exposed through the tunnel for Hyperdrive.",
       "id": "services.postgres",
       "name": "PostgreSQL",
       "package": {
@@ -1102,7 +1102,14 @@
           "pull",
           "admin",
           "admin_port",
-          "admin_image"
+          "admin_image",
+          "backup",
+          "backup_endpoint",
+          "backup_bucket",
+          "backup_path",
+          "backup_region",
+          "backup_retention_full_weeks",
+          "backup_monthly_keep"
         ],
         "data": [
           "data",

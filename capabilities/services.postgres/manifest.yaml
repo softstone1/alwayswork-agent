@@ -1,6 +1,6 @@
 id: services.postgres
 name: PostgreSQL
-description: PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps), exposed through the tunnel for Hyperdrive.
+description: PostgreSQL as a workload container on the node (data subvolume, healthcheck, snapshots, dumps, optional pgBackRest WAL archiving and PITR to R2), exposed through the tunnel for Hyperdrive.
 version: 1
 requires: [core, runtime.podman]
 profiles: [full]
@@ -20,5 +20,5 @@ workload:
       enabled_default: false
       surfaces:
         - { id: postgres-admin, kind: http, port: 8081, port_config: admin_port, path: /, name: PostgreSQL admin (pgweb) }
-  config: [version, image, port, db, user, roles, tls, hostnames, memory_mb, network, pull, admin, admin_port, admin_image]
+  config: [version, image, port, db, user, roles, tls, hostnames, memory_mb, network, pull, admin, admin_port, admin_image, backup, backup_endpoint, backup_bucket, backup_path, backup_region, backup_retention_full_weeks, backup_monthly_keep]
   data: [data, backups]

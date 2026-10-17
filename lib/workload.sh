@@ -189,6 +189,59 @@ wl_remove_unit() {
   run systemctl daemon-reload || return 1
 }
 
+# --- timers ----------------------------------------------------------------------------------
+# A scheduled job of a workload: alwayswork-<stem>.service (oneshot) driven
+# by alwayswork-<stem>.timer. The command is argv (systemd-quoted with wl_q),
+# so it must never carry a secret: jobs read theirs from the sealed store or
+# a 0600 file. Persistent=true runs a job missed while the node was off.
+#   wl_write_timer <stem> <description> <OnCalendar> <RandomizedDelaySec> <timeout-sec> <command...>
+wl_timer_name() { printf 'alwayswork-%s.timer' "$1"; }
+wl_write_timer() {
+  local stem="$1" desc="$2" cal="$3" delay="$4" tmo="$5" cmd; shift 5
+  [[ "$stem" =~ ^[a-z][a-z0-9-]{0,63}$ ]] || die "workload: bad timer name '$stem'"
+  [[ "$cal" =~ ^[A-Za-z0-9\ ,.:*/~-]+$ ]] || die "workload: bad OnCalendar '$cal'"
+  cmd="$(wl_qs "$@")"; cmd="${cmd% }"
+  aw_write "$WL_UNIT_DIR/alwayswork-$stem.service" <<UNIT
+[Unit]
+Description=AlwaysWork job: ${desc}
+Documentation=https://github.com/softstone1/alwayswork-agent
+After=network-online.target
+Wants=network-online.target
+# Managed by alwayswork (lib/workload.sh); started by alwayswork-${stem}.timer.
+
+[Service]
+Type=oneshot
+TimeoutStartSec=${tmo}
+ExecStart=${cmd}
+UNIT
+  aw_write "$WL_UNIT_DIR/$(wl_timer_name "$stem")" <<UNIT
+[Unit]
+Description=AlwaysWork schedule: ${desc}
+
+[Timer]
+OnCalendar=${cal}
+Persistent=true
+RandomizedDelaySec=${delay}
+
+[Install]
+WantedBy=timers.target
+UNIT
+}
+# Enable (and start) the timers given by stem after writing them.
+wl_apply_timers() {
+  local stem
+  run systemctl daemon-reload || return 1
+  for stem in "$@"; do run systemctl enable --now "$(wl_timer_name "$stem")" || return 1; done
+}
+wl_remove_timer() {
+  local stem="$1" t
+  t="$(wl_timer_name "$stem")"
+  [[ -f "$WL_UNIT_DIR/$t" || -f "$WL_UNIT_DIR/alwayswork-$stem.service" ]] || return 0
+  run systemctl disable --now "$t" 2>/dev/null || true
+  run rm -f "$WL_UNIT_DIR/$t" "$WL_UNIT_DIR/alwayswork-$stem.service" || return 1
+  run systemctl daemon-reload || return 1
+}
+
 # --- surfaces ------------------------------------------------------------------------------
 # A surface is how a workload is reached (SYSTEM_SPEC §12.8): one file per
 # surface in $AW_STATE/services/<id>.json —
@@ -387,7 +440,9 @@ wl_image_updates_json() {
     [[ -n "$cap" ]] || continue
     wl="$(wl_manifest_get "$cap" '.workload.id')"; [[ -n "$wl" ]] || continue
     want="$(wl_want_image "$cap" 2>/dev/null)" || continue
-    running="$(jq -r --arg n "alwayswork-$wl" '[.[] | select((if (.Names|type)=="array" then .Names[0] else .Names end) == $n)][0].Image // ""' <<<"$ps" 2>/dev/null)"
+    # A node-built image derived from the wanted one (postgres + pgBackRest)
+    # names its base in a label; that is what tracks the channel.
+    running="$(jq -r --arg n "alwayswork-$wl" '[.[] | select((if (.Names|type)=="array" then .Names[0] else .Names end) == $n)][0] | (.Labels["dev.alwayswork.base_image"] // .Image) // ""' <<<"$ps" 2>/dev/null)"
     [[ -n "$running" && "$running" != "$want" ]] || continue
     out="$(jq -c --arg w "$wl" --arg c "$cap" --arg r "$running" --arg t "$want" '. + [{workload:$w, capability:$c, running:$r, want:$t}]' <<<"$out")"
   done < <(cfg_list '.capabilities.enabled' 2>/dev/null)

@@ -1,0 +1,43 @@
+# alwayswork-postgres — the official PostgreSQL image plus pgBackRest, built
+# on the node (services.postgres, backup=pgbackrest). Nothing is published:
+# `podman build` makes localhost/alwayswork-postgres:<tag> from the very
+# image the node would otherwise run (BASE: the pinned / channel-resolved /
+# overridden ref, digest form welcome), so `aw update` image tracking keeps
+# working — a new base is a new local tag and a rebuild.
+#
+# pgBackRest must live inside the PostgreSQL container: archive_command runs
+# there, and a backup reads PGDATA. The official image is Debian with the
+# PGDG apt repository already configured and its key pinned
+# (/usr/local/share/keyrings/postgres.gpg.asc); the package comes from that
+# same key (GPG-verified, like the base itself) at an exact upstream version,
+# resolved through apt-archive.postgresql.org, which keeps every version, so
+# the pin still builds after PGDG moves on.
+ARG BASE=docker.io/library/postgres:16
+FROM ${BASE}
+ARG PGBACKREST_VERSION=2.59.3
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+RUN set -eu; \
+    . /etc/os-release; \
+    list=/etc/apt/sources.list.d/pgdg.list; \
+    grep -q '^deb .*apt.postgresql.org' "$list" || { echo "base image has no PGDG apt source" >&2; exit 1; }; \
+    signed="$(sed -n 's/^deb \(\[[^]]*\]\).*/\1/p' "$list" | head -1)"; \
+    echo "deb $signed http://apt-archive.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg-archive main" \
+      > /etc/apt/sources.list.d/pgdg-archive.list; \
+    apt-get update; \
+    v="$(apt-cache madison pgbackrest | awk -v p="${PGBACKREST_VERSION}-" 'index($3, p) == 1 { print $3; exit }')"; \
+    [ -n "$v" ] || { echo "pgbackrest ${PGBACKREST_VERSION} not in PGDG for ${VERSION_CODENAME}" >&2; exit 1; }; \
+    apt-get install -y --no-install-recommends "pgbackrest=$v"; \
+    rm -rf /var/lib/apt/lists/* /etc/pgbackrest.conf; \
+    mkdir -p /etc/pgbackrest; \
+    pgbackrest version | grep -qx "pgBackRest ${PGBACKREST_VERSION}"
+
+LABEL org.opencontainers.image.title="alwayswork-postgres" \
+      org.opencontainers.image.description="AlwaysWork workload: PostgreSQL with pgBackRest" \
+      org.opencontainers.image.source="https://github.com/softstone1/alwayswork-agent" \
+      dev.alwayswork.workload="postgres" \
+      dev.alwayswork.pgbackrest="${PGBACKREST_VERSION}"
+
+# The node mounts its rendered pgbackrest.conf here (0600, read-only, :U).
+ENV PGBACKREST_CONFIG=/etc/pgbackrest/pgbackrest.conf
