@@ -158,9 +158,12 @@ built from `ss -Htulnp`:
 - At most 32 entries. `[]` means ss ran and found nothing; the field is
   omitted when `ss` is unavailable (unknown, not clean).
 
-`aw doctor` turns each entry into a FAIL finding — `listening on
-0.0.0.0:22/tcp (sshd) — nodes accept no inbound connections` — which lowers
-the score and rides `health.doctorFindings`. `aw status` prints a
+`aw doctor` turns the entries into ONE FAIL finding — `listening on
+0.0.0.0:22/tcp (sshd), [::]:5432/tcp (postgres) — nodes accept no inbound
+connections` (a long list ends `+N more`) — which rides
+`health.doctorFindings`. One finding, however many sockets, so an exposed
+node's score still clears the update gate and it can take the update that
+fixes it. `aw status` prints a
 `listeners` line (`none`, or the list).
 
 ## Recommended but not automatic

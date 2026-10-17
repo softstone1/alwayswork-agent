@@ -116,15 +116,21 @@ cmd_doctor() {
   fi
 
   # --- listeners ------------------------------------------------------------
-  # Nodes accept no inbound connections (tunnel out, publish on 127.0.0.1):
-  # every socket outside loopback and the container network is a finding.
-  local lsn l
+  # Nodes accept no inbound connections (tunnel out, publish on 127.0.0.1).
+  # All exposed sockets are ONE finding, so an exposed node keeps a score that
+  # still lets it take the update that fixes it. The list is kept short enough
+  # that the recorded finding (cut at 200 chars) keeps its explanation:
+  # 130 + ", +NN more" + the fixed text stays under 200 bytes.
+  local lsn l list="" more=0
   if lsn="$(health_listeners_json 2>/dev/null)"; then
     if [[ "$lsn" == "[]" ]]; then _dpass "nothing listens outside loopback and the container network"
     else
       while IFS= read -r l; do
-        [[ -n "$l" ]] && _dfail "listening on $l" "nodes accept no inbound connections"
+        [[ -n "$l" ]] || continue
+        if (( more == 0 && ${#list} + ${#l} <= 130 )); then list+="${list:+, }$l"; else more=$(( more + 1 )); fi
       done < <(health_listener_lines <<<"$lsn")
+      (( more > 0 )) && list+=", +$more more"
+      _dfail "listening on $list" "nodes accept no inbound connections"
     fi
   else
     _dwarn "listener audit unavailable (ss not found)" "install iproute2"

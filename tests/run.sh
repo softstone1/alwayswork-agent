@@ -2040,10 +2040,12 @@ check "listeners: IPv4/IPv6 CIDR helpers" \
 # Only where doctor runs to completion (it wrote its score above): on BSD
 # userland it stops at the GNU-only df probe before reaching this audit.
 if [[ -s "$TMP/doc/state/doctor.json" ]]; then
-  check "doctor: each listener is a FAIL finding recorded for the heartbeat" \
-    'PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out3" 2>&1; grep -q "FAIL listening on 0.0.0.0:22/tcp (sshd)" "$TMP/doc/out3" && jq -e ".findings | index(\"FAIL listening on [::]:22/tcp (sshd) — nodes accept no inbound connections\") != null" "$TMP/doc/state/doctor.json" >/dev/null && jq -e ".findings | index(\"FAIL listening on [fe80::1]:546/udp (unknown) — nodes accept no inbound connections\") != null" "$TMP/doc/state/doctor.json" >/dev/null'
+  check "doctor: all listeners are ONE FAIL finding, recorded whole for the heartbeat" \
+    'AW_TEST_PODMAN=1 AW_TEST_PODMAN=1 PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out3" 2>&1; [[ "$(grep -c "FAIL listening on" "$TMP/doc/out3")" == 1 ]] && [[ "$(jq -r "[.findings[] | select(startswith(\"FAIL listening on \"))] | .[]" "$TMP/doc/state/doctor.json")" == "FAIL listening on 0.0.0.0:22/tcp (sshd), 192.168.1.20:8443/tcp (my app), [::]:22/tcp (sshd), *:5353/udp (avahi-daemon), [fe80::1]:546/udp (unknown) — nodes accept no inbound connections" ]]'
+  check "doctor: a long listener list is shortened (+N more) and keeps its explanation" \
+    'SS_MODE=many AW_TEST_PODMAN=1 AW_TEST_PODMAN=1 PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out5" 2>&1; f="$(jq -r "[.findings[] | select(startswith(\"FAIL listening on \"))] | .[]" "$TMP/doc/state/doctor.json")" && [[ "$(grep -c . <<<"$f")" == 1 && "$f" == "FAIL listening on 0.0.0.0:9001/tcp (unknown), "*", +"*" more — nodes accept no inbound connections" ]]'
   check "doctor: no listeners passes" \
-    'SS_MODE=empty PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out4" 2>&1; grep -q "PASS nothing listens outside loopback" "$TMP/doc/out4" && ! jq -e "any(.findings[]; startswith(\"FAIL listening\"))" "$TMP/doc/state/doctor.json" >/dev/null'
+    'SS_MODE=empty AW_TEST_PODMAN=1 AW_TEST_PODMAN=1 PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out4" 2>&1; grep -q "PASS nothing listens outside loopback" "$TMP/doc/out4" && ! jq -e "any(.findings[]; startswith(\"FAIL listening\"))" "$TMP/doc/state/doctor.json" >/dev/null'
 fi
 if have yq; then
   check "status shows a listeners line" \
