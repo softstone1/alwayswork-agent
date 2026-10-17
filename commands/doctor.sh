@@ -76,6 +76,18 @@ cmd_doctor() {
     else
       _dwarn "cannot verify the infra sshd binding (ss not found)" "install iproute2"
     fi
+    # The last login refusal, in sshd's own words: a "Permission denied" at
+    # the client says nothing about why (wrong CA, principal not listed,
+    # account refused by PAM). Reported so the operator never needs a shell
+    # to diagnose the one way in (live: contabo-use-1, 2026-10-17).
+    if have journalctl; then
+      local infra_deny
+      infra_deny="$(journalctl -u "$INFRA_SSHD_UNIT" --since "-24h" -o cat --no-pager 2>/dev/null \
+        | grep -E "Certificate invalid|not a listed principal|CA .* is not trusted|refusing|Invalid user|User .* not allowed|Failed publickey|Authentication refused|error:|fatal:" \
+        | tail -n 1 | tr -cd '[:print:]' | cut -c1-140)"
+      if [[ -n "$infra_deny" ]]; then _dwarn "infra sshd last refusal: $infra_deny" "check the Gateway SSH CA, principals and the user"
+      fi
+    fi
   fi
 
   # --- secrets --------------------------------------------------------------
