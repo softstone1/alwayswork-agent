@@ -43,6 +43,14 @@ cmd_status() {
   if [[ "$(sec_backend)" == "sops" ]]; then
     if sec_exists; then kv "store" "present ($(sec_list | wc -l) keys)"; else kv "store" "not initialised"; fi
   fi
+  # Sockets outside loopback and the container network (health.listeners).
+  local lsn
+  if lsn="$(health_listeners_json 2>/dev/null)"; then
+    if [[ "$lsn" == "[]" ]]; then kv "listeners" "none"
+    else kv "listeners" "$(health_listener_lines <<<"$lsn" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"; fi
+  else
+    kv "listeners" "unknown (ss not found)"
+  fi
 
   section "Always-on"
   if cfg_bool '.always_on.enabled' true; then

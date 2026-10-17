@@ -30,6 +30,9 @@ What it does:
 | Health | `pg_isready` every 30 s; a failing check stops the container and systemd restarts it; reported on heartbeat |
 | Reach | published to `127.0.0.1:5432` only; reported to the control plane as `expose.services`, which adds `<node>-postgres.<base>` → `tcp://127.0.0.1:5432` to the node's tunnel |
 
+A service bound anywhere but loopback or the `alwayswork` network shows up in
+`health.listeners` and fails `aw doctor` ([SECURITY.md](SECURITY.md#listener-audit)).
+
 Config keys beyond the basics: `roles`, `tls`, `hostnames`, `admin`,
 `admin_port`, `memory_mb`, `backup` and the `backup_*` keys (see the header
 of `capabilities/services.postgres/postgres.sh` and [Backups](#backups-pgbackrest-to-r2)).

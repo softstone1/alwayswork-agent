@@ -1989,13 +1989,68 @@ check "health agent is typed"           'jq -e ".agent.kind == \"none\" and (.ag
 check "health reads the doctor cache"   'jq -e ".doctorScore == 88 and .doctorAt == 1789776000000" "$TMP/health.out" >/dev/null'
 check "health disk pct is 0-100"        'jq -e "(.diskRootUsedPct // 0) >= 0 and (.diskRootUsedPct // 0) <= 100" "$TMP/health.out" >/dev/null'
 check "health uses only spec field names" \
-  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb|doctorFindings|agentCommit|agentOutdated|updateProtocol|apps|workloads|packages")" ]]'
+  '[[ -z "$(jq -r "keys[]" "$TMP/health.out" | grep -vxE "agentVersion|os|kernel|arch|uptimeSec|load1|cpuCount|memTotalMb|memUsedMb|diskRootTotalGb|diskRootUsedPct|tempC|engine|agent|tunnelUp|webUiUp|sshPolicy|doctorScore|doctorAt|capabilities|lanIp|clockSynced|update|cpuModel|gpus|virt|diskRootFreeGb|doctorFindings|agentCommit|agentOutdated|updateProtocol|apps|workloads|packages|listeners")" ]]'
 check "health probes stay quiet"        '[[ ! -s "$TMP/health.err" ]]'
 check "gpus json is one value even when lspci finds nothing (pipefail)" \
   '[[ "$(bash -c "set -o pipefail; AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/hardware.sh\"; lspci() { echo \"00:00.0 Host bridge: none\"; }; nvidia-smi() { false; }; export -f lspci; hw_gpus_json")" == "[]" ]]'
 check "health carries inventory (cpu model, gpus, virt, free disk)" 'jq -e ".cpuModel | type == \"string\"" "$TMP/health.out" >/dev/null && jq -e ".gpus | type == \"array\"" "$TMP/health.out" >/dev/null && jq -e ".diskRootFreeGb | type == \"number\"" "$TMP/health.out" >/dev/null'
 check "tick sends typed health"         'grep -q "health:\$h" "$ROOT/lib/control.sh" && ! grep -q "health:{}" "$ROOT/lib/control.sh"'
 check "doctor caches its score"         'grep -q "health_doctor_record" "$ROOT/commands/doctor.sh"'
+
+echo "== listener audit =="
+# health.listeners (issue #16): a stubbed ss and podman on PATH; the stubs
+# answer only under AW_TEST_PODMAN (podman) — ss is always the stub here.
+mkdir -p "$TMP/lsbin"
+cp "$ROOT/tests/fixtures/ss-stub.sh" "$TMP/lsbin/ss"; cp "$ROOT/tests/fixtures/ip-stub.sh" "$TMP/lsbin/ip"; cp "$ROOT/tests/fixtures/podman-stub.sh" "$TMP/lsbin/podman"; chmod +x "$TMP/lsbin/"*
+ls_probe() { PATH="$TMP/lsbin:$PATH" bash -c "AW_ROOT=\"$ROOT\"; source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; $1"; }
+LS_ALL="$(AW_TEST_PODMAN=1 ls_probe health_listeners_json)"
+check "listeners: v4/v6/wildcard binds reported with process names" \
+  '[[ "$(jq -r "map(.proto + \" \" + .addr + \" \" + (.port|tostring) + \" \" + .process) | join(\",\")" <<<"$LS_ALL")" == "tcp 0.0.0.0 22 sshd,tcp 192.168.1.20 8443 my app,tcp :: 22 sshd,udp * 5353 avahi-daemon,udp fe80::1 546 " ]]'
+check "listeners: entries are typed {proto, addr, port:int, process}" \
+  'jq -e "all(.[]; (keys == [\"addr\",\"port\",\"process\",\"proto\"]) and (.port|type) == \"number\" and (.proto == \"tcp\" or .proto == \"udp\"))" <<<"$LS_ALL" >/dev/null'
+check "listeners: brackets and %scope suffixes are stripped" \
+  '! grep -qE "[][%]" <<<"$(jq -r ".[].addr" <<<"$LS_ALL")"'
+check "listeners: loopback (127/8, ::1, v4-mapped 127) is excluded" \
+  '! jq -e "any(.[]; .addr | test(\"^127\\\\.|^::1$|ffff:127\"))" <<<"$LS_ALL" >/dev/null'
+check "listeners: the alwayswork podman network (v4 and v6 subnets) is excluded" \
+  '! jq -e "any(.[]; .addr == \"10.89.0.1\" or .addr == \"fd00:aa::1\")" <<<"$LS_ALL" >/dev/null'
+check "listeners: without the network inspect, container-network binds are reported" \
+  '[[ "$(ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.89.0.1\" or .addr == \"fd00:aa::1\")] | length")" == "2" ]]'
+check "listeners: binds on awinfra0 and CloudflareWARP (v4 and v6) are excluded" \
+  '! jq -e "any(.[]; .addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))" <<<"$LS_ALL" >/dev/null'
+check "listeners: without awinfra0, its bind is reported (WARP still excluded)" \
+  '[[ "$(IP_NO_AWINFRA=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\"))) | .addr] | join(\",\")")" == "10.255.0.7" ]]'
+check "listeners: without CloudflareWARP, its binds are reported (awinfra0 still excluded)" \
+  '[[ "$(IP_NO_WARP=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))] | length")" == "2" ]]'
+check "listeners: wildcard binds stay reported with the private interfaces present" \
+  'jq -e "any(.[]; .addr == \"0.0.0.0\") and any(.[]; .addr == \"::\")" <<<"$LS_ALL" >/dev/null'
+check "listeners: the DHCP client socket (udp 68) is excluded" \
+  '! jq -e "any(.[]; .port == 68)" <<<"$LS_ALL" >/dev/null'
+check "listeners: non-LISTEN tcp states are ignored" \
+  '[[ "$(jq "[.[] | select(.addr == \"192.168.1.20\" and .port == 22)] | length" <<<"$LS_ALL")" == "0" ]]'
+check "listeners: capped at 32"   '[[ "$(SS_MODE=many ls_probe health_listeners_json | jq length)" == "32" ]]'
+check "listeners: in the heartbeat, [] when ss ran and found nothing" \
+  '[[ "$(SS_MODE=empty ls_probe "for l in distro config hardware engine firewall hardening secrets capability tunnel control; do source \"$ROOT/lib/\$l.sh\"; done; control_health_json" | jq -c .listeners)" == "[]" ]]'
+check "listeners: in the heartbeat, carried when ss reports exposure" \
+  '[[ "$(ls_probe "for l in distro config hardware engine firewall hardening secrets capability tunnel control; do source \"$ROOT/lib/\$l.sh\"; done; control_health_json" | jq -r ".listeners[0].process")" == "sshd" ]]'
+check "listeners: field omitted when ss is unavailable" \
+  'out="$(ls_probe "for l in distro config hardware engine firewall hardening secrets capability tunnel control; do source \"$ROOT/lib/\$l.sh\"; done; have() { [[ \$1 != ss ]] && command -v \"\$1\" >/dev/null 2>&1; }; control_health_json")" && jq -e . <<<"$out" >/dev/null && ! jq -e "has(\"listeners\")" <<<"$out" >/dev/null'
+check "listeners: IPv4/IPv6 CIDR helpers" \
+  'ls_probe "_health_in_cidr 10.89.0.7 10.89.0.0/24 && ! _health_in_cidr 10.89.1.7 10.89.0.0/24 && _health_in_cidr fd00:aa::5 fd00:aa::/64 && ! _health_in_cidr fd00:ab::5 fd00:aa::/64 && _health_in_cidr 10.1.2.3 10.0.0.0/9 && ! _health_in_cidr :: 10.0.0.0/8 && ! _health_in_cidr \"*\" 0.0.0.0/0 && [[ \$(_health_v6_hex ::ffff:1.2.3.4) == 00000000000000000000ffff01020304 ]]"'
+# Only where doctor runs to completion (it wrote its score above): on BSD
+# userland it stops at the GNU-only df probe before reaching this audit.
+if [[ -s "$TMP/doc/state/doctor.json" ]]; then
+  check "doctor: all listeners are ONE FAIL finding, recorded whole for the heartbeat" \
+    'AW_TEST_PODMAN=1 AW_TEST_PODMAN=1 PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out3" 2>&1; [[ "$(grep -c "FAIL listening on" "$TMP/doc/out3")" == 1 ]] && [[ "$(jq -r "[.findings[] | select(startswith(\"FAIL listening on \"))] | .[]" "$TMP/doc/state/doctor.json")" == "FAIL listening on 0.0.0.0:22/tcp (sshd), 192.168.1.20:8443/tcp (my app), [::]:22/tcp (sshd), *:5353/udp (avahi-daemon), [fe80::1]:546/udp (unknown) — nodes accept no inbound connections" ]]'
+  check "doctor: a long listener list is shortened (+N more) and keeps its explanation" \
+    'SS_MODE=many AW_TEST_PODMAN=1 AW_TEST_PODMAN=1 PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out5" 2>&1; f="$(jq -r "[.findings[] | select(startswith(\"FAIL listening on \"))] | .[]" "$TMP/doc/state/doctor.json")" && [[ "$(grep -c . <<<"$f")" == 1 && "$f" == "FAIL listening on 0.0.0.0:9001/tcp (unknown), "*", +"*" more — nodes accept no inbound connections" ]]'
+  check "doctor: no listeners passes" \
+    'SS_MODE=empty AW_TEST_PODMAN=1 AW_TEST_PODMAN=1 PATH="$TMP/lsbin:$PATH" AW_ROOT="$ROOT" AW_ETC="$TMP/doc/etc" AW_STATE="$TMP/doc/state" AW_CONFIG="$TMP/doc/etc/worker.yaml" AW_TEST=1 NO_COLOR=1 bash "$AW" doctor > "$TMP/doc/out4" 2>&1; grep -q "PASS nothing listens outside loopback" "$TMP/doc/out4" && ! jq -e "any(.findings[]; startswith(\"FAIL listening\"))" "$TMP/doc/state/doctor.json" >/dev/null'
+fi
+if have yq; then
+  check "status shows a listeners line" \
+    'PATH="$TMP/lsbin:$PATH" run_aw status && has "listeners.*0.0.0.0:22/tcp (sshd), " && SS_MODE=empty PATH="$TMP/lsbin:$PATH" run_aw status && grep -qE "listeners +none" "$TMP/out"'
+fi
 if have yq; then
   check "status --json carries health"  'run_aw --json status && jq -e ".health.agentVersion" "$TMP/out" >/dev/null'
   check "status --json lists capabilities in health" 'jq -e ".health.capabilities | index(\"core\") != null" "$TMP/out" >/dev/null'

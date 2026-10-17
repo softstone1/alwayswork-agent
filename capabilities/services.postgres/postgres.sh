@@ -172,7 +172,9 @@ pg_container(){ wl_container "$PG_ID"; }
 # they are recorded node-owned (also when an older agent generated them): a
 # group secret of the same name must not replace them under a running
 # database. Role passwords are generated when absent but stay control-owned.
-pg_gen_password() { head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40; }
+# 48 random bytes give 64 base64 characters; dropping '/', '+', '=' and newlines still
+# leaves well over 40, so every password is exactly 40 (32 bytes gave 43 and fell short ~5%).
+pg_gen_password() { head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | head -c 40; }
 pg_ensure_secrets() {
   [[ "$(sec_backend)" == "sops" ]] || { warn "services.postgres: no sealed store (sops/age); passwords cannot be kept"; return 1; }
   sec_exists || sec_init

@@ -6,6 +6,10 @@ case "$1" in
  {"Names":["alwayswork-postgres"],"Image":"docker.io/library/postgres:16","State":"running","Status":"Up 2 days (unhealthy)","Labels":{"alwayswork":"true","alwayswork.capability":"services.postgres"},"StartedAt":1789700000}]
 J
   ;;
+  network) [ "$2 $3" = "inspect alwayswork" ] || exit 125; cat <<'J'
+[{"name":"alwayswork","driver":"bridge","subnets":[{"subnet":"10.89.0.0/24","gateway":"10.89.0.1"},{"subnet":"fd00:aa::/64","gateway":"fd00:aa::1"}]}]
+J
+  ;;
   stats) cat <<'J'
 [{"Name":"alwayswork-dsh","CPU":12.3456,"MemUsage":734003200,"MemLimit":4294967296,"PIDs":41},
  {"Name":"alwayswork-postgres","CPUPerc":"0.75%","MemUsage":"120MB / 2GB","PIDS":"9"},
