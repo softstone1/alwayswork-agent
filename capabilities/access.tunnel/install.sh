@@ -58,15 +58,15 @@ if sec_has CLOUDFLARE_TUNNEL_TOKEN; then
       chmod 600 "$token_file"
     fi
   }
-  write_unit() {
-    aw_write "$unit" <<UNIT
+  write_unit_text() {
+    cat <<UNIT
 [Unit]
 Description=AlwaysWork Cloudflare tunnel
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=$bin tunnel --no-autoupdate --token-file $token_file run
+ExecStart=$bin tunnel --no-autoupdate run --token-file $token_file
 Restart=always
 RestartSec=5
 
@@ -74,7 +74,21 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
   }
+  write_unit() { write_unit_text | aw_write "$unit"; }
   current="$(cat "$token_file" 2>/dev/null || true)"
+  # A unit from an older agent may carry an outdated command line (before
+  # this fix, `--token-file` came before `run`, which cloudflared 2026.x
+  # answers with its help text and exit 0 — a tunnel that never connects).
+  # Rewrite the unit whenever it differs from what this agent would write.
+  if [[ -f "$unit" && "$DRY_RUN" != "1" ]]; then
+    want="$(write_unit_text)"
+    if [[ "$(cat "$unit" 2>/dev/null)" != "$want" ]]; then
+      log "access.tunnel: cloudflared unit is outdated; rewriting it"
+      write_unit
+      run systemctl daemon-reload
+      run systemctl restart cloudflared || true
+    fi
+  fi
   if [[ ! -f "$unit" ]]; then
     # Idempotent adoption: a unit left behind by an older install (or deleted
     # and recreated tunnel) heals itself instead of aborting the reconcile.
