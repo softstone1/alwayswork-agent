@@ -91,6 +91,16 @@ UNIT
     log "access.tunnel: tunnel token changed; updating the service"
     write_token
     run systemctl restart cloudflared
+  elif ! systemctl is-active --quiet cloudflared 2>/dev/null; then
+    # Installed with the current token but not running (crashed, never
+    # started from cloud-init, or failed and gave up): the lockdown and SSH
+    # access wait on this service, so heal it here instead of reporting
+    # "already installed" forever. Its own last words go to the log.
+    warn "access.tunnel: cloudflared is installed but not running; restarting it"
+    run systemctl daemon-reload
+    run systemctl enable cloudflared 2>/dev/null || true
+    run systemctl restart cloudflared || true
+    systemctl --no-pager --lines=15 status cloudflared 2>&1 | sed 's/^/    | /' >&2 || true
   else
     info "cloudflared service already installed with the current token"
     run systemctl enable --now cloudflared 2>/dev/null || true
