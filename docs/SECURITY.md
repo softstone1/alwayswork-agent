@@ -126,8 +126,36 @@ obs.uptime         localhost:3001 container
 
 `aw doctor` scores the box: firewall state, sshd, secret-store presence and
 key permissions, snapshot availability, disk headroom, pending updates, engine
-socket exposure, known-vulnerable packages, and capability healthchecks. It
-exits non-zero when a critical check fails, so it can gate automation.
+socket exposure, listening sockets, known-vulnerable packages, and capability
+healthchecks. It exits non-zero when a critical check fails, so it can gate
+automation.
+
+### Listener audit
+
+A node accepts no inbound connections: services are published on
+`127.0.0.1` and reached through the outbound tunnel. Every heartbeat carries
+`health.listeners` (docs/NETWORK_SECURITY.md phase N1 in the control repo),
+built from `ss -Htulnp`:
+
+```json
+"listeners": [{ "proto": "tcp", "addr": "0.0.0.0", "port": 22, "process": "sshd" }]
+```
+
+- Listed: TCP sockets in `LISTEN` and bound UDP sockets (`UNCONN`) whose
+  address is neither loopback (`127.0.0.0/8`, `::1`) nor inside the
+  `alwayswork` podman network's subnets (`podman network inspect
+  alwayswork`; skipped when podman or the network is absent). Wildcard binds
+  (`0.0.0.0`, `::`, `*`) are exactly the exposure looked for and are listed.
+- `addr` is printed without IPv6 brackets or `%iface` scope suffixes;
+  `process` is the command name `ss -p` shows (empty when it cannot see it).
+- The DHCP client socket (udp 68) is excluded: a client, not a service.
+- At most 32 entries. `[]` means ss ran and found nothing; the field is
+  omitted when `ss` is unavailable (unknown, not clean).
+
+`aw doctor` turns each entry into a FAIL finding — `listening on
+0.0.0.0:22/tcp (sshd) — nodes accept no inbound connections` — which lowers
+the score and rides `health.doctorFindings`. `aw status` prints a
+`listeners` line (`none`, or the list).
 
 ## Recommended but not automatic
 
