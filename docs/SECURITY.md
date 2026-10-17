@@ -65,7 +65,8 @@ and the control agent (`lib/infra.sh`, after the lockdown step) converges:
 | Listens on | `ListenAddress <address>`, `Port 22`, nothing else |
 | Authentication | `TrustedUserCAKeys /etc/alwayswork/ssh-ca.pub` (the Cloudflare SSH CA; short-lived certificates), `AuthorizedKeysFile none`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`, `AllowUsers <users>`, `MaxAuthTries 3`, `LoginGraceTime 20` |
 | Forwarding | all off (`AllowTcpForwarding`, agent, X11, stream-local, tunnel): a shell is what Access for Infrastructure grants; forwarding would make the node a pivot onto its loopback-only services around their own Access apps |
-| Users | each listed user exists (`useradd -m -s /bin/bash`) with a locked password (`passwd -l`); `UsePAM yes` so sshd accepts certificate logins for locked-password accounts. No group or sudo membership is granted. |
+| Users | each listed user exists (`useradd -m -s /bin/bash`) with a locked password (`passwd -l`); `UsePAM yes` so sshd accepts certificate logins for locked-password accounts. |
+| sudo | exactly the listed users get passwordless sudo through `/etc/sudoers.d/alwayswork-infra` (0440), so an operator can run `aw`. The candidate is checked with `visudo -cf` first; a rejected one is discarded and the previous file kept, with a warning. Why passwordless: the users have no password and no keys — every login is a short-lived certificate Cloudflare issues only after enforcing the operator's identity and device posture for that login, so a sudo password would only add a shared secret. |
 | Firewall | nothing opened: cloudflared delivers the traffic to a local address, which the kernel routes over `lo`, and ufw's stock `before.rules` (and firewalld) accept `lo`. Port 22 is never opened. |
 
 Rules:
@@ -79,7 +80,8 @@ Rules:
   its config and health reports `failed`. A CA change rewrites the CA file
   and reloads (SIGHUP re-execs sshd, which also rebinds the address).
 - `infraAccess` absent or `null`: the service and interface are stopped and
-  every file above (units, networkd files, config, CA, host key) is deleted.
+  every file above (units, networkd files, config, CA, host key, sudoers
+  drop-in) is deleted.
   Users are kept — they simply can no longer log in.
 - Heartbeat: `health.infraAccess` = `{ address, sshd: "active"|"failed"|"off",
   caFingerprint }` (public facts only; `{ sshd: "off" }` when not
@@ -195,7 +197,7 @@ built from `ss -Htulnp`:
   alwayswork`; skipped when podman or the network is absent), nor an
   address of the private infrastructure interfaces when they exist
   (`ip -o addr show dev <name>`): `awinfra0`, the dummy interface holding a
-  /32 from `10.255.0.0/16` routed only through the node's Cloudflare Tunnel
+  /32 from `198.18.128.0/20` routed only through the node's Cloudflare Tunnel
   (phase N2 binds sshd there), and `CloudflareWARP`, the Cloudflare Mesh /
   Cloudflare One Client interface reachable only through Cloudflare policy.
   Wildcard binds (`0.0.0.0`, `::`, `*`) are exactly the exposure looked for

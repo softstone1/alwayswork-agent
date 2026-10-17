@@ -42,6 +42,7 @@ infra_networkd_dir()  { printf '%s\n' "${AW_NETWORKD_DIR:-/etc/systemd/network}"
 infra_sshd_config()   { printf '%s\n' "$AW_ETC/sshd_config"; }
 infra_ca_file()       { printf '%s\n' "$AW_ETC/ssh-ca.pub"; }
 infra_hostkey_dir()   { printf '%s\n' "$AW_ETC/ssh"; }
+infra_sudoers_file()  { printf '%s\n' "${AW_SUDOERS_DIR:-/etc/sudoers.d}/alwayswork-infra"; }
 infra_state_file()    { printf '%s\n' "$AW_STATE/infra-access.json"; }
 infra_configured()    { [[ -f "$(infra_state_file)" ]]; }
 
@@ -221,6 +222,42 @@ Address=$1
 EOF
 }
 
+# infra_render_sudoers <user...> — passwordless sudo for exactly these users.
+infra_render_sudoers() {
+  local u
+  cat <<'SUDOERS'
+# managed by alwayswork (infraAccess) — removed when infraAccess is.
+# These users have no password and no keys: each login is a short-lived
+# certificate that Cloudflare Access for Infrastructure issued only after
+# checking the operator's identity and device posture, so a password prompt
+# here would add nothing but a shared secret.
+SUDOERS
+  for u in "$@"; do printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$u"; done
+}
+
+# infra_apply_sudoers <user...> — install the drop-in only after `visudo -cf`
+# accepts it. The candidate's name contains a dot, so sudo never reads it.
+# On rejection the previous file is kept and a warning is printed.
+infra_apply_sudoers() {
+  local f cand new
+  f="$(infra_sudoers_file)"; cand="$(dirname "$f")/.alwayswork-infra.new"
+  new="$(infra_render_sudoers "$@")"
+  [[ -f "$f" && "$(cat "$f" 2>/dev/null)" == "$new" ]] && return 0
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '    [dry-run] write %s (0440, visudo -cf)\n' "$f" >&2; return 0
+  fi
+  ensure_dir "$(dirname "$f")"
+  ( umask 0337; printf '%s\n' "$new" > "$cand" ) || { warn "control: could not write $cand"; return 0; }
+  run chmod 0440 "$cand" 2>/dev/null || true
+  if ! visudo -cf "$cand" >/dev/null 2>&1; then
+    run rm -f "$cand"
+    warn "control: the sudoers drop-in was rejected by visudo -cf; keeping the previous $f"
+    return 0
+  fi
+  _aw_write_ledger "$f"
+  run mv -f "$cand" "$f" || warn "control: could not install $f"
+}
+
 # _infra_put <path> <mode> < content — write only when the content differs.
 # Returns 0 when the file changed, 1 when it was already current.
 _infra_put() {
@@ -336,6 +373,9 @@ infra_converge() {
     run passwd -l "$u" >/dev/null 2>&1 || warn "control: could not lock the password of $u"
   done
 
+  # Passwordless sudo for exactly these users, so an operator can run `aw`.
+  infra_apply_sudoers "${users[@]}"
+
   # 4. The interface. The mode sticks once chosen so a later converge cleans
   # up the right files; the other mode's leftovers are removed either way.
   if _infra_networkd; then mode=networkd; else mode=unit; fi
@@ -406,7 +446,7 @@ infra_remove() {
   local ud nd hk
   ud="$(infra_unit_dir)"; nd="$(infra_networkd_dir)"; hk="$(infra_hostkey_dir)"
   if ! infra_configured && [[ ! -f "$ud/$INFRA_SSHD_UNIT" && ! -f "$ud/$INFRA_NET_UNIT" \
-        && ! -f "$nd/50-$INFRA_IFACE.netdev" && ! -f "$(infra_sshd_config)" ]]; then
+        && ! -f "$nd/50-$INFRA_IFACE.netdev" && ! -f "$(infra_sshd_config)" && ! -f "$(infra_sudoers_file)" ]]; then
     return 0
   fi
   log "control: removing infra SSH (no infraAccess in desired state)"
@@ -423,6 +463,7 @@ infra_remove() {
   fi
   run rm -f "$(infra_sshd_config)" "$(infra_sshd_config).new" "$(infra_ca_file)" \
     "$hk/ssh_host_ed25519_key" "$hk/ssh_host_ed25519_key.pub"
+  run rm -f "$(infra_sudoers_file)" "$(dirname "$(infra_sudoers_file)")/.alwayswork-infra.new"
   run rm -f "$(infra_state_file)"
   ok "control: infra SSH removed (SSH off)"
 }

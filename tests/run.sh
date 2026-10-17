@@ -2017,11 +2017,11 @@ check "listeners: the alwayswork podman network (v4 and v6 subnets) is excluded"
 check "listeners: without the network inspect, container-network binds are reported" \
   '[[ "$(ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.89.0.1\" or .addr == \"fd00:aa::1\")] | length")" == "2" ]]'
 check "listeners: binds on awinfra0 and CloudflareWARP (v4 and v6) are excluded" \
-  '! jq -e "any(.[]; .addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))" <<<"$LS_ALL" >/dev/null'
+  '! jq -e "any(.[]; .addr == \"198.18.130.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))" <<<"$LS_ALL" >/dev/null'
 check "listeners: without awinfra0, its bind is reported (WARP still excluded)" \
-  '[[ "$(IP_NO_AWINFRA=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\"))) | .addr] | join(\",\")")" == "10.255.0.7" ]]'
+  '[[ "$(IP_NO_AWINFRA=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"198.18.130.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\"))) | .addr] | join(\",\")")" == "198.18.130.7" ]]'
 check "listeners: without CloudflareWARP, its binds are reported (awinfra0 still excluded)" \
-  '[[ "$(IP_NO_WARP=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"10.255.0.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))] | length")" == "2" ]]'
+  '[[ "$(IP_NO_WARP=1 AW_TEST_PODMAN=1 ls_probe health_listeners_json | jq -r "[.[] | select(.addr == \"198.18.130.7\" or .addr == \"100.96.0.12\" or (.addr | startswith(\"2606:4700\")))] | length")" == "2" ]]'
 check "listeners: wildcard binds stay reported with the private interfaces present" \
   'jq -e "any(.[]; .addr == \"0.0.0.0\") and any(.[]; .addr == \"::\")" <<<"$LS_ALL" >/dev/null'
 check "listeners: the DHCP client socket (udp 68) is excluded" \

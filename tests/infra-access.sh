@@ -36,13 +36,14 @@ stub passwd 'exit 0'
 stub getent '[[ "$1" == passwd ]] && grep -qx "$2" "$USERS" 2>/dev/null'
 stub ssh-keygen 'while [[ $# -gt 0 ]]; do [[ "$1" == -f ]] && { : > "$2"; : > "$2.pub"; }; shift; done'
 stub networkctl 'exit 0'
+stub visudo '[[ "${VISUDO_REJECT:-0}" == 1 ]] && exit 1; exit 0'
 stub ip '[[ "$1 $2 $3" == "link show awinfra0" ]] && { [[ -f "$IFACE_FLAG" ]]; exit; }; exit 0'
 stub ss 'printf "%s\n" "${SS_OUT:-}"'
 export PATH="$S:$PATH"
 
 export AW_TEST=1 DRY_RUN=0 AW_ROOT="$ROOT"
 export AW_ETC="$TMP/etc/alwayswork" AW_STATE="$TMP/state" AW_LOG_DIR="$TMP/log"
-export AW_SYSTEMD_DIR="$TMP/systemd/system" AW_NETWORKD_DIR="$TMP/systemd/network"
+export AW_SUDOERS_DIR="$TMP/sudoers.d" AW_SYSTEMD_DIR="$TMP/systemd/system" AW_NETWORKD_DIR="$TMP/systemd/network"
 export AW_SSHD_BIN="$S/sshd" AW_IP_BIN=/usr/sbin/ip
 mkdir -p "$AW_ETC" "$AW_STATE"
 
@@ -78,6 +79,9 @@ check "oneshot interface unit (no networkd)" 'grep -q "ip link add awinfra0 type
 check "interface unit enabled and started"  'calls | grep -q "systemctl enable alwayswork-infra-net.service" && calls | grep -q "systemctl restart alwayswork-infra-net.service"'
 check "sshd unit enabled and started"       'calls | grep -q "systemctl enable alwayswork-sshd.service" && calls | grep -q "systemctl restart alwayswork-sshd.service"'
 check "user created with a locked password" 'calls | grep -q "^useradd -m -s /bin/bash aw$" && calls | grep -q "^passwd -l aw$"'
+SUDO="$AW_SUDOERS_DIR/alwayswork-infra"
+check "sudoers: exactly the listed users, NOPASSWD" '[[ "$(grep -v "^#" "$SUDO")" == "aw ALL=(ALL:ALL) NOPASSWD: ALL" ]]'
+check "sudoers: mode 0440, validated with visudo -cf" '[[ "$(stat -c %a "$SUDO" 2>/dev/null || stat -f %Lp "$SUDO")" == 440 ]] && calls | grep -q "^visudo -cf $AW_SUDOERS_DIR/.alwayswork-infra.new" && [[ ! -e "$AW_SUDOERS_DIR/.alwayswork-infra.new" ]]'
 check "state: address, fingerprint, active" '[[ "$(jq -r "[.address,.caFingerprint,.sshd] | join(\" \")" "$STATE")" == "198.18.130.7/32 $CA1_FP active" ]]'
 check "no firewall opening for 22"          '! calls | grep -q "^ufw"'
 check "health reports public facts only" \
@@ -98,7 +102,7 @@ check "CA change keeps the config"          'cmp -s "$CFG" "$TMP/cfg1"'
 
 echo "== infraAccess: invalid input is rejected =="
 cp "$CFG" "$TMP/cfg2"; reset_calls
-for a in 198.18.127.1/32 198.18.144.1/32 10.255.0.1/32 198.18.130.7/24 198.18.130.7 198.18.130.07/32 "198.18.130.7/32;rm" ""; do
+for a in 198.18.127.1/32 198.18.144.1/32 10.0.0.1/32 198.18.130.7/24 198.18.130.7 198.18.130.07/32 "198.18.130.7/32;rm" ""; do
   check "address '$a' refused, state kept"  'apply "$(delivery "$a" "$CA2")" && grep -q "not a /32 inside 198.18.128.0/20" "$TMP/out" && cmp -s "$CFG" "$TMP/cfg2" && [[ ! -s "$CALLS" ]]'
 done
 check "multi-line CA refused"               'apply "$(delivery 198.18.130.7/32 "$CA1"$'"'"'\n'"'"'"$CA2")" && grep -q "caPublicKey is not" "$TMP/out" && [[ "$(cat "$AW_ETC/ssh-ca.pub")" == "$CA2" ]]'
@@ -120,6 +124,7 @@ check "health says failed"                  '( source "$ROOT/lib/core.sh"; sourc
 echo "== infraAccess: address and users change =="
 reset_calls
 check "new address applies"                 'apply "$(delivery 198.18.131.9/32 "$CA2" "[\"aw\",\"ops\",\"aw\"]")"'
+check "sudoers follows the user list"       '[[ "$(grep -v "^#" "$SUDO" | tr "\n" "|")" == "aw ALL=(ALL:ALL) NOPASSWD: ALL|ops ALL=(ALL:ALL) NOPASSWD: ALL|" ]]'
 check "ListenAddress follows"               'grep -qx "ListenAddress 198.18.131.9" "$CFG" && [[ "$(grep -c "^ListenAddress" "$CFG")" == 1 ]]'
 check "users deduplicated in AllowUsers"    'grep -qx "AllowUsers aw ops" "$CFG" && calls | grep -q "^useradd -m -s /bin/bash ops$" && ! calls | grep -q "^useradd -m -s /bin/bash aw$"'
 check "interface unit rewritten + restarted" 'grep -q "198.18.131.9/32" "$NET" && calls | grep -q "systemctl restart alwayswork-infra-net.service"'
@@ -142,6 +147,14 @@ check "doctor FAIL: sshd also on 0.0.0.0"   'SS_OUT="$L_INFRA"$'"'"'\n'"'"'"$L_A
 check "doctor FAIL: sshd also on loopback"  'SS_OUT="$L_INFRA"$'"'"'\n'"'"'"$L_LO" doctor_infra | grep -q "^FAIL sshd listens on 127.0.0.1:22"'
 check "doctor FAIL: infra sshd not listening" 'SS_OUT="" doctor_infra | grep -q "^FAIL infra sshd is not listening"'
 
+echo "== infraAccess: visudo rejects the sudoers drop-in =="
+cp "$SUDO" "$TMP/sudo1"; reset_calls
+check "visudo rejection is not fatal"       'VISUDO_REJECT=1 apply "$(delivery 198.18.131.9/32 "$CA2" "[\"aw\"]")"'
+check "previous sudoers kept, warned"       'cmp -s "$SUDO" "$TMP/sudo1" && grep -q "rejected by visudo" "$TMP/out" && [[ ! -e "$AW_SUDOERS_DIR/.alwayswork-infra.new" ]]'
+check "sshd still converged (users: aw)"    'grep -qx "AllowUsers aw" "$CFG"'
+reset_calls
+check "valid sudoers applies on retry"      'apply "$(delivery 198.18.131.9/32 "$CA2" "[\"aw\",\"ops\"]")" && grep -q "^ops ALL" "$SUDO" && grep -qx "AllowUsers aw ops" "$CFG"'
+
 echo "== infraAccess: networkd mode =="
 reset_calls
 check "networkd: converge"                  'NETWORKD=1 apply "$(delivery 198.18.131.9/32 "$CA2" "[\"aw\",\"ops\"]")"'
@@ -153,6 +166,7 @@ echo "== infraAccess: removal =="
 touch "$IFACE_FLAG"; reset_calls
 check "absent infraAccess removes it all"   'apply "{\"state\":\"approved\",\"config\":{\"configVersion\":2}}"'
 check "units, config, CA, keys, state gone" '[[ ! -f "$UNIT" && ! -f "$NET" && ! -f "$CFG" && ! -f "$AW_ETC/ssh-ca.pub" && ! -f "$AW_ETC/ssh/ssh_host_ed25519_key" && ! -f "$STATE" ]]'
+check "sudoers drop-in removed"             '[[ ! -e "$SUDO" ]]'
 check "networkd files gone"                 '[[ ! -f "$AW_NETWORKD_DIR/50-awinfra0.netdev" && ! -f "$AW_NETWORKD_DIR/50-awinfra0.network" ]]'
 check "service stopped, interface deleted"  'calls | grep -q "systemctl disable --now alwayswork-sshd.service" && calls | grep -q "^ip link del awinfra0"'
 check "users are kept"                      '! calls | grep -q "userdel"'

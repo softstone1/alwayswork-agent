@@ -146,7 +146,7 @@ _health_container_subnets() {
 # Addresses of the private infrastructure interfaces, one per line; nothing
 # for an interface that does not exist. A socket bound there is not an
 # exposure:
-#   awinfra0        a dummy interface holding a /32 from 10.255.0.0/16 that
+#   awinfra0        a dummy interface holding a /32 from 198.18.128.0/20 that
 #                   is routed only through the node's Cloudflare Tunnel
 #                   (NETWORK_SECURITY N2 binds sshd there)
 #   CloudflareWARP  the Cloudflare Mesh / Cloudflare One Client (WARP)
