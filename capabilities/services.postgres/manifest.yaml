@@ -16,8 +16,9 @@ workload:
     - id: postgres-admin
       name: PostgreSQL admin (pgweb)
       image: { repo: docker.io/sosedoff/pgweb, version: { source: pinned, pinned: "0.16.2" } }  # config: admin_image
-      enabled_config: admin        # admin: pgweb (default) | off
+      enabled_config: admin        # admin: off (default) | pgweb
+      enabled_default: false
       surfaces:
         - { id: postgres-admin, kind: http, port: 8081, port_config: admin_port, path: /, name: PostgreSQL admin (pgweb) }
-  config: [version, image, port, db, user, memory_mb, network, pull, admin, admin_port, admin_image]
+  config: [version, image, port, db, user, roles, tls, hostnames, memory_mb, network, pull, admin, admin_port, admin_image]
   data: [data, backups]

@@ -600,6 +600,22 @@ control_enroll_resume_once() {
   AW_ENROLL_WAIT=40 control_wait_approval "$id" "$secret"
 }
 
+# Store each KEY=value line of a decrypted delivery. A key this node
+# generated for itself (lib/secrets.sh, node-owned) is skipped with a warning
+# that names the key only: the group cannot replace, say, a database
+# superuser password out from under the running service.
+control_import_secrets() {
+  local k v
+  while IFS='=' read -r k v; do
+    [[ -n "$k" ]] || continue
+    if sec_is_node_owned "$k"; then
+      warn "control: delivered secret $k is node-owned; keeping the node's value"
+      continue
+    fi
+    sec_set "$k" "$(printf '%s' "$v" | jq -r . 2>/dev/null || printf '%s' "$v")"
+  done < "$1"
+}
+
 # Apply a delivered { state, config, sealedSecrets } document to this box.
 # A delivery that is not an approved config (an error body, a truncated
 # response, a 401) is refused: falling back to defaults here would silently
@@ -640,10 +656,7 @@ control_apply_delivery() {
     chmod 600 "$enc" "$dec"
     printf '%s' "$sealed" > "$enc"
     if age -d -i "$(sec_key_file)" "$enc" > "$dec" 2>/dev/null; then
-      while IFS='=' read -r k v; do
-        [[ -n "$k" ]] || continue
-        sec_set "$k" "$(printf '%s' "$v" | jq -r . 2>/dev/null || printf '%s' "$v")"
-      done < "$dec"
+      control_import_secrets "$dec"
       ok "imported secret(s)"
     else
       warn "could not decrypt sealed secrets"
