@@ -577,7 +577,16 @@ control_wait_approval() {
           continue
         fi
         rm -f "$cfgf" "$hdr" "$bodyf"; trap - EXIT
-        control_apply_delivery "$resp" || die "control: initial apply failed"
+        # The enrolment is complete the moment the approval delivery is
+        # verified: the identity is valid and pinned. A first delivery that is
+        # not fully applied yet — typically the SSH lockdown deferred because
+        # cloudflared has not connected in the first seconds after install —
+        # stays unacked, and the agent's tick retries it. Abandoning the
+        # enrolment here instead stranded every fresh tunnel node: no agent,
+        # and the provision timer filing claims as if it had never enrolled.
+        if ! control_apply_delivery "$resp"; then
+          warn "control: first delivery not fully applied yet (e.g. lockdown waits for the tunnel); the agent retries it"
+        fi
         control_finish_enrolled
         return 0 ;;
       pending)  sleep 3 ;;
