@@ -168,6 +168,31 @@ _health_same_addr() {
   x="$(_health_v6_hex "$1")" && y="$(_health_v6_hex "$2")" && [[ "$x" == "$y" ]]
 }
 
+# health_failing_units_json — health.failingUnits (max 8): every
+# alwayswork-*.service that is failed, auto-restarting or has restarted, as
+# {unit, active, sub, restarts, logTail}. logTail is the unit's last 20
+# journal lines, secrets redacted, capped at 1500 characters. Prints nothing
+# (field omitted) without systemctl/journalctl; [] when all units are fine.
+health_failing_units_json() {
+  have systemctl && have journalctl || return 1
+  [[ -n "${AW_TEST:-}" && -z "${AW_TEST_UNITS:-}" ]] && return 1
+  local u active sub restarts tail rows="" n=0
+  while read -r u; do
+    [[ -n "$u" ]] || continue
+    active="$(systemctl show -p ActiveState --value "$u" 2>/dev/null)"
+    sub="$(systemctl show -p SubState --value "$u" 2>/dev/null)"
+    restarts="$(systemctl show -p NRestarts --value "$u" 2>/dev/null)"; [[ "$restarts" =~ ^[0-9]+$ ]] || restarts=0
+    if [[ "$active" == failed || "$sub" == auto-restart || "$active" == activating || "$restarts" -gt 0 ]]; then
+      tail="$(journalctl -u "$u" -n 20 -o cat --no-pager 2>/dev/null \
+        | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig; s/aj_[A-Za-z0-9_-]+/aj_[redacted]/g; s/awd_[A-Za-z0-9_-]+/awd_[redacted]/g' \
+        | tr -cd '[:print:]\n' | tail -c 1500)"
+      rows+="$(jq -nc --arg u "$u" --arg a "$active" --arg s "$sub" --argjson r "$restarts" --arg t "$tail" '{unit:$u, active:$a, sub:$s, restarts:$r, logTail:$t}'),"
+      n=$((n + 1)); (( n >= 8 )) && break
+    fi
+  done < <(systemctl list-units --all --plain --no-legend 'alwayswork-*.service' 2>/dev/null | awk '{print $1}')
+  printf '[%s]' "${rows%,}"
+}
+
 # health_listeners_json — the health.listeners array (max 32). Fails (prints
 # nothing) when `ss` is unavailable, so the field is omitted, not [] .
 health_listeners_json() {
@@ -318,6 +343,10 @@ control_health_json() {
   # Sockets reachable from outside loopback and the container network
   # (omitted when ss is unavailable; [] when it ran and found none).
   local lsn; if lsn="$(health_listeners_json 2>/dev/null)"; then _health_raw listeners "$lsn"; fi
+  # AlwaysWork units that are failing or crash-looping, with their last log
+  # lines: a --rm container that dies at start leaves nothing in podman ps,
+  # only its unit's journal (live: Postgres exiting 2 on contabo-use-1).
+  local fu; if fu="$(health_failing_units_json 2>/dev/null)"; then _health_raw failingUnits "$fu"; fi
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
   # Inventory (capacity, not load): what this box is made of.
