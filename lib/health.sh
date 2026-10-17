@@ -146,7 +146,7 @@ _health_container_subnets() {
 # Addresses of the private infrastructure interfaces, one per line; nothing
 # for an interface that does not exist. A socket bound there is not an
 # exposure:
-#   awinfra0        a dummy interface holding a /32 from 10.255.0.0/16 that
+#   awinfra0        a dummy interface holding a /32 from 198.18.128.0/20 that
 #                   is routed only through the node's Cloudflare Tunnel
 #                   (NETWORK_SECURITY N2 binds sshd there)
 #   CloudflareWARP  the Cloudflare Mesh / Cloudflare One Client (WARP)
@@ -337,6 +337,9 @@ control_health_json() {
   # Last update result (lib/updates.sh): what a rollout wave waits for.
   local upd; upd="$(declare -F upd_result_json >/dev/null && upd_result_json || printf null)"
   [[ "$upd" != "null" ]] && _health_raw update "$upd"
+  # Operator SSH via Access for Infrastructure (lib/infra.sh): address,
+  # sshd state and CA fingerprint only.
+  declare -F infra_health_json >/dev/null && _health_raw infraAccess "$(infra_health_json 2>/dev/null)"
 
   # A field that jq rejects must be visible, not a silent empty heartbeat.
   local jqerr; jqerr="$(mktemp)"

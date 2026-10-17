@@ -239,7 +239,8 @@ with `--trusted-host`, `webUi` on heartbeat and the console's Open UI,
 `install.sh` served by the control plane, `--token/--hostname/--profile/
 --control` zero-touch flags with a bounded, resumable approval wait, USB
 `alwayswork/provision.toml` at boot and on hotplug, drain order → tombstone → wipe, ledger and **restore** on decommission,
-typed **health** heartbeat, clock guard, SSH policy `tunnel`.
+typed **health** heartbeat, clock guard, SSH policy `tunnel`, operator SSH
+through Access for Infrastructure (`infraAccess`, [SECURITY.md](SECURITY.md#operator-ssh-access-for-infrastructure-infraaccess)).
 
 Gaps, in build order:
 

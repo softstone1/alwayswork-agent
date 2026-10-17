@@ -58,6 +58,26 @@ cmd_doctor() {
     _dpass "sshd is disabled"
   fi
 
+  # --- infra ssh (Access for Infrastructure) --------------------------------
+  # With infraAccess, every sshd socket must sit on the awinfra0 /32: a
+  # listener anywhere else (wildcard, LAN, even loopback) is a way in that
+  # bypasses Access for Infrastructure.
+  if declare -F infra_configured >/dev/null && infra_configured; then
+    local infra_addr infra_l l infra_bad=0 infra_seen=0
+    infra_addr="$(jq -r '.address // ""' "$(infra_state_file)" 2>/dev/null)"; infra_addr="${infra_addr%/32}"
+    if infra_l="$(infra_sshd_listeners)"; then
+      while IFS= read -r l; do
+        [[ -n "$l" ]] || continue
+        if [[ "$l" == "$infra_addr:22" ]]; then infra_seen=1
+        else infra_bad=1; _dfail "sshd listens on $l (infraAccess allows only $infra_addr:22 on $INFRA_IFACE)" "disable the distro sshd: hardening.ssh=disabled"; fi
+      done <<<"$infra_l"
+      if (( ! infra_bad && infra_seen )); then _dpass "sshd bound only to $INFRA_IFACE ($infra_addr:22)"
+      elif (( ! infra_seen )); then _dfail "infra sshd is not listening on $infra_addr:22" "journalctl -u $INFRA_SSHD_UNIT"; fi
+    else
+      _dwarn "cannot verify the infra sshd binding (ss not found)" "install iproute2"
+    fi
+  fi
+
   # --- secrets --------------------------------------------------------------
   if [[ "$(sec_backend)" == "sops" ]]; then
     if sec_exists; then _dpass "encrypted secret store present"

@@ -704,6 +704,11 @@ control_apply_delivery() {
   # off access before the tunnel is verified. A deferred lockdown keeps the
   # version unacked so the next tick retries it.
   control_apply_lockdown "$json" || { err "control: lockdown of version $ver deferred"; return 1; }
+  # Operator SSH through Access for Infrastructure (lib/infra.sh): present
+  # infraAccess converges awinfra0 + alwayswork-sshd; absent removes both.
+  if declare -F infra_apply_from_delivery >/dev/null; then
+    infra_apply_from_delivery "$json" || { err "control: infra SSH of version $ver failed; will retry"; return 1; }
+  fi
   # Record the applied version only after the reconcile succeeded, so a failed
   # apply stays unacked and is retried on the next tick.
   cfg_set_expr '.control.appliedVersion' "$ver"

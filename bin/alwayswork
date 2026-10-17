@@ -38,6 +38,8 @@ source "$AW_ROOT/lib/snapshot.sh"
 source "$AW_ROOT/lib/capability.sh"
 # shellcheck source=../lib/tunnel.sh
 source "$AW_ROOT/lib/tunnel.sh"
+# shellcheck source=../lib/infra.sh
+source "$AW_ROOT/lib/infra.sh"
 # shellcheck source=../lib/power.sh
 source "$AW_ROOT/lib/power.sh"
 # shellcheck source=../lib/apps.sh

@@ -43,6 +43,56 @@ leaves the file alone, and anything that is not a single
 No `authorized_keys` are ever written. `aw doctor` grades `tunnel` as
 passing when every port-22 listener is bound to loopback.
 
+## Operator SSH: Access for Infrastructure (`infraAccess`)
+
+Control repo `docs/NETWORK_SECURITY.md`, phase N2. Operators reach a node's
+shell with the **Cloudflare One Client** (WARP) and a Cloudflare **Access for
+Infrastructure** target; nothing on the node is reachable from the internet
+or the LAN. The signed delivery's config carries
+
+```json
+"infraAccess": { "address": "198.18.130.7/32",
+                 "caPublicKey": "ecdsa-sha2-nistp256 AAAA… ",
+                 "users": ["aw"] }
+```
+
+and the control agent (`lib/infra.sh`, after the lockdown step) converges:
+
+| Piece | State |
+|-------|-------|
+| Interface | dummy `awinfra0` holding exactly the /32; systemd-networkd `/etc/systemd/network/50-awinfra0.{netdev,network}` (`RequiredForOnline=no`) when networkd runs, else the oneshot `alwayswork-infra-net.service` (`ip link add … type dummy`, `ip addr replace`); both survive reboot. The control plane routes the /32 through this node's tunnel. |
+| sshd | a separate `alwayswork-sshd.service` running `sshd -D -f /etc/alwayswork/sshd_config`; host key `/etc/alwayswork/ssh/ssh_host_ed25519_key`. The distro `ssh`/`sshd` unit is not touched and stays as `hardening.ssh` left it (disabled by default). |
+| Listens on | `ListenAddress <address>`, `Port 22`, nothing else |
+| Authentication | `TrustedUserCAKeys /etc/alwayswork/ssh-ca.pub` (the Cloudflare SSH CA; short-lived certificates), `AuthorizedKeysFile none`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`, `AllowUsers <users>`, `MaxAuthTries 3`, `LoginGraceTime 20` |
+| Forwarding | all off (`AllowTcpForwarding`, agent, X11, stream-local, tunnel): a shell is what Access for Infrastructure grants; forwarding would make the node a pivot onto its loopback-only services around their own Access apps |
+| Users | each listed user exists (`useradd -m -s /bin/bash`) with a locked password (`passwd -l`); `UsePAM yes` so sshd accepts certificate logins for locked-password accounts. |
+| sudo | exactly the listed users get passwordless sudo through `/etc/sudoers.d/alwayswork-infra` (0440), so an operator can run `aw`. The candidate is checked with `visudo -cf` first; a rejected one is discarded and the previous file kept, with a warning. Why passwordless: the users have no password and no keys — every login is a short-lived certificate Cloudflare issues only after enforcing the operator's identity and device posture for that login, so a sudo password would only add a shared secret. |
+| Firewall | nothing opened: cloudflared delivers the traffic to a local address, which the kernel routes over `lo`, and ufw's stock `before.rules` (and firewalld) accept `lo`. Port 22 is never opened. |
+
+Rules:
+
+- `address` must be a /32 inside `198.18.128.0/20`; `caPublicKey` one
+  OpenSSH public key line whose blob matches its type; `users` 1–16 valid
+  names, never `root`. Anything else is refused with a warning and the
+  previous state is kept.
+- Every candidate `sshd_config` is checked with `sshd -t -f` **before**
+  anything changes; a rejected candidate is discarded, the running sshd keeps
+  its config and health reports `failed`. A CA change rewrites the CA file
+  and reloads (SIGHUP re-execs sshd, which also rebinds the address).
+- `infraAccess` absent or `null`: the service and interface are stopped and
+  every file above (units, networkd files, config, CA, host key, sudoers
+  drop-in) is deleted.
+  Users are kept — they simply can no longer log in.
+- Heartbeat: `health.infraAccess` = `{ address, sshd: "active"|"failed"|"off",
+  caFingerprint }` (public facts only; `{ sshd: "off" }` when not
+  configured). `aw status` prints an `infra ssh` line.
+- `aw doctor` (when configured): PASS when every sshd TCP listener is
+  `<address>:22`; FAIL for any sshd listener elsewhere — wildcard, LAN, or
+  loopback (policy `tunnel`'s `127.0.0.1:22` too: with `infraAccess` set
+  `hardening.ssh: disabled`) — and FAIL when the infra sshd is not listening.
+- **Break-glass** is the provider's (or the machine's) console: no
+  password and no key on the node opens SSH, by design.
+
 ## Clock guard
 
 Signed device requests carry a timestamp the control plane checks against a
@@ -147,7 +197,7 @@ built from `ss -Htulnp`:
   alwayswork`; skipped when podman or the network is absent), nor an
   address of the private infrastructure interfaces when they exist
   (`ip -o addr show dev <name>`): `awinfra0`, the dummy interface holding a
-  /32 from `10.255.0.0/16` routed only through the node's Cloudflare Tunnel
+  /32 from `198.18.128.0/20` routed only through the node's Cloudflare Tunnel
   (phase N2 binds sshd there), and `CloudflareWARP`, the Cloudflare Mesh /
   Cloudflare One Client interface reachable only through Cloudflare policy.
   Wildcard binds (`0.0.0.0`, `::`, `*`) are exactly the exposure looked for
