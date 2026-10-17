@@ -970,11 +970,141 @@ source "$ROOT/lib/core.sh"; source "$ROOT/lib/config.sh"; source "$ROOT/lib/hard
 source "$ROOT/lib/distro.sh"; source "$ROOT/lib/engine.sh"; source "$ROOT/lib/secrets.sh"
 source "$ROOT/lib/capability.sh"; source "$ROOT/lib/workload.sh"
 source "$CAP_DIR/postgres.sh"
+# A file-backed stand-in for the sealed store (sops/age are not on CI).
+if [[ -n "${PG_FAKE_SEC:-}" ]]; then
+  sec_backend() { echo sops; }; sec_exists() { :; }; sec_init() { :; }
+  sec_get() { grep "^$1=" "$PG_FAKE_SEC" 2>/dev/null | head -1 | cut -d= -f2-; }
+  sec_has() { [[ -n "$(sec_get "$1")" ]]; }
+  sec_set() { { grep -v "^$1=" "$PG_FAKE_SEC" 2>/dev/null; printf '%s=%s\n' "$1" "$2"; } > "$PG_FAKE_SEC.n"; mv "$PG_FAKE_SEC.n" "$PG_FAKE_SEC"; }
+fi
 DRY_RUN=0
 [[ -f "$AW_CONFIG" ]] || cp "$ROOT/config/defaults.yaml" "$AW_CONFIG"
 "$@"
 EOS
 pg_probe() { bash "$TMP/pg-probe.sh" "$ROOT" "$TMP/pg" "$@"; }
+# podman for the reconcile: `exec` logs its argv and stdin and succeeds,
+# except a session naming $PG_FAIL_ROLE, which fails like a refused ALTER.
+mkdir -p "$TMP/pgbin"
+cat > "$TMP/pgbin/podman" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1" == exec ]] || exit 0
+printf '%s\n' "$*" >> "$PG_LOG.argv"
+in="$(cat)"; printf '%s\n' "$in" >> "$PG_LOG.stdin"
+[[ -n "${PG_FAIL_ROLE:-}" && "$in" == *"rolname = '$PG_FAIL_ROLE'"* ]] && exit 1
+exit 0
+EOS
+chmod +x "$TMP/pgbin/podman"
+pg_rprobe() { PATH="$TMP/pgbin:$PATH" PG_LOG="$TMP/pglog" PG_FAKE_SEC="$TMP/pg/sec" PG_READY_TRIES=1 pg_probe "$@"; }
+pg_cfg()  { yq -i "$1" "$TMP/pg/etc/worker.yaml"; }
+pg_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+pg_t_roles() {
+  local bad r=0
+  pg_cfg '.capabilities.config.services.postgres.roles = " shop:owner, shop_ro ,_svc1"'
+  [[ "$(pg_probe pg_roles 2>/dev/null)" == "$(printf 'shop\t1\nshop_ro\t0\n_svc1\t0')" ]] || r=1
+  for bad in Shop 9x a-b postgres pg_monitor a,a a:owner,b:owner a:admin a,b,c,d,e,f,g,h,i "x$(printf 'y%.0s' {1..47})"; do
+    BAD="$bad" yq -i '.capabilities.config.services.postgres.roles = strenv(BAD)' "$TMP/pg/etc/worker.yaml"
+    if pg_probe pg_roles >/dev/null 2>&1; then echo "accepted: $bad"; r=1; fi
+  done
+  # 47 characters at most: PG_ROLE_<NAME>_PASSWORD stays a 64-character env name.
+  L="x$(printf 'y%.0s' {1..46})" yq -i '.capabilities.config.services.postgres.roles = strenv(L)' "$TMP/pg/etc/worker.yaml"
+  [[ "$(pg_probe pg_roles | cut -f1 | wc -c | tr -d ' ')" == 48 ]] || r=1
+  pg_cfg '.capabilities.config.services.postgres.roles = "a,b,c,d,e,f,g,h"'
+  [[ "$(pg_probe pg_roles | wc -l | tr -d ' ')" == 8 ]] || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.roles)'
+  [[ -z "$(pg_probe pg_roles)" ]] || r=1
+  return "$r"
+}
+pg_t_secrets() {
+  local a
+  rm -f "$TMP/pg/state/secrets-node-owned.list"; : > "$TMP/pg/sec"
+  pg_cfg '.capabilities.config.services.postgres.roles = "shop:owner"'
+  pg_rprobe pg_ensure_secrets >/dev/null 2>&1 || return 1
+  grep -Eq '^POSTGRES_PASSWORD=[A-Za-z0-9]{40}$' "$TMP/pg/sec" || return 1
+  grep -Eq '^POSTGRES_APP_PASSWORD=[A-Za-z0-9]{40}$' "$TMP/pg/sec" || return 1
+  grep -Eq '^PG_ROLE_SHOP_PASSWORD=[A-Za-z0-9]{40}$' "$TMP/pg/sec" || return 1
+  [[ "$(cat "$TMP/pg/state/secrets-node-owned.list")" == "$(printf 'POSTGRES_PASSWORD\nPOSTGRES_APP_PASSWORD')" ]] || return 1
+  a="$(cat "$TMP/pg/sec")"
+  pg_rprobe pg_ensure_secrets >/dev/null 2>&1 || return 1
+  [[ "$(cat "$TMP/pg/sec")" == "$a" ]] && [[ "$(wc -l < "$TMP/pg/state/secrets-node-owned.list" | tr -d ' ')" == 2 ]]
+}
+pg_t_reconcile() {
+  local shop_pw="it's \"Q-Secret-9\" \\ pw" r="$TMP/pg/state/services/postgres/roles.json" in="$TMP/pglog.stdin"
+  rm -f "$TMP/pglog".*; mkdir -p "$TMP/pg/state/services/postgres/data"
+  printf 'POSTGRES_APP_PASSWORD=app-Secret-1\nPG_ROLE_SHOP_PASSWORD=%s\nPG_ROLE_READER_PASSWORD=reader-Secret-2\n' "$shop_pw" > "$TMP/pg/sec"
+  pg_cfg '.capabilities.config.services.postgres.roles = "shop:owner,reader"'
+  PG_FAIL_ROLE=reader pg_rprobe pg_reconcile >/dev/null 2>&1
+  [[ "$(jq -r '[.[].name] | join(",")' "$r")" == "shop" ]] || { echo "roles: $(cat "$r")"; return 1; }
+  [[ "$(jq -r '.[0].secretSha256' "$r")" == "$(printf '%s' "$shop_pw" | sha256sum | cut -c1-16)" ]] || return 1
+  # Neither argv nor the SQL stream carries a password in the clear.
+  ! grep -qF "Secret-" "$TMP/pglog.argv" "$in" || return 1
+  grep -qF "\\set pwhex '$(printf '%s' reader-Secret-2 | od -An -tx1 | tr -d ' \n')'" "$in" || return 1
+  grep -qF "SET log_min_error_statement = 'panic';" "$in" || return 1
+  grep -qF "ALTER ROLE %I NOLOGIN" "$in" && grep -qF "string_to_array(:'keep', ',')" "$in" && grep -qF "\\set keep 'shop,reader'" "$in" || return 1
+  grep -qF "COMMENT ON ROLE \"shop\" IS 'managed by alwayswork" "$in" || return 1
+  grep -qF "ALTER DATABASE %I OWNER TO %I', 'app', 'shop'" "$in" || return 1
+  grep -qF "CREATE OR REPLACE VIEW aw.status" "$in" && grep -qF 'GRANT USAGE ON SCHEMA aw TO "shop";' "$in" && grep -qF 'GRANT SELECT ON aw.status TO "shop";' "$in" || return 1
+  grep -qF "INSERT INTO aw.facts" "$in" && grep -Eq "^  \('disk_free_bytes', '[0-9]+', now\(\)\), \('disk_total_bytes', '[0-9]+', now\(\)\)$" "$in" || return 1
+  grep -qF "exec -i alwayswork-postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres" "$TMP/pglog.argv"
+}
+pg_t_legacy() {
+  local in="$TMP/pglog.stdin"
+  rm -f "$TMP/pglog".*
+  pg_cfg 'del(.capabilities.config.services.postgres.roles)'
+  pg_rprobe pg_reconcile >/dev/null 2>&1 || return 1
+  grep -qF "ALTER ROLE %I WITH LOGIN PASSWORD %L', 'app'" "$in" && grep -qF "ALTER DATABASE %I OWNER TO %I', 'app', 'app'" "$in" \
+    && ! grep -qF 'COMMENT ON ROLE "app"' "$in" && [[ "$(jq length "$TMP/pg/state/services/postgres/roles.json")" == 0 ]]
+}
+pg_t_heartbeat() {
+  local f="$TMP/pg/state/services/postgres.json" ca="$TMP/pg/state/services/postgres/tls/ca.crt" j
+  printf 'POSTGRES_APP_PASSWORD=app-Secret-1\nPG_ROLE_SHOP_PASSWORD=shop-Secret-3\n' > "$TMP/pg/sec"
+  pg_cfg '.capabilities.config.services.postgres.roles = "shop:owner"'
+  pg_rprobe pg_tls_ensure >/dev/null 2>&1 && pg_rprobe pg_reconcile >/dev/null 2>&1 || return 1
+  pg_probe wl_report_manifest_surfaces services.postgres >/dev/null 2>&1 && pg_rprobe pg_report >/dev/null 2>&1 || return 1
+  j="$(pg_probe wl_services_json)"
+  jq -e --rawfile ca "$ca" --arg sha "$(openssl x509 -in "$ca" -outform DER | sha256sum | cut -d' ' -f1)" '
+    .[0] | .id == "postgres" and .postgres.database == "app"
+    and .postgres.tls.caPem == $ca and (.postgres.tls.caPem | startswith("-----BEGIN CERTIFICATE-----"))
+    and .postgres.tls.caSha256 == $sha and (.postgres.tls.caSha256 | test("^[0-9a-f]{64}$"))
+    and (.postgres.roles | length) == 1 and .postgres.roles[0].name == "shop"
+    and .postgres.roles[0].secretSha256 == "'"$(printf shop-Secret-3 | sha256sum | cut -c1-16)"'"
+    and (.postgres.roles[0] | keys) == ["name", "secretSha256"]' <<<"$j" >/dev/null || { echo "$j"; return 1; }
+  [[ "$(pg_mode "$f")" == 644 ]] || return 1
+  ! grep -rqF -e "Secret-" -e "PRIVATE KEY" "$TMP/pg/state/services" --include='*.json' || return 1
+  # The keys and passwords are not in anything the heartbeat reads.
+  ! grep -rlqF "Secret-" "$TMP/pg/state/services"
+}
+pg_t_heartbeat_off() {
+  local j r=0
+  pg_cfg '.capabilities.config.services.postgres.tls = "off" | del(.capabilities.config.services.postgres.roles)'
+  pg_probe wl_report_manifest_surfaces services.postgres >/dev/null 2>&1 && pg_rprobe pg_report >/dev/null 2>&1 || r=1
+  j="$(pg_probe wl_services_json)"
+  pg_cfg 'del(.capabilities.config.services.postgres.tls)'
+  jq -e '.[0].postgres | (has("tls") | not) and .roles == [] and .database == "app"' <<<"$j" >/dev/null || r=1
+  pg_probe wl_unreport_manifest_surfaces services.postgres >/dev/null 2>&1
+  return "$r"
+}
+pg_t_admin() {
+  local e="$TMP/pg/etc/postgres-admin.env" r=0
+  [[ "$(pg_probe pg_admin)" == "off" ]] || r=1
+  pg_cfg '.capabilities.config.services.postgres.admin = "on"'
+  [[ "$(pg_probe pg_admin)" == "pgweb" ]] || r=1
+  pg_rprobe pg_admin_render_env >/dev/null 2>&1 && grep -q 'sslmode=require$' "$e" || r=1
+  pg_cfg '.capabilities.config.services.postgres.tls = "off"'
+  pg_rprobe pg_admin_render_env >/dev/null 2>&1 && grep -q 'sslmode=disable$' "$e" || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.admin) | del(.capabilities.config.services.postgres.tls)'
+  [[ "$(pg_probe pg_admin)" == "off" ]] || r=1
+  return "$r"
+}
+pg_t_delivery() {
+  local d="$TMP/pg" out
+  printf 'POSTGRES_PASSWORD\n' > "$d/state/secrets-node-owned.list"
+  printf 'POSTGRES_PASSWORD="delivered-Super"\nPG_ROLE_SHOP_PASSWORD="delivered-Role"\n' > "$d/dec"
+  # shellcheck disable=SC2016
+  out="$(pg_probe eval 'source "$AW_ROOT/lib/control.sh"; sec_set() { printf "SET %s=%s\n" "$1" "$2"; }; control_import_secrets "$AW_STATE/../dec"' 2>&1)"
+  rm -f "$d/dec"
+  grep -qx "SET PG_ROLE_SHOP_PASSWORD=delivered-Role" <<<"$out" && ! grep -q "^SET POSTGRES_PASSWORD" <<<"$out" \
+    && grep -q "POSTGRES_PASSWORD is node-owned" <<<"$out" && ! grep -q "delivered-Super" <<<"$out"
+}
 rm -rf "$TMP/pg"
 if have yq; then
   check "pg: defaults are a pinned major, loopback 5432, app db/role" \
@@ -1008,6 +1138,35 @@ if have yq; then
     'pg_probe wl_subvolume "$TMP/pg/state/x/data" >/dev/null 2>&1 && [[ -d "$TMP/pg/state/x/data" ]] && ! pg_probe wl_snapshot "$TMP/pg/state/x/data" >/dev/null 2>&1'
   check "workload: systemd quoting of arguments with spaces and quotes" \
     '[[ "$(pg_probe wl_qs --a "b c" "d\"e")" == "--a \"b c\" \"d\\\"e\" " ]]'
+  check "pg: tls defaults on; the unit mounts the managed hba and the server cert (read-only, :U) and starts postgres with TLS and scram" \
+    'pg_probe pg_write_unit >/dev/null 2>&1 && u="$TMP/pg/systemd/alwayswork-postgres.service" && [[ "$(pg_probe pg_tls)" == "on" ]] && grep -q -- "--volume $TMP/pg/state/services/postgres/conf:/etc/alwayswork/pg:ro" "$u" && grep -q -- "--volume $TMP/pg/state/services/postgres/tls/server:/etc/alwayswork/tls:ro,U" "$u" && grep -q "postgres:16 postgres -c hba_file=/etc/alwayswork/pg/pg_hba.conf -c password_encryption=scram-sha-256 -c ssl=on -c ssl_cert_file=/etc/alwayswork/tls/server.crt -c ssl_key_file=/etc/alwayswork/tls/server.key -c ssl_min_protocol_version=TLSv1.2" "$u" && grep -q -- "--label dev.alwayswork.pg_conf=[0-9a-f]\{16\}" "$u"'
+  check "pg: tls=off drops the TLS flags and mount, keeps the hba and scram; a bad tls value is refused" \
+    'pg_cfg ".capabilities.config.services.postgres.tls = \"off\"" && pg_probe pg_write_unit >/dev/null 2>&1; u="$TMP/pg/systemd/alwayswork-postgres.service"; ! grep -q -- "ssl=on" "$u" && ! grep -q "/etc/alwayswork/tls" "$u" && grep -q "hba_file=/etc/alwayswork/pg/pg_hba.conf -c password_encryption=scram-sha-256" "$u" && pg_cfg ".capabilities.config.services.postgres.tls = \"maybe\"" && ! pg_probe pg_tls >/dev/null 2>&1; r=$?; pg_cfg "del(.capabilities.config.services.postgres.tls)"; (( r == 0 ))'
+  check "pg: managed hba — socket peer for postgres only, TCP hostssl scram (v4 and v6), never trust" \
+    'pg_probe pg_render_hba >/dev/null 2>&1 && f="$TMP/pg/state/services/postgres/conf/pg_hba.conf" && grep -Eq "^local +all +postgres +peer$" "$f" && grep -Eq "^hostssl +all +all +0\.0\.0\.0/0 +scram-sha-256$" "$f" && grep -Eq "^hostssl +all +all +::/0 +scram-sha-256$" "$f" && ! grep -Eq "^host " "$f" && ! grep -v "^#" "$f" | grep -q trust && [[ "$(grep -vc "^#" "$f")" == 3 ]]'
+  check "pg: tls=off hba is host scram with a warning, still no trust" \
+    'pg_cfg ".capabilities.config.services.postgres.tls = \"off\"" && out="$(pg_probe pg_render_hba 2>&1)"; pg_cfg "del(.capabilities.config.services.postgres.tls)"; f="$TMP/pg/state/services/postgres/conf/pg_hba.conf"; grep -q "unencrypted" <<<"$out" && grep -Eq "^host +all +all +0\.0\.0\.0/0 +scram-sha-256$" "$f" && ! grep -q "^hostssl" "$f" && ! grep -v "^#" "$f" | grep -q trust; r=$?; pg_probe pg_render_hba >/dev/null 2>&1; (( r == 0 ))'
+  if have openssl; then
+    check "pg: TLS — a root-only CA outside the mounted dir signs a server cert for localhost, 127.0.0.1 and the hostnames" \
+      'pg_cfg ".capabilities.config.services.postgres.hostnames = \"Kitchen-postgres.example.com, db.example.com\"" && pg_probe pg_tls_ensure >/dev/null 2>&1 && t="$TMP/pg/state/services/postgres/tls" && [[ -s "$t/ca.key" && -s "$t/ca.crt" && -s "$t/server/server.key" && -s "$t/server/server.crt" ]] && [[ "$(ls "$t/server")" == "$(printf "server.crt\nserver.key")" ]] && [[ "$(pg_mode "$t/ca.key")" == 600 && "$(pg_mode "$t/server/server.key")" == 600 && "$(pg_mode "$t")" == 700 ]] && openssl verify -CAfile "$t/ca.crt" "$t/server/server.crt" >/dev/null 2>&1 && openssl x509 -in "$t/server/server.crt" -noout -text | grep -q "DNS:localhost, IP Address:127.0.0.1, DNS:kitchen-postgres.example.com, DNS:db.example.com" && openssl x509 -in "$t/ca.crt" -noout -text | grep -q "CA:TRUE" && openssl x509 -checkend $((3000 * 86400)) -noout -in "$t/ca.crt" >/dev/null && ! openssl x509 -checkend $((800 * 86400)) -noout -in "$t/server/server.crt" >/dev/null'
+    check "pg: TLS is kept across applies; new names reissue the server cert, never the CA" \
+      't="$TMP/pg/state/services/postgres/tls" && ca="$(cat "$t/ca.crt")" && crt="$(cat "$t/server/server.crt")" && pg_probe pg_tls_ensure >/dev/null 2>&1 && [[ "$(cat "$t/server/server.crt")" == "$crt" ]] && pg_cfg ".capabilities.config.services.postgres.hostnames = \"db.example.com\"" && pg_probe pg_tls_ensure >/dev/null 2>&1 && [[ "$(cat "$t/server/server.crt")" != "$crt" && "$(cat "$t/ca.crt")" == "$ca" ]] && openssl verify -CAfile "$t/ca.crt" "$t/server/server.crt" >/dev/null 2>&1; r=$?; pg_cfg "del(.capabilities.config.services.postgres.hostnames)"; pg_probe pg_tls_ensure >/dev/null 2>&1; (( r == 0 ))'
+    check "pg: heartbeat — the postgres entry carries database, the CA (public cert + DER sha256) and role fingerprints, no secret, mode 644" 'pg_t_heartbeat'
+  fi
+  check "pg: a bad hostname is refused" \
+    'pg_cfg ".capabilities.config.services.postgres.hostnames = \"ok.example.com,bad_name;rm\"" && ! pg_probe pg_hostnames >/dev/null 2>&1; r=$?; pg_cfg "del(.capabilities.config.services.postgres.hostnames)"; (( r == 0 ))'
+  check "pg: roles parse as name/owner; bad names, postgres, pg_*, duplicates, two owners and more than 8 are refused" 'pg_t_roles'
+  check "pg: role secrets are PG_ROLE_<NAME>_PASSWORD" '[[ "$(pg_probe pg_role_secret shop_ro)" == "PG_ROLE_SHOP_RO_PASSWORD" ]]'
+  check "pg: secrets — superuser/app generated and recorded node-owned, role passwords generated but not node-owned" 'pg_t_secrets'
+  check "pg: reconcile — passwords reach psql hex-encoded on stdin, never argv; failed roles stay out of the report" 'pg_t_reconcile'
+  check "pg: the legacy app role keeps its password and owns the db without a declared owner" 'pg_t_legacy'
+  check "pg: a bad roles declaration never reconciles (a typo disables no role)" \
+    'rm -f "$TMP/pglog".*; pg_cfg ".capabilities.config.services.postgres.roles = \"Bad Name\"" && ! pg_rprobe pg_reconcile >/dev/null 2>&1; r=$?; pg_cfg "del(.capabilities.config.services.postgres.roles)"; (( r == 0 )) && [[ ! -e "$TMP/pglog.stdin" ]]'
+  check "pg: heartbeat — tls omitted when tls=off; undeclared roles drop out" 'pg_t_heartbeat_off'
+  check "pg: the web admin is off by default; on/pgweb enable it, over sslmode=require while tls=on" 'pg_t_admin && grep -q "enabled_default: false" "$ROOT/capabilities/services.postgres/manifest.yaml"'
+  check "pg: apply reconciles and reports; the healthcheck refreshes disk facts but never fails on them" \
+    'grep -q "pg_status_facts >/dev/null 2>&1 || true" "$ROOT/capabilities/services.postgres/healthcheck.sh" && grep -q "^pg_reconcile" "$ROOT/capabilities/services.postgres/install.sh" && grep -q "^pg_report" "$ROOT/capabilities/services.postgres/install.sh"'
+  check "control: a delivered secret never replaces a node-owned one (warned by name only); role passwords are delivered" 'pg_t_delivery'
   check "pg: dry-run enable pulls runtime.podman and renders the unit" \
     'run_aw --dry-run enable services.postgres && has "runtime.podman" && has "alwayswork-postgres.service" && has "postgres ready on 127.0.0.1:5432"'
   check "aw service list shows nothing enabled"   'run_aw service list && has "none"'

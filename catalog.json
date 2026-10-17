@@ -1094,6 +1094,9 @@
           "port",
           "db",
           "user",
+          "roles",
+          "tls",
+          "hostnames",
           "memory_mb",
           "network",
           "pull",
@@ -1117,6 +1120,7 @@
         "sidecars": [
           {
             "enabled_config": "admin",
+            "enabled_default": false,
             "id": "postgres-admin",
             "image": {
               "repo": "docker.io/sosedoff/pgweb",

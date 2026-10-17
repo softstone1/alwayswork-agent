@@ -125,3 +125,17 @@ sec_env() {
   ( umask 077; SOPS_AGE_KEY_FILE="$(sec_key_file)" sops -d "$(sec_file)" > "$dest" )
   chmod 600 "$dest"
 }
+
+# Node-owned secrets: keys this node generated for its own services (the
+# database superuser password, say). The list holds names only. A delivered
+# group secret of the same name is skipped — replacing one would lock the
+# service out of its own data.
+sec_node_owned_file() { printf '%s\n' "$AW_STATE/secrets-node-owned.list"; }
+sec_is_node_owned()   { [[ -f "$(sec_node_owned_file)" ]] && grep -qxF -- "$1" "$(sec_node_owned_file)"; }
+sec_mark_node_owned() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  sec_is_node_owned "$1" && return 0
+  ensure_dir "$AW_STATE"
+  printf '%s\n' "$1" >> "$(sec_node_owned_file)"
+  chmod 644 "$(sec_node_owned_file)" 2>/dev/null || true
+}

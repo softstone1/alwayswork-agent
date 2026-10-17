@@ -1,18 +1,10 @@
-# Services
+# Services as workloads
 
 > **App-model revision (September 2026):** the [canonical app model](https://github.com/softstone1/alwayswork-control/blob/main/docs/APP_MODEL.md)
 > defines Apps, Packages, Components, Instances, Nodes, Volumes, Connections and
 > Interfaces. Existing CLI names, capability IDs, `workload` metadata and host
 > `apps` configuration remain compatibility contracts. This document describes
 > existing mechanics; the new runtime features are planned unless stated otherwise.
-
-
-**Web admin.** `services.postgres` runs a `pgweb` side-car by default
-(`alwayswork-postgres-admin`: pinned image, read-only, loopback port 8081,
-connects as the application role over the workload network). It is the
-service's `http` surface, reached as `<node>-postgres-admin.<base>` behind
-Access — **Open** on the postgres row in the console. `aw enable
-services.postgres --admin off` removes it; `--admin_port` moves it. as workloads
 
 The node side of `docs/SYSTEM_SPEC.md` §12.7 (control repo). A node's
 capacity is for agents *and* for the traditional services an application
@@ -34,8 +26,119 @@ What it does:
 | Runs as | uid 999 from the start, `cap-drop ALL`, `no-new-privileges`, `userns=auto`, cgroup budget (`memory_mb`) |
 | Data | `/var/lib/alwayswork/services/postgres/data` — a btrfs subvolume where the host has btrfs |
 | First start | creates `POSTGRES_DB` and the app role (`user`) as its owner; both passwords generated into the sealed store (`POSTGRES_PASSWORD`, `POSTGRES_APP_PASSWORD`), never printed |
+| Every apply | TLS certificate, managed `pg_hba.conf`, declared `roles`, the `aw` schema and the heartbeat's `postgres` object are reconciled |
 | Health | `pg_isready` every 30 s; a failing check stops the container and systemd restarts it; reported on heartbeat |
 | Reach | published to `127.0.0.1:5432` only; reported to the control plane as `expose.services`, which adds `<node>-postgres.<base>` → `tcp://127.0.0.1:5432` to the node's tunnel |
+
+Config keys beyond the basics: `roles`, `tls`, `hostnames`, `admin`,
+`admin_port`, `memory_mb` (see the header of
+`capabilities/services.postgres/postgres.sh`).
+
+### TLS
+
+`tls` is `on` by default. On apply the node keeps a private CA under
+`/var/lib/alwayswork/services/postgres/tls/` (EC P-256, 10 years; `ca.key`
+0600 root-only in a 0700 directory, **never mounted** into the container)
+and a server certificate signed by it (2 years; SAN `DNS:localhost`,
+`IP:127.0.0.1` plus every name in `hostnames`, a comma list — put the tunnel
+name `<node>-postgres.<base>` there for `verify-full`). The server
+certificate (not the CA) is reissued when it is within 30 days of expiry,
+no longer verifies against the CA, or the names change. Only `tls/server/`
+is mounted, read-only with `:U`: under `userns=auto` the container's uid 999
+maps to a host range chosen at start, so podman hands the files to that uid
+on every start, which is what PostgreSQL requires of a 0600 key. Postgres
+starts with `ssl=on`, `ssl_min_protocol_version=TLSv1.2` and
+`password_encryption=scram-sha-256`. A changed certificate or hba changes the
+unit (a digest label) and restarts the container. `openssl` is required on
+the node while `tls=on`.
+
+### Client authentication (managed `pg_hba.conf`)
+
+Always rendered by the node and passed with `hba_file`, so the image's own
+rules never apply:
+
+```
+local    all  postgres             peer
+hostssl  all  all      0.0.0.0/0   scram-sha-256
+hostssl  all  all      ::/0        scram-sha-256
+```
+
+The socket is `peer` for the superuser only: the image's init scripts,
+`aw service psql` and the node's reconcile all run as uid 999 (`postgres`)
+inside the container, so no password and no `trust` is needed. TCP is
+password-only, and TLS-only while `tls=on`; `tls=off` renders `host` instead
+of `hostssl` and logs a warning. There is never a `trust` rule on TCP.
+
+### Roles
+
+`roles` declares login roles: a comma list of `name` or `name:owner` (at most
+8; names `^[a-z_][a-z0-9_]{0,46}$` so `PG_ROLE_<NAME>_PASSWORD` stays a valid
+64-character env name; `postgres` and `pg_*` refused; at most one `:owner`,
+which becomes owner of `db`). Every apply, once the server answers: missing
+roles are created `LOGIN`, every declared role's password is set from the
+sealed secret `PG_ROLE_<NAME uppercased>_PASSWORD` (generated, 40 characters,
+when absent), and a role removed from the list is set `NOLOGIN` — never
+dropped. The SQL is piped to `psql` over the socket on stdin; a password is
+sent hex-encoded in a psql variable and decoded server-side into
+`ALTER ROLE … PASSWORD`, with statement logging turned off for the session,
+so it never appears in argv, a log line or the server log. The legacy `user`
+role keeps working: its password stays `POSTGRES_APP_PASSWORD`, and it owns
+`db` unless a role is declared `:owner`.
+
+```bash
+sudo aw enable services.postgres --db shop --roles shop_app:owner,shop_ro --hostnames kitchen-postgres.alwayswork.space
+```
+
+### Secrets
+
+| Key | Made by | A delivered group secret of the same name |
+|---|---|---|
+| `POSTGRES_PASSWORD` (superuser) | the node | is skipped (warning names the key only) — node-owned |
+| `POSTGRES_APP_PASSWORD` (legacy `user`) | the node | is skipped — node-owned |
+| `PG_ROLE_<NAME>_PASSWORD` | the node when absent | **wins**; the next apply ALTERs the role (how the control plane rotates) |
+
+Node-owned keys are listed (names only) in
+`/var/lib/alwayswork/secrets-node-owned.list`.
+
+### `aw.status`
+
+Every apply (re)creates, in `db`, owned by `postgres`: the table
+`aw.facts(key, value, updated_at)` and the one-row view `aw.status` —
+`server_version`, `connections`, `max_connections`, `db_size_bytes`,
+`archived_count`, `last_archived_at`, `last_failed_at`,
+`archive_lag_seconds` (null while archiving is off), and from `aw.facts`:
+`disk_free_bytes`, `disk_total_bytes` (the data directory, refreshed on apply
+and by the healthcheck, which never fails on it), `last_backup_at`,
+`last_backup_ok`, `last_restore_drill_at`, `last_restore_drill_ok` (null until
+backups report them), `updated_at`. Every declared role gets `USAGE` on
+schema `aw` and `SELECT` on `aw.status` (not on `aw.facts`).
+
+### Heartbeat
+
+The `postgres` entry of `expose.services` carries an extra object:
+
+```json
+"postgres": {
+  "database": "shop",
+  "tls": { "caPem": "-----BEGIN CERTIFICATE-----…", "caSha256": "<sha256 of the CA cert DER, 64 hex>" },
+  "roles": [ { "name": "shop_app", "secretSha256": "<first 16 hex of sha256(password)>" } ]
+}
+```
+
+`tls` is omitted while `tls=off`. `roles` lists only declared roles whose
+last reconcile succeeded with the password fingerprinted, so the control
+plane can tell a rotation landed. Nothing secret is in it: the CA
+certificate is public and a password appears only as that fingerprint.
+
+### Web admin
+
+`admin` is **off** by default — a browser path into a production database
+is opted into. `--admin pgweb` (or `on`) runs the `pgweb` side-car
+(`alwayswork-postgres-admin`: pinned image, read-only, loopback port 8081,
+connects as the application role over the workload network with
+`sslmode=require` while `tls=on`). It is the service's `http` surface,
+reached as `<node>-postgres-admin.<base>` behind Access; `--admin_port`
+moves it.
 
 Operations — the same audited path an agent uses through its tools:
 
@@ -65,7 +168,7 @@ the data, snapshots and dumps; `AW_PURGE=1` removes them too.
 
    ```bash
    npx wrangler hyperdrive create shop-db \
-     --host kitchen-postgres.alwayswork.space --port 5432 --database shop --user shop --password '<POSTGRES_APP_PASSWORD>' \
+     --host kitchen-postgres.alwayswork.space --port 5432 --database shop --user shop_app --password '<PG_ROLE_SHOP_APP_PASSWORD>' \
      --access-client-id '<service token id>' --access-client-secret '<service token secret>'
    ```
 
