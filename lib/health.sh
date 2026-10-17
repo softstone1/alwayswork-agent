@@ -184,6 +184,9 @@ health_listeners_json() {
     [[ -n "$addr" ]] || continue
     # The DHCP client's socket (udp 68) is a client, not a service.
     [[ "$netid" == udp && "$port" == 68 ]] && continue
+    # cloudflared's QUIC connections to the edge are client sockets on
+    # ephemeral ports (UNCONN, wildcard): outbound, not a service.
+    [[ "$netid" == udp && "$rest" == *'"cloudflared"'* ]] && continue
     _health_loopback "$addr" && continue
     skip=0
     while IFS= read -r s; do

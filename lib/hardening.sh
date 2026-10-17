@@ -19,12 +19,19 @@ apply_ssh_policy() {
     disabled)
       # A previous 'lan' policy may have left a subnet-scoped SSH rule behind.
       fw_close_cap_subnet_ports "hardening.ssh" 2>/dev/null || true
-      if systemctl is-enabled --quiet sshd 2>/dev/null; then
-        log "Disabling SSH (policy: disabled)"
-        run systemctl disable --now sshd 2>/dev/null || true
-      else
-        ok "SSH already disabled"
-      fi
+      # Debian/Ubuntu name the units ssh.service/ssh.socket (sshd is only an
+      # alias of an enabled ssh.service), and Ubuntu 22.10+ starts SSH by
+      # socket activation: systemd itself holds 0.0.0.0:22 through
+      # ssh.socket while ssh.service looks disabled. Checking `sshd` alone
+      # left port 22 bound (and the infra sshd unable to bind its address).
+      local u stopped=0
+      for u in ssh.socket ssh.service sshd.service; do
+        if systemctl is-enabled --quiet "$u" 2>/dev/null || systemctl is-active --quiet "$u" 2>/dev/null; then
+          run systemctl disable --now "$u" 2>/dev/null || true
+          stopped=1
+        fi
+      done
+      if (( stopped )); then log "Disabling SSH (policy: disabled)"; else ok "SSH already disabled"; fi
       ;;
     tailscale)
       # Enforced: sshd stays enabled but is reachable only over Tailscale —
