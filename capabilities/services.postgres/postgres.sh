@@ -366,7 +366,12 @@ HBA
 
 # shellcheck disable=SC2034  # WL_* are read by lib/workload.sh
 pg_workload_vars() {
-  local mem
+  local mem dd
+  # debug_drop: diagnosis only (see WL_DEBUG_DROP in lib/workload.sh).
+  dd="$(cap_config debug_drop)"
+  [[ -z "$dd" || "$dd" =~ ^(userns|cpus|capdrop|nnp|pids|health)(,(userns|cpus|capdrop|nnp|pids|health))*$ ]] \
+    || die "services.postgres: bad debug_drop '$dd'"
+  WL_DEBUG_DROP="$dd"
   mem="$(cap_config memory_mb)"
   WL_NAME="$PG_ID"
   WL_IMAGE="$(pg_image)"
