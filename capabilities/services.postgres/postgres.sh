@@ -1040,7 +1040,15 @@ pg_br_report_json() {
       break
     done
   fi
-  jq -c --arg m "$mode" --arg a "$arch" --arg r "$running" '{mode:$m, running:(if $r == "" then null else $r end),
+  # How far the running backup is: pgBackRest's own lock status (`info`, bytes copied of total).
+  local pct=""
+  if [[ "$running" == full || "$running" == diff || "$running" == monthly ]]; then
+    pct="$(timeout 20 podman exec "$(pg_container)" pgbackrest --stanza="$(pg_stanza)" --output=json info </dev/null 2>/dev/null \
+      | jq -r '[.[0].status.lock.backup | select(.size != null and .size > 0) | (.sizeCplt // 0) * 100 / .size | floor] | first // empty' 2>/dev/null)"
+    [[ "$pct" =~ ^[0-9]{1,3}$ ]] || pct=""
+  fi
+  jq -c --arg m "$mode" --arg a "$arch" --arg r "$running" --arg p "$pct" '{mode:$m, running:(if $r == "" then null else $r end),
+    runningPct:(if $p == "" then null else ($p | tonumber) end),
     lastBackupAt:(.lastBackupAt // null), lastBackupOk:(.lastBackupOk // null),
     lastBackupKind:(.lastBackupKind // null), lastBackupError:((.lastBackupError // "") | if . == "" then null else . end),
     lastDrillAt:(.lastDrillAt // null), lastDrillOk:(.lastDrillOk // null),
