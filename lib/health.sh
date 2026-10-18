@@ -182,10 +182,15 @@ health_failing_units_json() {
     active="$(systemctl show -p ActiveState --value "$u" 2>/dev/null)"
     sub="$(systemctl show -p SubState --value "$u" 2>/dev/null)"
     restarts="$(systemctl show -p NRestarts --value "$u" 2>/dev/null)"; [[ "$restarts" =~ ^[0-9]+$ ]] || restarts=0
-    if [[ "$active" == failed || "$sub" == auto-restart || "$active" == activating || "$restarts" -gt 0 ]]; then
+    # Running is not healthy: a container whose healthcheck says unhealthy
+    # (a Postgres stuck at startup) is reported too, with its log.
+    local chealth=""
+    if have podman; then chealth="$(podman inspect --format '{{.State.Health.Status}}' "${u%.service}" 2>/dev/null || true)"; fi
+    if [[ "$active" == failed || "$sub" == auto-restart || "$active" == activating || "$restarts" -gt 0 || "$chealth" == unhealthy ]]; then
       tail="$(journalctl -u "$u" -n 20 -o cat --no-pager 2>/dev/null \
         | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig; s/aj_[A-Za-z0-9_-]+/aj_[redacted]/g; s/awd_[A-Za-z0-9_-]+/awd_[redacted]/g' \
         | tr -cd '[:print:]\n' | tail -c 1500)"
+      [[ "$chealth" == unhealthy && "$active" == active ]] && sub="unhealthy"
       rows+="$(jq -nc --arg u "$u" --arg a "$active" --arg s "$sub" --argjson r "$restarts" --arg t "$tail" '{unit:$u, active:$a, sub:$s, restarts:$r, logTail:$t}'),"
       n=$((n + 1)); (( n >= 8 )) && break
     fi
