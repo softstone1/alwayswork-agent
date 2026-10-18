@@ -334,6 +334,14 @@ infra_apply_from_delivery() {
 infra_converge() {
   local addr="$1" ca="$2"; shift 2
   local users=("$@") u mode fp ud nd cfg cand sshd
+  # The distro SSH server is removed under hardening.ssh=disabled; break-glass brings back the
+  # binary only — the distro units it re-enables are switched off again at once.
+  if [[ ! -x "$(infra_sshd_bin)" ]] && have apt-get && [[ -z "${AW_SSHD_BIN:-}" ]]; then
+    log "control: installing openssh-server for operator break-glass SSH (only alwayswork-sshd runs it)"
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends openssh-server >/dev/null 2>&1 \
+      || { warn "control: could not install openssh-server; infra SSH stays off"; return 1; }
+    for u in ssh.socket ssh.service; do run systemctl disable --now "$u" >/dev/null 2>&1 || true; done
+  fi
   ud="$(infra_unit_dir)"; nd="$(infra_networkd_dir)"; cfg="$(infra_sshd_config)"; sshd="$(infra_sshd_bin)"
   fp="$(infra_ca_fingerprint "$ca")"
   log "control: infra SSH on $INFRA_IFACE $addr (users: ${users[*]}; CA $fp)"
