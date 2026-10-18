@@ -702,7 +702,7 @@ pg_reconcile_owed() {
 }
 pg_metrics_file() { printf '%s' "$AW_STATE/postgres-metrics.json"; }
 pg_metrics_sample() {
-  local db at row free="" total="" t=()
+  local db at row free="" total="" t=() htcp
   at="$(pg_now)"
   db="$(pg_db 2>/dev/null)" || db=""
   have timeout && t=(timeout 5)
@@ -716,14 +716,24 @@ pg_metrics_sample() {
     read -r total free < <(df -Pk "$(pg_data)" 2>/dev/null | awk 'NR == 2 { print $2 * 1024, $4 * 1024 }')
     [[ "$free" =~ ^[0-9]+$ ]] || free=null
     [[ "$total" =~ ^[0-9]+$ ]] || total=null
-    jq -c --arg at "$at" --argjson free "$free" --argjson total "$total" '
+    htcp=false; pg_host_tcp_ok && htcp=true
+    jq -c --arg at "$at" --argjson free "$free" --argjson total "$total" --argjson htcp "$htcp" '
       {at:$at, up:true, serverVersion, inRecovery, uptimeSec, connections, maxConnections, activeQueries,
        dbSizeBytes, diskFreeBytes:$free, diskTotalBytes:$total, cacheHitRatio,
        xactCommit, xactRollback, deadlocks, longestQuerySec, longestTxSec,
-       walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots, backrestSessions, checkpointer}' <<<"$row"
+       walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots, backrestSessions, checkpointer}
+      + {hostTcp: $htcp}' <<<"$row"
   else
     jq -nc --arg at "$at" '{at:$at, up:false}'
   fi
+}
+# Can the host reach the published port? Hyperdrive arrives through cloudflared on the host, at
+# 127.0.0.1:<port>; every other check runs inside the container and would not notice a broken
+# publish (contabo-usc-1: Hyperdrive could not connect while Postgres answered inside).
+pg_host_tcp_ok() {
+  local port; port="$(pg_port)"
+  if have pg_isready; then pg_isready -q -h 127.0.0.1 -p "$port" -t 3 >/dev/null 2>&1; return; fi
+  ( exec 3<>"/dev/tcp/127.0.0.1/$port" ) >/dev/null 2>&1
 }
 pg_metrics_json() {
   local f m now mt
