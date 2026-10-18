@@ -34,6 +34,8 @@
 #   seed_from  another node's repository path (e.g. /contabo-use-1/mycel): an
 #              empty data directory is restored from it instead of initdb'd
 #              (needs backup=pgbackrest and the same group secrets)
+#   seed_generation  any short token; changing it re-seeds a node that already
+#              has data (old data moved aside, never deleted)
 #   standby    on | off (default off): with seed_from, run as a standby that
 #              keeps replaying that node's archived WAL; set off to promote,
 #              after which this node backs up to its own path
@@ -1393,8 +1395,21 @@ pg_br_restore() {
 pg_in_recovery() {
   [[ "$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' </dev/null 2>/dev/null)" == t ]]
 }
+# seed_generation: changing it re-seeds a node that already has data (the old data directory is
+# moved aside, never deleted) — a standby seeded too early, or a promoted copy that drifted, is
+# brought back to the source's latest without a reinstall, so its hostname, tunnel and Access
+# (which took Cloudflare over an hour to propagate on contabo-usc-1) stay.
+pg_seed_generation() {
+  local g; g="$(cap_config seed_generation)"
+  [[ -z "$g" || "$g" =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "services.postgres: bad seed_generation '$g'"
+  printf '%s' "$g"
+}
+pg_seed_marker() { printf '%s' "$(pg_root)/seed-generation"; }
 pg_seed_needed() {
-  [[ -n "$(pg_seed_from)" ]] && pg_br_on && [[ ! -s "$(pg_data)/pgdata/PG_VERSION" ]]
+  [[ -n "$(pg_seed_from)" ]] && pg_br_on || return 1
+  [[ ! -s "$(pg_data)/pgdata/PG_VERSION" ]] && return 0
+  local g; g="$(pg_seed_generation)"
+  [[ -n "$g" && "$g" != "$(cat "$(pg_seed_marker)" 2>/dev/null)" ]]
 }
 pg_seed_restore() {
   local conf type=standby
@@ -1403,6 +1418,13 @@ pg_seed_restore() {
   if [[ "$DRY_RUN" == "1" ]]; then info "dry-run: pgbackrest --repo1-path=$(pg_seed_from) restore"; return 0; fi
   pg_backup_check || { err "services.postgres: seeding needs the backup secrets"; return 1; }
   conf="$(pg_root)/seed-conf"; [[ -e "$conf" ]] && run rm -rf "$conf"
+  # A re-seed (seed_generation changed): stop the server and move its data aside first.
+  if [[ -s "$(pg_data)/pgdata/PG_VERSION" ]]; then
+    local aside; aside="$(pg_data)/pgdata.before-reseed-$(date -u +%Y%m%dT%H%M%SZ)"
+    run systemctl stop "$(pg_unit)" 2>/dev/null || true
+    run mv "$(pg_data)/pgdata" "$aside" || { err "services.postgres: could not move the data directory aside for the re-seed"; return 1; }
+    info "services.postgres: previous data kept at $aside"
+  fi
   # The repository is the seed's (--repo1-path below overrides the rendered own path).
   pg_br_render "$conf" || return 1
   local -a args=(--stanza="$(pg_stanza)" --repo=1 --pg1-path="$PG_PGDATA" "--repo1-path=$(pg_seed_from)")
@@ -1417,8 +1439,27 @@ pg_seed_restore() {
     return 1
   fi
   run rm -rf "$conf"
+  printf '%s\n' "$(pg_seed_generation)" > "$(pg_seed_marker)" 2>/dev/null || true
   ok "services.postgres: data directory seeded from $(pg_seed_from)"
 }
+# After a promotion the old timeline's segments in pg_wal are the source's, already in the
+# source's repository; marked .ready, the archiver tried to push one to this node's repository
+# and pgBackRest refused it, wedging archiving for good (contabo-usc-1, 000000010000000300000040).
+# They are marked .done; the new timeline and its history are archived as usual.
+pg_mark_old_timeline_archived() {
+  local tli
+  tli="$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c 'SELECT substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8)' </dev/null 2>/dev/null)"
+  [[ "$tli" =~ ^[0-9A-F]{8}$ ]] || { warn "services.postgres: could not read the new timeline; old segments stay as they are"; return 0; }
+  # shellcheck disable=SC2016  # expanded in the container
+  pg_exec_t 30 sh -c 'cd "$0/pg_wal/archive_status" 2>/dev/null || exit 0
+    for f in *.ready; do
+      [ -e "$f" ] || continue
+      case "$f" in "$1"*|*.history.ready) continue ;; esac
+      mv -f "$f" "${f%.ready}.done"
+    done' "$PG_PGDATA" "$tli" </dev/null >/dev/null 2>&1 \
+    || warn "services.postgres: could not mark the old timeline's segments archived"
+}
+
 # standby=off on a node still in recovery from its seed: promote, once the server answers.
 pg_promote_if_asked() {
   [[ "$DRY_RUN" != "1" && -n "$(pg_seed_from)" && "$(pg_standby)" == off ]] || return 0
@@ -1427,7 +1468,13 @@ pg_promote_if_asked() {
   log "services.postgres: promoting (standby=off)"
   pg_exec_t 330 psql -X -At -U postgres -d postgres -c 'SELECT pg_promote(true, 300)' </dev/null >/dev/null 2>&1 || return 1
   local i
-  for (( i = 0; i < 150; i++ )); do pg_in_recovery || { ok "services.postgres: promoted; this node is the primary now"; return 0; }; sleep 2; done
+  for (( i = 0; i < 150; i++ )); do
+    if ! pg_in_recovery; then
+      pg_mark_old_timeline_archived
+      ok "services.postgres: promoted; this node is the primary now"; return 0
+    fi
+    sleep 2
+  done
   err "services.postgres: still in recovery after promote"
   return 1
 }
