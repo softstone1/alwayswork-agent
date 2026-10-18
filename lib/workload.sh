@@ -67,7 +67,11 @@ wl_ensure_image() {
     warn "workload: pull failed; building the same image locally"
   fi
   [[ -n "$build_dir" ]] || die "workload: no Containerfile to build $img from"
-  run podman build --pull=newer -t "$img" "$@" -f "$build_dir/Containerfile" "$build_dir" >/dev/null \
+  # --network=host: a build runs on Podman's default network, whose egress the host firewall drops
+  # (only the workload subnet may go out), so apt inside the build could not fetch its indexes
+  # (contabo-usc-1, Ubuntu 26.04). The build runs only this repo's Containerfile; running
+  # containers keep the workload network.
+  run podman build --network=host --pull=newer -t "$img" "$@" -f "$build_dir/Containerfile" "$build_dir" >/dev/null \
     || die "workload: image build failed"
   ok "built $img"
 }
