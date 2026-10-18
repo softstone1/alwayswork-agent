@@ -109,7 +109,11 @@ wl_write_unit() {
   unit="$(wl_unit_name "$WL_NAME")"; container="$(wl_container "$WL_NAME")"
   podman_bin="$(command -v podman || echo /usr/bin/podman)"
   engine_build_args
-  local -a iso=(--userns=auto)
+  # WL_DEBUG_DROP (diagnosis only, never in a normal config): a comma list of isolation flags
+  # left out — userns, cpus, capdrop, nnp, pids, health — to bisect a workload that misbehaves
+  # under them and not under plain Docker.
+  local -a iso=()
+  [[ ",${WL_DEBUG_DROP:-}," == *",userns,"* ]] || iso+=(--userns=auto)
   if [[ "${WL_READ_ONLY:-0}" == "1" ]]; then iso+=(--read-only --tmpfs "/tmp:rw,nosuid,size=512m"); fi
   for v in "${WL_TMPFS[@]:-}"; do [[ -n "$v" ]] && iso+=(--tmpfs "$v"); done
   case "${WL_NETWORK:-}" in
@@ -117,6 +121,7 @@ wl_write_unit() {
     "")   iso+=(--network alwayswork) ;;
     *)    iso+=(--network "$WL_NETWORK") ;;
   esac
+  [[ ",${WL_DEBUG_DROP:-}," == *",health,"* ]] && WL_HEALTH=""
   if [[ -n "${WL_HEALTH:-}" ]]; then
     iso+=(--health-cmd "$WL_HEALTH" --health-interval 30s --health-retries 3 --health-start-period "${WL_HEALTH_START:-60s}")
     # A failing healthcheck stops the container and systemd restarts it —
@@ -127,7 +132,7 @@ wl_write_unit() {
   fi
   # Opt-ins, not defaults: never let them leak to the next workload written
   # in this process (each workload's *_workload_vars sets them before this).
-  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE
+  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP
   for v in "${WL_PUBLISH[@]:-}"; do [[ -n "$v" ]] && iso+=(--publish "127.0.0.1:$v"); done
   for v in "${WL_VOLUMES[@]:-}"; do [[ -n "$v" ]] && iso+=(--volume "$v"); done
   [[ -n "${WL_ENV_FILE:-}" ]] && iso+=(--env-file "$WL_ENV_FILE")

@@ -56,12 +56,14 @@ engine_build_args() {
     else
       mem="$(hw_limit_memory_mb)"
     fi
-    AW_ENGINE_ARGS+=(--cpus "$cpu" --memory "${mem}m")
+    [[ ",${WL_DEBUG_DROP:-}," == *",cpus,"* ]] || AW_ENGINE_ARGS+=(--cpus "$cpu")
+    AW_ENGINE_ARGS+=(--memory "${mem}m")
   fi
 
   if engine_hardening_enabled; then
-    AW_ENGINE_ARGS+=(--cap-drop ALL --security-opt no-new-privileges:true)
-    AW_ENGINE_ARGS+=(--pids-limit "$(cfg_get '.limits.defaults.pids' 512)")
+    [[ ",${WL_DEBUG_DROP:-}," == *",capdrop,"* ]] || AW_ENGINE_ARGS+=(--cap-drop ALL)
+    [[ ",${WL_DEBUG_DROP:-}," == *",nnp,"* ]] || AW_ENGINE_ARGS+=(--security-opt no-new-privileges:true)
+    [[ ",${WL_DEBUG_DROP:-}," == *",pids,"* ]] || AW_ENGINE_ARGS+=(--pids-limit "$(cfg_get '.limits.defaults.pids' 512)")
   fi
 }
 
