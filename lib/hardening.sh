@@ -9,6 +9,17 @@
 # NEVER run at zero-touch install time: it would cut off access before the
 # tunnel is verified. See docs/ENROLLMENT.md for the ordering.
 
+# ssh_server_purge — remove the distro SSH server (Debian/Ubuntu), unless operator break-glass
+# SSH is configured. The client stays.
+ssh_server_purge() {
+  have dpkg-query && have apt-get || return 0
+  [[ -e "${AW_SYSTEMD_DIR:-/etc/systemd/system}/alwayswork-sshd.service" ]] && return 0
+  dpkg-query -W -f='${Status}' openssh-server 2>/dev/null | grep -q "install ok installed" || return 0
+  log "Removing the SSH server (openssh-server): nothing on this node uses it"
+  run env DEBIAN_FRONTEND=noninteractive apt-get purge -y -q openssh-server >/dev/null 2>&1 \
+    || warn "could not remove openssh-server; it stays disabled"
+}
+
 apply_ssh_policy() {
   local policy="${1:-$(cfg_get '.hardening.ssh' disabled)}"
   # Footprint ledger: sshd as it was before the first policy was applied.
@@ -32,6 +43,10 @@ apply_ssh_policy() {
         fi
       done
       if (( stopped )); then log "Disabling SSH (policy: disabled)"; else ok "SSH already disabled"; fi
+      # Nothing on a node uses SSH (cloud-init provisions, the agent maintains, the tunnel is the
+      # door), so the server is removed, not only disabled. Operator break-glass SSH (lib/infra.sh)
+      # installs it again when it is turned on, and only runs its own unit.
+      ssh_server_purge
       ;;
     tailscale)
       # Enforced: sshd stays enabled but is reachable only over Tailscale —

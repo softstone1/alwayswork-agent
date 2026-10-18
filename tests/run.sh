@@ -340,6 +340,16 @@ check "agent exits cleanly while pending"  'grep -q "control_pending" "$ROOT/lib
 check "a first delivery that is not fully applied never abandons the enrolment" 'blk="$(sed -n "/^      approved)\$/,/return 0 ;;/{p;/return 0 ;;/q;}" "$ROOT/lib/control.sh")"; [[ -n "$blk" ]] && grep -q control_finish_enrolled <<<"$blk" && ! grep -q "die " <<<"$blk" && ! grep -q "initial apply failed" "$ROOT/lib/control.sh"'
 check "cloudflared unit passes --token-file to run, not to tunnel" 'grep -q "ExecStart=\$bin tunnel --no-autoupdate run --token-file \$token_file" "$ROOT/capabilities/access.tunnel/install.sh" && ! grep -q -- "--token-file \$token_file run" "$ROOT/capabilities/access.tunnel/install.sh"'
 check "an outdated cloudflared unit is rewritten, not just reported" 'grep -q "cloudflared unit is outdated; rewriting it" "$ROOT/capabilities/access.tunnel/install.sh"'
+ssh_purge_probe() {
+  local d="$TMP/sshp"; rm -rf "$d"; mkdir -p "$d/bin" "$d/systemd"
+  printf '#!/bin/sh\necho "install ok installed"\n' > "$d/bin/dpkg-query"
+  printf '#!/bin/sh\necho "$*" >> "%s/apt.log"\n' "$d" > "$d/bin/apt-get"; chmod +x "$d/bin/"*
+  [[ "${1:-}" == breakglass ]] && : > "$d/systemd/alwayswork-sshd.service"
+  PATH="$d/bin:$PATH" AW_SYSTEMD_DIR="$d/systemd" bash -c 'source "$1/lib/core.sh"; source "$1/lib/hardening.sh"; DRY_RUN=0; ssh_server_purge' _ "$ROOT" >/dev/null 2>&1
+  cat "$d/apt.log" 2>/dev/null
+}
+check "lockdown removes openssh-server, but not while break-glass SSH is configured" \
+  '[[ "$(ssh_purge_probe)" == *"purge -y -q openssh-server"* && -z "$(ssh_purge_probe breakglass)" ]]'
 check "lockdown disables ssh.socket too (socket-activated Ubuntu)" 'grep -q "for u in ssh.socket ssh.service sshd.service" "$ROOT/lib/hardening.sh"'
 check "cloudflared QUIC client sockets are not listeners; systemd on :22 is" '
   d="$(mktemp -d)"; printf "%s\n" "#!/bin/sh" "cat <<OUT" "udp UNCONN 0 0 *:33774 *:* users:((\"cloudflared\",pid=9,fd=7))" "tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:((\"systemd\",pid=1,fd=185))" "OUT" > "$d/ss"; chmod +x "$d/ss"
