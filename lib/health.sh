@@ -191,6 +191,14 @@ health_failing_units_json() {
         | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig; s/aj_[A-Za-z0-9_-]+/aj_[redacted]/g; s/awd_[A-Za-z0-9_-]+/awd_[redacted]/g' \
         | tr -cd '[:print:]\n' | tail -c 1500)"
       [[ "$chealth" == unhealthy && "$active" == active ]] && sub="unhealthy"
+      # A running-but-unhealthy container is usually stuck, not dead: what is
+      # it doing? Its process list (command lines carry no secrets in our
+      # images; still redacted) goes after the log.
+      if [[ "$chealth" == unhealthy ]] && have podman; then
+        local ps; ps="$(timeout 5 podman exec "${u%.service}" ps -eo pid,etime,stat,args 2>/dev/null \
+          | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig' | head -n 20 | tr -cd '[:print:]\n')"
+        [[ -n "$ps" ]] && tail="$(printf '%s\n-- processes\n%s' "${tail: -900}" "$ps" | tail -c 1500)"
+      fi
       rows+="$(jq -nc --arg u "$u" --arg a "$active" --arg s "$sub" --argjson r "$restarts" --arg t "$tail" '{unit:$u, active:$a, sub:$s, restarts:$r, logTail:$t}'),"
       n=$((n + 1)); (( n >= 8 )) && break
     fi
