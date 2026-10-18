@@ -1534,6 +1534,15 @@ bk_t_seed() {
   ! bk_probe pg_seed_needed || r=1
   rm -f "$TMP/bklog.argv" "$st/pgbackrest.stanza" "$st/pgbackrest.stanza.tried"
   bk_probe pg_br_stanza_owed >/dev/null 2>&1; ! grep -q "stanza-create" "$TMP/bklog.argv" 2>/dev/null || r=1
+  # seed_generation: a new token re-seeds a node with data (moved aside), once.
+  pg_cfg '.capabilities.config.services.postgres.seed_generation = "g2"'
+  bk_probe pg_seed_needed || r=1
+  rm -f "$TMP/bklog.argv"; bk_probe pg_seed_restore >/dev/null 2>&1 || r=1
+  ls -d "$st/data/pgdata.before-reseed-"* >/dev/null 2>&1 || r=1
+  [[ "$(cat "$st/seed-generation" 2>/dev/null)" == g2 ]] || r=1
+  mkdir -p "$st/data/pgdata"; echo 18 > "$st/data/pgdata/PG_VERSION"
+  ! bk_probe pg_seed_needed || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.seed_generation)'
   # standby=off: the node's own path again, and a seeded restore is promoted (no --type).
   pg_cfg '.capabilities.config.services.postgres.standby = "off"'
   [[ "$(bk_probe pg_backup_path)" == "/$(hostname -s | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-\n' '-' | head -c 63)/app" ]] || r=1
