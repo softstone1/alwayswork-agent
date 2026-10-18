@@ -195,9 +195,15 @@ health_failing_units_json() {
       # it doing? Its process list (command lines carry no secrets in our
       # images; still redacted) goes after the log.
       if [[ "$chealth" == unhealthy ]] && have podman; then
-        local ps; ps="$(timeout 5 podman exec "${u%.service}" ps -eo pid,etime,stat,args 2>/dev/null \
-          | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig' | head -n 20 | tr -cd '[:print:]\n')"
-        [[ -n "$ps" ]] && tail="$(printf '%s\n-- processes\n%s' "${tail: -900}" "$ps" | tail -c 1500)"
+        local ps
+        # shellcheck disable=SC2016  # expanded inside the container
+        ps="$(timeout 5 podman exec "${u%.service}" sh -c 'ps -eo pid,etime,stat,wchan:22,comm | head -n 16
+            for p in $(ls /proc | grep -E "^[0-9]+$"); do
+              s="$(cut -d" " -f1 "/proc/$p/syscall" 2>/dev/null)"; [ -n "$s" ] && [ "$s" != running ] && printf "%s:%s " "$p" "$s"
+            done; echo' 2>/dev/null \
+          | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig' | tr -cd '[:print:]\n')"
+        # Where each sleeps (wchan) and in which syscall number (/proc/PID/syscall).
+        [[ -n "$ps" ]] && tail="$(printf '%s\n-- processes\n%s' "${tail: -500}" "$ps" | tail -c 1500)"
       fi
       rows+="$(jq -nc --arg u "$u" --arg a "$active" --arg s "$sub" --argjson r "$restarts" --arg t "$tail" '{unit:$u, active:$a, sub:$s, restarts:$r, logTail:$t}'),"
       n=$((n + 1)); (( n >= 8 )) && break
