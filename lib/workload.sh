@@ -84,6 +84,8 @@ wl_ensure_image() {
 #   WL_READ_ONLY   1 = read-only rootfs with a tmpfs /tmp (harnesses); 0 = writable (databases)
 #   WL_TMPFS       array of extra tmpfs mounts, e.g. (/run/postgresql)
 #   WL_HEALTH      healthcheck command inside the container (optional)
+#   WL_HEALTH_START  start period before failures count (default 60s)
+#   WL_HEALTH_ON_FAILURE  stop (default) | none: what a failed healthcheck does
 #   WL_EXTRA       array of extra podman flags (e.g. --shm-size 256m)
 #   WL_NETWORK     "" (the node's `alwayswork` network) | none | <name>
 #   WL_ARGS        array of arguments after the image (optional)
@@ -116,10 +118,16 @@ wl_write_unit() {
     *)    iso+=(--network "$WL_NETWORK") ;;
   esac
   if [[ -n "${WL_HEALTH:-}" ]]; then
-    iso+=(--health-cmd "$WL_HEALTH" --health-interval 30s --health-retries 3 --health-start-period 60s)
-    # A failing healthcheck stops the container; systemd then restarts it.
-    iso+=(--health-on-failure=stop)
+    iso+=(--health-cmd "$WL_HEALTH" --health-interval 30s --health-retries 3 --health-start-period "${WL_HEALTH_START:-60s}")
+    # A failing healthcheck stops the container and systemd restarts it —
+    # unless the workload opts out (WL_HEALTH_ON_FAILURE=none): a database
+    # must never be killed mid-recovery because a probe said "not yet"
+    # (Postgres on contabo-use-1 looped through interrupted recoveries).
+    iso+=(--health-on-failure="${WL_HEALTH_ON_FAILURE:-stop}")
   fi
+  # Opt-ins, not defaults: never let them leak to the next workload written
+  # in this process (each workload's *_workload_vars sets them before this).
+  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE
   for v in "${WL_PUBLISH[@]:-}"; do [[ -n "$v" ]] && iso+=(--publish "127.0.0.1:$v"); done
   for v in "${WL_VOLUMES[@]:-}"; do [[ -n "$v" ]] && iso+=(--volume "$v"); done
   [[ -n "${WL_ENV_FILE:-}" ]] && iso+=(--env-file "$WL_ENV_FILE")
