@@ -968,10 +968,20 @@ pg_br_note() {
 }
 # The heartbeat's backup object: state only, never a secret or a location.
 pg_br_report_json() {
-  local mode st
+  local mode st arch=""
   mode="$(pg_backup_mode)" || return 1
   st="$(cat "$(pg_br_status_file)" 2>/dev/null || true)"; [[ "$st" == \{* ]] || st='{}'
-  jq -c --arg m "$mode" '{mode:$m, lastBackupAt:(.lastBackupAt // null), lastBackupOk:(.lastBackupOk // null), lastDrillAt:(.lastDrillAt // null), lastDrillOk:(.lastDrillOk // null)}' <<<"$st"
+  # Why archive_command fails: Postgres logs its stderr, pgBackRest's `ERROR: [nnn]: …`
+  # line. The newest one in the unit's journal, redacted and short (the node has no SSH).
+  if [[ "$mode" == pgbackrest ]] && have journalctl; then
+    arch="$(journalctl -u "$(wl_unit_name "$PG_ID")" -n 400 -o cat --no-pager 2>/dev/null \
+      | grep -E 'ERROR: \[[0-9]+\]' | tail -1 | pg_br_redact | tr -d '\000-\037' | cut -c1-280)"
+  fi
+  jq -c --arg m "$mode" --arg a "$arch" '{mode:$m, lastBackupAt:(.lastBackupAt // null), lastBackupOk:(.lastBackupOk // null),
+    lastBackupKind:(.lastBackupKind // null), lastBackupError:((.lastBackupError // "") | if . == "" then null else . end),
+    lastDrillAt:(.lastDrillAt // null), lastDrillOk:(.lastDrillOk // null),
+    lastDrillError:((.lastDrillError // "") | if . == "" then null else . end),
+    lastArchiveError:(if $a == "" then null else $a end)}' <<<"$st"
 }
 
 # pgBackRest in the live container (uid 999, the socket, peer auth).

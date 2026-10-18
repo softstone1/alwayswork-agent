@@ -1486,7 +1486,8 @@ bk_t_heartbeat() {
   pg_probe wl_report_manifest_surfaces services.postgres >/dev/null 2>&1 && bk_probe pg_report >/dev/null 2>&1 || return 1
   j="$(pg_probe wl_services_json)"
   jq -e '.[0].postgres.backup | .mode == "pgbackrest" and .lastBackupOk == true and .lastDrillOk == true and (.lastBackupAt | type) == "string" and (.lastDrillAt | type) == "string"
-    and (keys == ["lastBackupAt", "lastBackupOk", "lastDrillAt", "lastDrillOk", "mode"])' <<<"$j" >/dev/null || { echo "$j"; r=1; }
+    and (keys == ["lastArchiveError", "lastBackupAt", "lastBackupError", "lastBackupKind", "lastBackupOk", "lastDrillAt", "lastDrillError", "lastDrillOk", "mode"])
+    and .lastBackupError == null and .lastDrillError == null and .lastArchiveError == null' <<<"$j" >/dev/null || { echo "$j"; r=1; }
   ! grep -rq "R2-Secret" "$TMP/pg/state/services" --include='*.json' || r=1
   bk_off
   bk_probe pg_report >/dev/null 2>&1
