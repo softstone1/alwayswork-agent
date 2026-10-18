@@ -34,12 +34,21 @@ if pg_br_on; then
 else
   WL_PULL="$(cap_config pull)" wl_ensure_image "$(pg_image)"
 fi
+# seed_from: an empty data directory is restored from another node's backup, never initdb'd.
+if pg_seed_needed; then pg_seed_restore || return 1; fi
 pg_apply_unit
 wl_report_manifest_surfaces services.postgres
-# A database still initialising is not a failed apply: the next one retries.
+pg_promote_if_asked || warn "services.postgres: promotion did not complete; the next apply retries"
+# A database still initialising is not a failed apply: the next one retries. A standby is
+# read-only: roles and the aw schema are reconciled once it is promoted.
 pg_up=0
-if pg_reconcile; then pg_up=1; pg_reconcile_pending_clear; else pg_reconcile_pending_mark; fi
-if pg_br_on; then
+if pg_wait_ready && pg_in_recovery; then
+  pg_reconcile_pending_mark
+  info "services.postgres: standby of $(pg_seed_from); roles and backups wait for promotion"
+elif pg_reconcile; then pg_up=1; pg_reconcile_pending_clear; else pg_reconcile_pending_mark; fi
+if pg_br_on && [[ "$(pg_standby)" == on ]]; then
+  pg_br_disable || warn "services.postgres: could not remove the backup schedules"
+elif pg_br_on; then
   pg_br_timers_apply || warn "services.postgres: could not install the backup schedules"
   # The stanza needs the server; until it answers, the next apply creates it.
   (( pg_up )) && { pg_br_stanza_ensure || true; }
