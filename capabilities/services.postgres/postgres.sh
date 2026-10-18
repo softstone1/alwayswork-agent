@@ -603,9 +603,12 @@ pg_metrics_sample() {
   at="$(pg_now)"
   db="$(pg_db 2>/dev/null)" || db=""
   have timeout && t=(timeout 5)
+  # The timeout runs inside the container too: killing only `podman exec`
+  # leaves psql behind, and a server that never answers collects one per
+  # sample (seen on contabo-use-1, stuck in authentication).
   if [[ -n "$db" ]] && have podman \
     && row="$(printf '%s\n%s\n' "$PG_SQL_QUIET" "$PG_METRICS_SQL" \
-      | ${t[@]+"${t[@]}"} podman exec -i "$(pg_container)" psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d "$db" 2>/dev/null)" \
+      | ${t[@]+"${t[@]}"} podman exec -i "$(pg_container)" ${t[@]+"${t[@]}"} psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d "$db" 2>/dev/null)" \
     && jq -e 'type == "object" and (.serverVersion | type) == "string"' <<<"$row" >/dev/null 2>&1; then
     read -r total free < <(df -Pk "$(pg_data)" 2>/dev/null | awk 'NR == 2 { print $2 * 1024, $4 * 1024 }')
     [[ "$free" =~ ^[0-9]+$ ]] || free=null
