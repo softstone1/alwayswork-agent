@@ -431,7 +431,7 @@ pg_apply_unit() { pg_workload_vars; wl_apply_unit; }
 PG_SQL_QUIET="SET log_statement = 'none';
 SET log_min_error_statement = 'panic';
 SET client_min_messages = 'warning';"
-pg_sql() { pg_exec psql -X -q -v ON_ERROR_STOP=1 -U postgres -d "$1" >/dev/null; }
+pg_sql() { pg_exec_t "${PG_SQL_TIMEOUT:-120}" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d "$1" >/dev/null; }
 pg_hex() { printf '%s' "$1" | od -An -tx1 | tr -d ' \n'; }
 pg_fingerprint() { printf '%s' "$1" | sha256sum | cut -c1-16; }
 PG_ROLE_MARK="managed by alwayswork (services.postgres roles)"
@@ -725,6 +725,15 @@ pg_report() {
 
 # --- operations (aw service ... postgres) ----------------------------------------
 pg_exec() { podman exec -i "$(pg_container)" "$@"; }
+# A bounded exec for everything the agent runs unattended: a server whose connections hang
+# (Postgres 18 under our Podman flags on contabo-use-1/usc-1) must not hang an apply — and with
+# it heartbeats and agent updates. The timeout runs inside the container too, so the psql itself
+# goes, not only `podman exec`.
+pg_exec_t() {
+  local secs="$1"; shift
+  if have timeout; then timeout "$((secs + 5))" podman exec -i "$(pg_container)" timeout "$secs" "$@"
+  else podman exec -i "$(pg_container)" "$@"; fi
+}
 
 pg_status() {
   section "postgres"
@@ -775,7 +784,7 @@ pg_dump_backup() {
 pg_snapshot() {
   local label="${1:-manual}" s
   log "postgres: checkpoint + read-only snapshot of the data subvolume"
-  [[ "$DRY_RUN" == "1" ]] || pg_exec psql -U postgres -c 'CHECKPOINT;' >/dev/null 2>&1 || warn "postgres: checkpoint failed (is it running?)"
+  [[ "$DRY_RUN" == "1" ]] || pg_exec_t 300 psql -U postgres -c 'CHECKPOINT;' >/dev/null 2>&1 || warn "postgres: checkpoint failed (is it running?)"
   if s="$(wl_snapshot "$(pg_data)" "$label")"; then ok "snapshot $s"; fi
 }
 
@@ -1320,14 +1329,14 @@ pg_br_restore() {
   PG_READY_TRIES="${PG_READY_TRIES:-900}" pg_wait_ready || die "postgres: the restored server did not come up (previous data at $aside; journalctl -u $(pg_unit))"
   local i rec
   for (( i = 0; i < ${PG_READY_TRIES:-900}; i++ )); do
-    rec="$(pg_exec psql -X -At -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' </dev/null 2>/dev/null)" || true
+    rec="$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' </dev/null 2>/dev/null)" || true
     [[ "$rec" == "f" ]] && break
     sleep 2
   done
   [[ "$rec" == "f" ]] || die "postgres: still in recovery (paused short of the target?); previous data at $aside"
   local n has
-  n="$(pg_exec psql -X -At -U postgres -d postgres -c 'SELECT count(*) FROM pg_database' </dev/null 2>/dev/null)" || true
-  has="$(pg_exec psql -X -At -U postgres -d postgres -c "SELECT count(*) FROM pg_database WHERE datname = '$(pg_db)'" </dev/null 2>/dev/null)" || true
+  n="$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c 'SELECT count(*) FROM pg_database' </dev/null 2>/dev/null)" || true
+  has="$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c "SELECT count(*) FROM pg_database WHERE datname = '$(pg_db)'" </dev/null 2>/dev/null)" || true
   [[ "$has" == "1" ]] || die "postgres: restored, but database $(pg_db) is missing (previous data at $aside)"
   ok "postgres: restored to ${target:-the end of the archive} ($n databases); previous data kept at $aside — remove it once satisfied"
   run systemctl start --no-block "alwayswork-postgres-backup-full.service" || true
@@ -1340,7 +1349,7 @@ pg_br_restore() {
 # archived WAL (restore_command = pgBackRest archive-get from seed_from). Nothing is written
 # to that repository from here. standby=off promotes it; it then backs up to its own path.
 pg_in_recovery() {
-  [[ "$(pg_exec psql -X -At -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' </dev/null 2>/dev/null)" == t ]]
+  [[ "$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' </dev/null 2>/dev/null)" == t ]]
 }
 pg_seed_needed() {
   [[ -n "$(pg_seed_from)" ]] && pg_br_on && [[ ! -s "$(pg_data)/pgdata/PG_VERSION" ]]
@@ -1374,7 +1383,7 @@ pg_promote_if_asked() {
   pg_wait_ready || return 1
   pg_in_recovery || return 0
   log "services.postgres: promoting (standby=off)"
-  pg_exec psql -X -At -U postgres -d postgres -c 'SELECT pg_promote(true, 300)' </dev/null >/dev/null 2>&1 || return 1
+  pg_exec_t 330 psql -X -At -U postgres -d postgres -c 'SELECT pg_promote(true, 300)' </dev/null >/dev/null 2>&1 || return 1
   local i
   for (( i = 0; i < 150; i++ )); do pg_in_recovery || { ok "services.postgres: promoted; this node is the primary now"; return 0; }; sleep 2; done
   err "services.postgres: still in recovery after promote"

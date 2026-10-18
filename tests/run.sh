@@ -1061,7 +1061,7 @@ pg_t_reconcile() {
   grep -qF "ALTER DATABASE %I OWNER TO %I', 'app', 'shop'" "$in" || return 1
   grep -qF "CREATE OR REPLACE VIEW aw.status" "$in" && grep -qF 'GRANT USAGE ON SCHEMA aw TO "shop";' "$in" && grep -qF 'GRANT SELECT ON aw.status TO "shop";' "$in" || return 1
   grep -qF "INSERT INTO aw.facts" "$in" && grep -Eq "^  \('disk_free_bytes', '[0-9]+', now\(\)\), \('disk_total_bytes', '[0-9]+', now\(\)\)$" "$in" || return 1
-  grep -qF "exec -i alwayswork-postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres" "$TMP/pglog.argv"
+  grep -qE "exec -i alwayswork-postgres (timeout [0-9]+ )?psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres" "$TMP/pglog.argv"
 }
 pg_t_legacy() {
   local in="$TMP/pglog.stdin"
