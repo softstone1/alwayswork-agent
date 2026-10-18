@@ -610,7 +610,12 @@ PG_METRICS_SQL="SELECT json_build_object(
                          ELSE to_char(a.last_archived_time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') END,
   'archiveLagSec', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL
                         ELSE round(extract(epoch FROM now() - a.last_archived_time)::numeric, 1) END,
-  'replicationSlots', (SELECT count(*) FROM pg_replication_slots)::int)
+  'replicationSlots', (SELECT count(*) FROM pg_replication_slots)::int,
+  'backrestSessions', (SELECT coalesce(json_agg(json_build_object(
+      'app', left(application_name, 40), 'state', state, 'wait', concat_ws(':', wait_event_type, wait_event),
+      'sec', round(extract(epoch FROM now() - coalesce(query_start, backend_start))::numeric, 0),
+      'query', left(regexp_replace(query, '\s+', ' ', 'g'), 60))), '[]'::json)
+    FROM pg_stat_activity WHERE application_name LIKE 'pgBackRest%'))
   FROM pg_stat_database d, pg_stat_archiver a WHERE d.datname = current_database();"
 # A reconcile deferred because the server was still initialising is owed,
 # not dropped: on an idle node no new delivery comes to run the next apply,
@@ -676,7 +681,7 @@ pg_metrics_sample() {
       {at:$at, up:true, serverVersion, inRecovery, uptimeSec, connections, maxConnections, activeQueries,
        dbSizeBytes, diskFreeBytes:$free, diskTotalBytes:$total, cacheHitRatio,
        xactCommit, xactRollback, deadlocks, longestQuerySec, longestTxSec,
-       walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots}' <<<"$row"
+       walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots, backrestSessions}' <<<"$row"
   else
     jq -nc --arg at "$at" '{at:$at, up:false}'
   fi
