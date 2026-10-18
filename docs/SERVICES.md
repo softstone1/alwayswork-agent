@@ -347,6 +347,10 @@ The result is `last_restore_drill_at/ok/error` in `aw.facts` and
    the lock.
 3. Verify the application, then remove `data.before-restore-<stamp>`
    yourself. A full backup of the new timeline starts automatically.
+   Every promotion (a restore, or `standby=off` on a seeded node) and every
+   backup runs an immediate `CHECKPOINT` first: until one completes,
+   `pg_control` still names the old timeline and pgBackRest refuses the backup
+   with `[058]: WAL timeline 2 does not match pg_control timeline 1`.
 4. From a lost node: enable `services.postgres` on a new node with the same
    `db`, `backup_*` keys (`backup_path` set to the old node's) and group
    secrets, then run step 2 there before the application writes to it. Until
