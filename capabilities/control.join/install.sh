@@ -27,7 +27,12 @@ WantedBy=multi-user.target
 UNIT
 
 run systemctl daemon-reload
-run systemctl enable --now alwayswork-agent.service
+# --no-block: the first apply can run inside alwayswork-provision.service (an order's node is
+# approved at once), which is ordered Before= the agent. `enable --now` would queue the agent's
+# start behind the very job that is waiting for it — a oneshot with no timeout, so for ever
+# (contabo-usc-1). Enabled now, started as soon as provisioning ends.
+run systemctl enable alwayswork-agent.service
+run systemctl start --no-block alwayswork-agent.service
 ok "control agent installed"
 
 # First-boot / headless provisioning: on every boot, `aw provision` resumes an

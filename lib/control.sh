@@ -23,7 +23,9 @@ control_set_pending() {
 control_finish_enrolled() {
   control_set_pending false
   run rm -f "$(control_claim_file)" "$(decommission_marker)"
-  run systemctl enable --now alwayswork-agent.service 2>/dev/null || true
+  # --no-block: may run inside alwayswork-provision.service, ordered Before= the agent.
+  run systemctl enable alwayswork-agent.service 2>/dev/null || true
+  run systemctl start --no-block alwayswork-agent.service 2>/dev/null || true
   run systemctl disable --now alwayswork-provision.timer 2>/dev/null || true
 }
 
