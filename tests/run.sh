@@ -1110,7 +1110,7 @@ printf '%s\n' "$*" >> "$PG_LOG.argv"
 cat >> "$PG_LOG.stdin"
 printf 'x\n' >> "$PG_LOG.count"
 [[ -n "${PG_DOWN:-}" ]] && { echo 'psql: error: connection to server on socket failed' >&2; exit 2; }
-printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "backrestSessions" : [], "query" : "SELECT q-Secret-7"}'
+printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "backrestSessions" : [], "checkpointer" : {"wait" : null}, "query" : "SELECT q-Secret-7"}'
 EOS
 mkdir -p "$TMP/pgmbin"; cp "$TMP/pgbin/podman-metrics" "$TMP/pgmbin/podman"; chmod +x "$TMP/pgmbin/podman"
 pg_mprobe() { PATH="$TMP/pgmbin:$PATH" PG_LOG="$TMP/pgmlog" PG_FAKE_SEC="$TMP/pg/sec" pg_probe "$@"; }
@@ -1121,7 +1121,7 @@ pg_t_metrics() {
   j="$(pg_mprobe pg_metrics_json)" || return 1
   jq -e '(keys_unsorted) == ["at","up","serverVersion","inRecovery","uptimeSec","connections","maxConnections","activeQueries",
           "dbSizeBytes","diskFreeBytes","diskTotalBytes","cacheHitRatio","xactCommit","xactRollback","deadlocks",
-          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions"]
+          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions","checkpointer"]
      and .up == true and .serverVersion == "17.6" and .connections == 7 and .cacheHitRatio == 0.9934
      and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
      and (.diskFreeBytes | type) == "number" and .diskTotalBytes >= .diskFreeBytes and .walArchivedCount == null' <<<"$j" >/dev/null || { echo "$j"; return 1; }
