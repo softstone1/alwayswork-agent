@@ -381,6 +381,12 @@ pg_workload_vars() {
   WL_READ_ONLY=0
   WL_TMPFS=()
   WL_HEALTH="pg_isready -U postgres -h 127.0.0.1"
+  # Report, never kill: initdb, first-start init scripts and crash recovery
+  # can outlast any probe window, and stopping Postgres there interrupts the
+  # recovery itself. Health still shows "unhealthy" and failingUnits/doctor
+  # surface it; a dead postmaster exits on its own and systemd restarts it.
+  WL_HEALTH_ON_FAILURE=none
+  WL_HEALTH_START=10m
   # Run as the image's postgres uid from the start: the official entrypoint
   # otherwise starts as root to chown and drop privileges, which cap-drop ALL
   # forbids. The :U volume flag gives the data mount to that uid, and
