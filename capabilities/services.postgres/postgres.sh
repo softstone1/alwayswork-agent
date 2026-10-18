@@ -16,7 +16,7 @@
 #   hostnames extra DNS names for the server certificate (comma list), e.g.
 #             the tunnel name Hyperdrive verifies
 #   io_method Postgres 18+ asynchronous I/O: worker | sync | io_uring
-#             (default: the server's own, worker)
+#             (default sync from 18 on; see pg_io_method)
 #   memory_mb container memory budget (default: .limits.defaults.memory_mb)
 #   admin     web admin side-car: off (default) | pgweb (alias: on)
 #   admin_port loopback port of the admin UI (default 8081)
@@ -61,7 +61,15 @@ pg_data()    { printf '%s' "$(pg_root)/data"; }
 pg_backups() { printf '%s' "$(pg_root)/backups"; }
 pg_env_file(){ printf '%s' "$AW_ETC/postgres.env"; }
 pg_unit()    { wl_unit_name "$PG_ID"; }
-pg_io_method() { local m; m="$(cap_config io_method)"; case "$m" in ''|worker|sync|io_uring) printf '%s' "$m" ;; *) die "services.postgres: bad io_method '$m' (worker|sync|io_uring)" ;; esac; }
+# Postgres 18's default, I/O worker processes, hung every connection in
+# authentication under this sandbox (userns=auto, cap-drop ALL; contabo-use-1,
+# Ubuntu 26.04) while plain Docker was fine; sync is the default from 18 on
+# until that is understood. An explicit value always wins.
+pg_io_method() {
+  local m; m="$(cap_config io_method)"
+  if [[ -z "$m" ]] && (( $(pg_version | cut -d. -f1) >= 18 )); then m=sync; fi
+  case "$m" in ''|worker|sync|io_uring) printf '%s' "$m" ;; *) die "services.postgres: bad io_method '$m' (worker|sync|io_uring)" ;; esac
+}
 pg_tls()     { local t; t="$(cap_config tls)"; [[ -n "$t" ]] || t=on; case "$t" in on|off) printf '%s' "$t" ;; *) die "services.postgres: bad tls '$t' (on|off)" ;; esac; }
 pg_tls_dir() { printf '%s' "$(pg_root)/tls"; }
 pg_conf_dir(){ printf '%s' "$(pg_root)/conf"; }
@@ -597,6 +605,20 @@ PG_METRICS_SQL="SELECT json_build_object(
                         ELSE round(extract(epoch FROM now() - a.last_archived_time)::numeric, 1) END,
   'replicationSlots', (SELECT count(*) FROM pg_replication_slots)::int)
   FROM pg_stat_database d, pg_stat_archiver a WHERE d.datname = current_database();"
+# A reconcile deferred because the server was still initialising is owed,
+# not dropped: on an idle node no new delivery comes to run the next apply,
+# so the heartbeat settles it once the server answers (wl_pg_metrics_json).
+pg_reconcile_pending_file() { printf '%s' "$AW_STATE/postgres-reconcile-pending"; }
+pg_reconcile_pending_mark()  { [[ "$DRY_RUN" == "1" ]] || : > "$(pg_reconcile_pending_file)" 2>/dev/null || true; }
+pg_reconcile_pending_clear() { [[ "$DRY_RUN" == "1" ]] || rm -f "$(pg_reconcile_pending_file)" 2>/dev/null || true; }
+pg_reconcile_owed() {
+  [[ -e "$(pg_reconcile_pending_file)" && "$DRY_RUN" != "1" ]] || return 0
+  PG_READY_TRIES=1 pg_reconcile || return 0
+  pg_reconcile_pending_clear
+  if pg_br_on; then pg_br_stanza_ensure || true; fi
+  pg_report || true
+  info "services.postgres: deferred roles and aw schema reconcile done"
+}
 pg_metrics_file() { printf '%s' "$AW_STATE/postgres-metrics.json"; }
 pg_metrics_sample() {
   local db at row free="" total="" t=()

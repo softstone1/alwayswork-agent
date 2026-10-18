@@ -313,7 +313,11 @@ wl_pg_metrics_json() {
   local dir="$AW_ROOT/capabilities/services.postgres" m
   [[ -f "$dir/postgres.sh" ]] || return 1
   # shellcheck disable=SC1091
-  m="$(export CAP_ID=services.postgres CAP_DIR="$dir"; source "$dir/postgres.sh" && pg_metrics_json 2>/dev/null)" || return 1
+  # A server that answers also settles a reconcile deferred at install.
+  m="$(export CAP_ID=services.postgres CAP_DIR="$dir"; source "$dir/postgres.sh" || exit 1
+    out="$(pg_metrics_json 2>/dev/null)" || exit 1
+    if jq -e '.up == true' >/dev/null 2>&1 <<<"$out"; then pg_reconcile_owed >/dev/null 2>&1 || true; fi
+    printf '%s' "$out")" || return 1
   jq -e 'type == "object" and has("up")' <<<"$m" >/dev/null 2>&1 || return 1
   printf '%s' "$m"
 }
