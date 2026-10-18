@@ -15,6 +15,8 @@
 #             scram-sha-256 over hostssl only
 #   hostnames extra DNS names for the server certificate (comma list), e.g.
 #             the tunnel name Hyperdrive verifies
+#   io_method Postgres 18+ asynchronous I/O: worker | sync | io_uring
+#             (default: the server's own, worker)
 #   memory_mb container memory budget (default: .limits.defaults.memory_mb)
 #   admin     web admin side-car: off (default) | pgweb (alias: on)
 #   admin_port loopback port of the admin UI (default 8081)
@@ -59,6 +61,7 @@ pg_data()    { printf '%s' "$(pg_root)/data"; }
 pg_backups() { printf '%s' "$(pg_root)/backups"; }
 pg_env_file(){ printf '%s' "$AW_ETC/postgres.env"; }
 pg_unit()    { wl_unit_name "$PG_ID"; }
+pg_io_method() { local m; m="$(cap_config io_method)"; case "$m" in ''|worker|sync|io_uring) printf '%s' "$m" ;; *) die "services.postgres: bad io_method '$m' (worker|sync|io_uring)" ;; esac; }
 pg_tls()     { local t; t="$(cap_config tls)"; [[ -n "$t" ]] || t=on; case "$t" in on|off) printf '%s' "$t" ;; *) die "services.postgres: bad tls '$t' (on|off)" ;; esac; }
 pg_tls_dir() { printf '%s' "$(pg_root)/tls"; }
 pg_conf_dir(){ printf '%s' "$(pg_root)/conf"; }
@@ -358,6 +361,7 @@ pg_workload_vars() {
   local br=0; pg_br_on && br=1
   WL_VOLUMES=("$(pg_data):/var/lib/postgresql:U" "$(pg_root)/init:/docker-entrypoint-initdb.d:ro" "$(pg_conf_dir):$PG_CONF_MNT:ro")
   WL_ARGS=(postgres -c "hba_file=$PG_CONF_MNT/pg_hba.conf" -c password_encryption=scram-sha-256)
+  [[ -n "$(pg_io_method)" ]] && WL_ARGS+=(-c "io_method=$(pg_io_method)")
   if [[ "$(pg_tls)" == "on" ]]; then
     WL_VOLUMES+=("$(pg_tls_srv_dir):$PG_TLS_MNT:ro,U")
     WL_ARGS+=(-c ssl=on -c "ssl_cert_file=$PG_TLS_MNT/server.crt" -c "ssl_key_file=$PG_TLS_MNT/server.key" -c ssl_min_protocol_version=TLSv1.2)
