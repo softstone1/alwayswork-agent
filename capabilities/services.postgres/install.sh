@@ -38,7 +38,7 @@ pg_apply_unit
 wl_report_manifest_surfaces services.postgres
 # A database still initialising is not a failed apply: the next one retries.
 pg_up=0
-pg_reconcile && pg_up=1
+if pg_reconcile; then pg_up=1; pg_reconcile_pending_clear; else pg_reconcile_pending_mark; fi
 if pg_br_on; then
   pg_br_timers_apply || warn "services.postgres: could not install the backup schedules"
   # The stanza needs the server; until it answers, the next apply creates it.
