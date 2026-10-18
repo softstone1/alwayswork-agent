@@ -633,8 +633,21 @@ pg_br_stanza_owed() {
   pg_report || true
 }
 
+# The first restore drill follows the first good backup instead of waiting for Wednesday:
+# backups that were never restored are not yet backups. Once, from the heartbeat.
+pg_br_drill_owed() {
+  [[ "$DRY_RUN" != "1" ]] && pg_br_on && have systemctl || return 0
+  jq -e '.lastBackupOk == true and (.lastDrillAt // null) == null' "$(pg_br_status_file)" >/dev/null 2>&1 || return 0
+  [[ -e "$(pg_br_stanza_mark).drill-started" ]] && return 0
+  systemctl is-active --quiet alwayswork-postgres-backup-full.service && return 0
+  : > "$(pg_br_stanza_mark).drill-started"
+  run systemctl start --no-block alwayswork-postgres-restore-drill.service || true
+  info "services.postgres: first restore drill started after the first good backup"
+}
+
 pg_reconcile_owed() {
   pg_br_stanza_owed
+  pg_br_drill_owed
   [[ -e "$(pg_reconcile_pending_file)" && "$DRY_RUN" != "1" ]] || return 0
   pg_in_recovery && return 0
   PG_READY_TRIES=1 pg_reconcile || return 0
@@ -1017,7 +1030,18 @@ pg_br_report_json() {
     arch="$(journalctl -u "$(wl_unit_name "$PG_ID")" -n 400 -o cat --no-pager 2>/dev/null \
       | grep -E 'ERROR: \[[0-9]+\]' | tail -1 | pg_br_redact | tr -d '\000-\037' | cut -c1-280)"
   fi
-  jq -c --arg m "$mode" --arg a "$arch" '{mode:$m, lastBackupAt:(.lastBackupAt // null), lastBackupOk:(.lastBackupOk // null),
+  # A job in progress (systemd "activating" while the oneshot runs): the console says so instead
+  # of the last finished result, which may be an older attempt's error.
+  local running="" t
+  if [[ "$mode" == pgbackrest ]] && have systemctl; then
+    for t in postgres-backup-full postgres-backup-diff postgres-backup-monthly postgres-restore-drill; do
+      [[ "$(systemctl is-active "alwayswork-$t.service" 2>/dev/null)" == activating ]] || continue
+      case "$t" in *full) running="full" ;; *diff) running="diff" ;; *monthly) running="monthly" ;; *) running="drill" ;; esac
+      break
+    done
+  fi
+  jq -c --arg m "$mode" --arg a "$arch" --arg r "$running" '{mode:$m, running:(if $r == "" then null else $r end),
+    lastBackupAt:(.lastBackupAt // null), lastBackupOk:(.lastBackupOk // null),
     lastBackupKind:(.lastBackupKind // null), lastBackupError:((.lastBackupError // "") | if . == "" then null else . end),
     lastDrillAt:(.lastDrillAt // null), lastDrillOk:(.lastDrillOk // null),
     lastDrillError:((.lastDrillError // "") | if . == "" then null else . end),
