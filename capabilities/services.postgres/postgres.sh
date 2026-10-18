@@ -611,7 +611,21 @@ PG_METRICS_SQL="SELECT json_build_object(
 pg_reconcile_pending_file() { printf '%s' "$AW_STATE/postgres-reconcile-pending"; }
 pg_reconcile_pending_mark()  { [[ "$DRY_RUN" == "1" ]] || : > "$(pg_reconcile_pending_file)" 2>/dev/null || true; }
 pg_reconcile_pending_clear() { [[ "$DRY_RUN" == "1" ]] || rm -f "$(pg_reconcile_pending_file)" 2>/dev/null || true; }
+# The stanza owed too: archiving with no stanza piles WAL up in pg_wal, and a failed first
+# setup otherwise waits for the next apply, which an idle node may not get. Retried from the
+# heartbeat once the server answers, at most every ten minutes.
+pg_br_stanza_owed() {
+  [[ "$DRY_RUN" != "1" ]] && pg_br_on || return 0
+  [[ "$(cat "$(pg_br_stanza_mark)" 2>/dev/null)" == "$(sha256sum < "$(pg_br_conf)" 2>/dev/null | cut -c1-16)" ]] && return 0
+  local last; last="$(cat "$(pg_br_stanza_tried_file)" 2>/dev/null || echo 0)"
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  (( $(date +%s) - last >= ${PG_BR_STANZA_EVERY:-600} )) || return 0
+  pg_br_stanza_ensure || true
+  pg_report || true
+}
+
 pg_reconcile_owed() {
+  pg_br_stanza_owed
   [[ -e "$(pg_reconcile_pending_file)" && "$DRY_RUN" != "1" ]] || return 0
   PG_READY_TRIES=1 pg_reconcile || return 0
   pg_reconcile_pending_clear
@@ -864,6 +878,7 @@ pg_br_dir()         { printf '%s' "$(pg_root)/pgbackrest"; }
 pg_br_conf()        { printf '%s' "$(pg_br_dir)/pgbackrest.conf"; }
 pg_br_status_file() { printf '%s' "$(pg_root)/backup-status.json"; }
 pg_br_stanza_mark() { printf '%s' "$(pg_root)/pgbackrest.stanza"; }
+pg_br_stanza_tried_file() { printf '%s' "$(pg_br_stanza_mark).tried"; }
 pg_drill_dir()      { printf '%s' "$(pg_root)/drill"; }
 pg_restore_lock()   { printf '%s' "$(pg_root)/restore.lock"; }
 
@@ -996,7 +1011,17 @@ pg_br_stanza_ensure() {
   want="$(sha256sum < "$(pg_br_conf)" | cut -c1-16)"
   [[ "$(cat "$(pg_br_stanza_mark)" 2>/dev/null)" == "$want" ]] && return 0
   out="$(mktemp)"
-  if pg_br_exec stanza-create >"$out" 2>&1 && pg_br_exec check >>"$out" 2>&1; then
+  # A WAL push holding the archive lock ([050]) or a backlog of WAL still draining when `check`
+  # waits for its segment ([082], "check the PostgreSQL server log") is a race, not a fault: tried
+  # again a few times before it counts (contabo-use-1, the first start after archiving began).
+  local try ready=0
+  for (( try = 1; try <= ${PG_BR_STANZA_TRIES:-3}; try++ )); do
+    if pg_br_exec stanza-create >"$out" 2>&1 && pg_br_exec check >>"$out" 2>&1; then ready=1; break; fi
+    grep -qE '\[050\]|\[082\]|check the PostgreSQL server log' "$out" || break
+    (( try < ${PG_BR_STANZA_TRIES:-3} )) && sleep "${PG_BR_STANZA_WAIT:-15}"
+  done
+  date +%s > "$(pg_br_stanza_tried_file)" 2>/dev/null || true
+  if (( ready )); then
     rm -f "$out"
     printf '%s\n' "$want" > "$(pg_br_stanza_mark)"
     ok "pgBackRest stanza $(pg_stanza) ready; WAL is archived to s3://$(pg_backup_bucket)$(pg_backup_path)"
