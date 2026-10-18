@@ -614,7 +614,9 @@ PG_METRICS_SQL="SELECT json_build_object(
   'backrestSessions', (SELECT coalesce(json_agg(json_build_object(
       'app', left(application_name, 40), 'state', state, 'wait', concat_ws(':', wait_event_type, wait_event),
       'sec', round(extract(epoch FROM now() - coalesce(query_start, backend_start))::numeric, 0),
-      'query', left(regexp_replace(query, '\s+', ' ', 'g'), 60))), '[]'::json)
+      'query', left(regexp_replace(query, '\s+', ' ', 'g'), 60),
+      'sig', (SELECT string_agg(l, ' ') FROM regexp_split_to_table(pg_read_file('/proc/' || pid || '/status'), E'\n') AS l
+               WHERE l ~ '^(SigPnd|ShdPnd|SigBlk|SigIgn|SigCgt):'))), '[]'::json)
     FROM pg_stat_activity WHERE application_name LIKE 'pgBackRest%'),
   'checkpointer', (SELECT json_build_object(
       'wait', (SELECT concat_ws(':', wait_event_type, wait_event) FROM pg_stat_activity WHERE backend_type = 'checkpointer' LIMIT 1),
