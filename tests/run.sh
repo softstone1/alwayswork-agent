@@ -1120,7 +1120,7 @@ printf '%s\n' "$*" >> "$PG_LOG.argv"
 cat >> "$PG_LOG.stdin"
 printf 'x\n' >> "$PG_LOG.count"
 [[ -n "${PG_DOWN:-}" ]] && { echo 'psql: error: connection to server on socket failed' >&2; exit 2; }
-printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "backrestSessions" : [], "checkpointer" : {"wait" : null}, "query" : "SELECT q-Secret-7"}'
+printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastFailedWal" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "backrestSessions" : [], "checkpointer" : {"wait" : null}, "query" : "SELECT q-Secret-7"}'
 EOS
 mkdir -p "$TMP/pgmbin"; cp "$TMP/pgbin/podman-metrics" "$TMP/pgmbin/podman"; chmod +x "$TMP/pgmbin/podman"
 pg_mprobe() { PATH="$TMP/pgmbin:$PATH" PG_LOG="$TMP/pgmlog" PG_FAKE_SEC="$TMP/pg/sec" pg_probe "$@"; }
@@ -1131,7 +1131,7 @@ pg_t_metrics() {
   j="$(pg_mprobe pg_metrics_json)" || return 1
   jq -e '(keys_unsorted) == ["at","up","serverVersion","inRecovery","uptimeSec","connections","maxConnections","activeQueries",
           "dbSizeBytes","diskFreeBytes","diskTotalBytes","cacheHitRatio","xactCommit","xactRollback","deadlocks",
-          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions","checkpointer","hostTcp"]
+          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastFailedWal","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions","checkpointer","hostTcp"]
      and .up == true and .serverVersion == "17.6" and .connections == 7 and .cacheHitRatio == 0.9934
      and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
      and (.diskFreeBytes | type) == "number" and .diskTotalBytes >= .diskFreeBytes and .walArchivedCount == null' <<<"$j" >/dev/null || { echo "$j"; return 1; }
@@ -1380,7 +1380,7 @@ bk_t_unit() {
   bk_probe pg_br_render >/dev/null 2>&1 && bk_probe pg_write_unit >/dev/null 2>&1 || return 1
   img="$(bk_probe pg_image)"
   [[ "$img" =~ ^localhost/alwayswork-postgres:16-pgbackrest2\.59\.3-[0-9a-f]{8}$ ]] || { echo "image $img"; r=1; }
-  grep -qF -- "-c wal_level=replica -c archive_mode=on -c \"archive_command=pgbackrest --stanza=app archive-push %%p\" -c archive_timeout=60" "$u" || r=1
+  grep -qF -- "-c wal_level=replica -c archive_mode=on -c \"archive_command=case %%f in *.partial) exit 0 ;; esac; pgbackrest --stanza=app archive-push %%p\" -c archive_timeout=60" "$u" || r=1
   grep -qF -- "--volume $TMP/pg/state/services/postgres/pgbackrest:/etc/pgbackrest:ro,U" "$u" || r=1
   grep -qF -- "--label dev.alwayswork.base_image=docker.io/library/postgres:16" "$u" && grep -qF "$img postgres -c" "$u" || r=1
   ! grep -q "R2-Secret" "$u" || r=1

@@ -393,7 +393,11 @@ pg_workload_vars() {
   # Continuous archiving only with a repository to archive to.
   if (( br )); then
     WL_VOLUMES+=("$(pg_br_dir):$PG_BR_MNT:ro,U")
-    WL_ARGS+=(-c wal_level=replica -c archive_mode=on -c "archive_command=pgbackrest --stanza=$(pg_stanza) archive-push %p" -c archive_timeout=60)
+    # *.partial is skipped: at promotion Postgres archives the old timeline's unfinished last
+    # segment under that name, and pgBackRest refused it ("first page header … expected to be in
+    # long format", contabo-usc-1), wedging the archiver on one file for good. Everything in it
+    # is also at the start of the new timeline's first segment, which is archived as usual.
+    WL_ARGS+=(-c wal_level=replica -c archive_mode=on -c "archive_command=case %f in *.partial) exit 0 ;; esac; pgbackrest --stanza=$(pg_stanza) archive-push %p" -c archive_timeout=60)
   fi
   WL_ENV_FILE="$(pg_env_file)"
   # A new certificate or hba is read at start: their digest in the unit
@@ -616,6 +620,7 @@ PG_METRICS_SQL="SELECT json_build_object(
                     WHERE backend_type = 'client backend' AND xact_start IS NOT NULL AND pid <> pg_backend_pid()),
   'walArchivedCount', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL ELSE a.archived_count END,
   'walFailedCount', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL ELSE a.failed_count END,
+  'lastFailedWal', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL ELSE a.last_failed_wal END,
   'lastArchivedAt', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL
                          ELSE to_char(a.last_archived_time AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') END,
   'archiveLagSec', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL
@@ -721,7 +726,7 @@ pg_metrics_sample() {
       {at:$at, up:true, serverVersion, inRecovery, uptimeSec, connections, maxConnections, activeQueries,
        dbSizeBytes, diskFreeBytes:$free, diskTotalBytes:$total, cacheHitRatio,
        xactCommit, xactRollback, deadlocks, longestQuerySec, longestTxSec,
-       walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots, backrestSessions, checkpointer}
+       walArchivedCount, walFailedCount, lastFailedWal, lastArchivedAt, archiveLagSec, replicationSlots, backrestSessions, checkpointer}
       + {hostTcp: $htcp}' <<<"$row"
   else
     jq -nc --arg at "$at" '{at:$at, up:false}'
