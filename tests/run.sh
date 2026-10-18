@@ -1131,7 +1131,7 @@ pg_t_metrics() {
   j="$(pg_mprobe pg_metrics_json)" || return 1
   jq -e '(keys_unsorted) == ["at","up","serverVersion","inRecovery","uptimeSec","connections","maxConnections","activeQueries",
           "dbSizeBytes","diskFreeBytes","diskTotalBytes","cacheHitRatio","xactCommit","xactRollback","deadlocks",
-          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions","checkpointer"]
+          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions","checkpointer","hostTcp"]
      and .up == true and .serverVersion == "17.6" and .connections == 7 and .cacheHitRatio == 0.9934
      and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
      and (.diskFreeBytes | type) == "number" and .diskTotalBytes >= .diskFreeBytes and .walArchivedCount == null' <<<"$j" >/dev/null || { echo "$j"; return 1; }
