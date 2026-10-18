@@ -1423,6 +1423,9 @@ bk_t_backup() {
   bk_reset; bk_secrets; bk_on
   bk_probe pg_backup --full >/dev/null 2>&1 || return 1
   grep -qxF "exec -i alwayswork-postgres pgbackrest --stanza=app --repo=1 --type=full backup" "$TMP/bklog.argv" || r=1
+  # A primary is checkpointed first, so pg_control is on the current timeline (pgBackRest [058]).
+  [[ "$(grep -n -e "psql .*-c CHECKPOINT\$" -e " backup\$" "$TMP/bklog.argv" | head -2 | cut -d: -f2- | grep -c CHECKPOINT)" == 1 ]] \
+    && grep -n -e "CHECKPOINT\$" -e " backup\$" "$TMP/bklog.argv" | head -1 | grep -q CHECKPOINT || r=1
   jq -e '.lastBackupOk == true and .lastBackupKind == "full" and .lastBackupError == "" and (.lastBackupAt | test("^[0-9-]{10}T"))' "$st" >/dev/null || r=1
   grep -qF "INSERT INTO aw.facts" "$in" && grep -qF "('last_backup_ok', convert_from(decode('$(printf true | od -An -tx1 | tr -d ' \n')', 'hex'), 'UTF8'), now())" "$in" \
     && grep -qF "('last_backup_kind', convert_from(decode('$(printf full | od -An -tx1 | tr -d ' \n')'" "$in" && grep -qF "'last_backup_at'" "$in" && grep -qF "'last_backup_error'" "$in" || r=1
@@ -1601,7 +1604,9 @@ if have yq; then
   check "pg backup: pgbackrest.conf is 0600 in a 0700 dir — R2 s3 path-style, aes-256-cbc, repo1 14-day time retention, repo2 monthly count 12; unchanged is not rewritten" 'bk_t_conf'
   check "pg backup: the unit runs the node-built image with archiving on (archive_command, archive_timeout 60, wal_level replica) only while backup=pgbackrest, never a secret" 'bk_t_unit'
   check "pg backup: timers — full Sun 03:00, diff Mon..Sat 03:00, monthly 1st 05:00, drill Wed 04:00; removed with backup=off" 'bk_t_timers'
-  check "pg backup: on-demand and scheduled runs exec pgBackRest in the live container and record aw.facts; failures are redacted" 'bk_t_backup'
+  check "pg backup: on-demand and scheduled runs checkpoint, exec pgBackRest in the live container and record aw.facts; failures are redacted" 'bk_t_backup'
+  check "pg: a promotion checkpoints the new timeline before reporting primary" \
+    'n="$(grep -n "^pg_promote_if_asked()" "$ROOT/capabilities/services.postgres/postgres.sh" | cut -d: -f1)"; sed -n "$n,$((n + 20))p" "$ROOT/capabilities/services.postgres/postgres.sh" | grep -q "pg_checkpoint_new_timeline"'
   check "pg backup: the restore drill uses a scratch container, never the live data dir, checks disk first, records the result" 'bk_t_drill'
   check "pg backup: PITR restore needs --yes, moves the data dir aside (never deletes), restores to the target, verifies; a failure puts it back" 'bk_t_restore'
   check "pg: the stanza is retried past an archive-lock race, and owed from the heartbeat at most every ten minutes" 'bk_t_stanza_retry'

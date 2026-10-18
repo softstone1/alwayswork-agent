@@ -1211,6 +1211,9 @@ pg_br_backup() {
   log "postgres: pgBackRest $kind backup -> repo$repo"
   if [[ "$DRY_RUN" == "1" ]]; then info "dry-run: pgbackrest --stanza=$(pg_stanza) --repo=$repo --type=$type backup"; return 0; fi
   out="$(mktemp)"
+  # A node promoted before this agent may still hold the old timeline in pg_control (see
+  # pg_checkpoint_new_timeline); an immediate checkpoint first costs a backup nothing.
+  pg_in_recovery || pg_checkpoint_new_timeline
   if pg_br_exec --repo="$repo" --type="$type" backup >"$out" 2>&1; then
     pg_br_redact < "$out" >&2; rm -f "$out"
     pg_br_note backup 1 "$kind" ""
@@ -1382,6 +1385,7 @@ pg_br_restore() {
   n="$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c 'SELECT count(*) FROM pg_database' </dev/null 2>/dev/null)" || true
   has="$(pg_exec_t 15 psql -X -At -U postgres -d postgres -c "SELECT count(*) FROM pg_database WHERE datname = '$(pg_db)'" </dev/null 2>/dev/null)" || true
   [[ "$has" == "1" ]] || die "postgres: restored, but database $(pg_db) is missing (previous data at $aside)"
+  pg_checkpoint_new_timeline
   ok "postgres: restored to ${target:-the end of the archive} ($n databases); previous data kept at $aside — remove it once satisfied"
   run systemctl start --no-block "alwayswork-postgres-backup-full.service" || true
   info "a full backup of the new timeline has been started"
@@ -1460,6 +1464,15 @@ pg_mark_old_timeline_archived() {
     || warn "services.postgres: could not mark the old timeline's segments archived"
 }
 
+# A promotion only requests a spread checkpoint, so pg_control keeps the old timeline until it
+# completes, and pgBackRest refuses every backup meanwhile: "[058]: WAL timeline 2 does not
+# match pg_control timeline 1" (contabo-usc-1, the first full after its promotion). One
+# immediate checkpoint moves pg_control onto the new timeline.
+pg_checkpoint_new_timeline() {
+  pg_exec_t "${PG_CHECKPOINT_TIMEOUT:-600}" psql -X -At -U postgres -d postgres -c 'CHECKPOINT' </dev/null >/dev/null 2>&1 \
+    || warn "services.postgres: checkpoint on the new timeline failed; backups wait for the next one"
+}
+
 # standby=off on a node still in recovery from its seed: promote, once the server answers.
 pg_promote_if_asked() {
   [[ "$DRY_RUN" != "1" && -n "$(pg_seed_from)" && "$(pg_standby)" == off ]] || return 0
@@ -1471,6 +1484,7 @@ pg_promote_if_asked() {
   for (( i = 0; i < 150; i++ )); do
     if ! pg_in_recovery; then
       pg_mark_old_timeline_archived
+      pg_checkpoint_new_timeline
       ok "services.postgres: promoted; this node is the primary now"; return 0
     fi
     sleep 2
