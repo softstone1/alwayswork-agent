@@ -1126,7 +1126,9 @@ pg_t_metrics() {
      and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
      and (.diskFreeBytes | type) == "number" and .diskTotalBytes >= .diskFreeBytes and .walArchivedCount == null' <<<"$j" >/dev/null || { echo "$j"; return 1; }
   # One psql, over the socket as postgres, in the configured db, logging off.
-  grep -qF "exec -i alwayswork-postgres psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d app" "$TMP/pgmlog.argv" || return 1
+  grep -qE "exec -i alwayswork-postgres (timeout 5 )?psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d app" "$TMP/pgmlog.argv" || return 1
+  # With timeout(1) on the host it also bounds psql inside the container.
+  ! command -v timeout >/dev/null || grep -qF "exec -i alwayswork-postgres timeout 5 psql" "$TMP/pgmlog.argv" || return 1
   grep -qF "SET log_statement = 'none';" "$TMP/pgmlog.stdin" && grep -qF "SELECT json_build_object(" "$TMP/pgmlog.stdin" || return 1
   [[ "$(pg_mcount)" == 1 ]] || return 1
   # Cached for 60 s: a second sample within the window does not touch the db.
