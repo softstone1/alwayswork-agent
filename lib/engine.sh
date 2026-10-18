@@ -62,7 +62,8 @@ engine_build_args() {
 
   if engine_hardening_enabled; then
     [[ ",${WL_DEBUG_DROP:-}," == *",capdrop,"* ]] || AW_ENGINE_ARGS+=(--cap-drop ALL)
-    [[ ",${WL_DEBUG_DROP:-}," == *",nnp,"* ]] || AW_ENGINE_ARGS+=(--security-opt no-new-privileges:true)
+    # WL_NO_NNP: a workload that cannot run under no-new-privileges says so (postgres.sh says why).
+    [[ ",${WL_DEBUG_DROP:-}," == *",nnp,"* || "${WL_NO_NNP:-0}" == "1" ]] || AW_ENGINE_ARGS+=(--security-opt no-new-privileges:true)
     [[ ",${WL_DEBUG_DROP:-}," == *",pids,"* ]] || AW_ENGINE_ARGS+=(--pids-limit "$(cfg_get '.limits.defaults.pids' 512)")
   fi
 }

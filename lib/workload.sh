@@ -132,7 +132,7 @@ wl_write_unit() {
   fi
   # Opt-ins, not defaults: never let them leak to the next workload written
   # in this process (each workload's *_workload_vars sets them before this).
-  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP
+  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP WL_NO_NNP
   for v in "${WL_PUBLISH[@]:-}"; do [[ -n "$v" ]] && iso+=(--publish "127.0.0.1:$v"); done
   for v in "${WL_VOLUMES[@]:-}"; do [[ -n "$v" ]] && iso+=(--volume "$v"); done
   [[ -n "${WL_ENV_FILE:-}" ]] && iso+=(--env-file "$WL_ENV_FILE")
