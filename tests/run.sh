@@ -1110,7 +1110,7 @@ printf '%s\n' "$*" >> "$PG_LOG.argv"
 cat >> "$PG_LOG.stdin"
 printf 'x\n' >> "$PG_LOG.count"
 [[ -n "${PG_DOWN:-}" ]] && { echo 'psql: error: connection to server on socket failed' >&2; exit 2; }
-printf '%s\n' '{"serverVersion" : "17.6", "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "query" : "SELECT q-Secret-7"}'
+printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "query" : "SELECT q-Secret-7"}'
 EOS
 mkdir -p "$TMP/pgmbin"; cp "$TMP/pgbin/podman-metrics" "$TMP/pgmbin/podman"; chmod +x "$TMP/pgmbin/podman"
 pg_mprobe() { PATH="$TMP/pgmbin:$PATH" PG_LOG="$TMP/pgmlog" PG_FAKE_SEC="$TMP/pg/sec" pg_probe "$@"; }
@@ -1119,7 +1119,7 @@ pg_t_metrics() {
   local c="$TMP/pg/state/postgres-metrics.json" j
   rm -f "$TMP/pgmlog".* "$c"; mkdir -p "$TMP/pg/state/services/postgres/data"
   j="$(pg_mprobe pg_metrics_json)" || return 1
-  jq -e '(keys_unsorted) == ["at","up","serverVersion","uptimeSec","connections","maxConnections","activeQueries",
+  jq -e '(keys_unsorted) == ["at","up","serverVersion","inRecovery","uptimeSec","connections","maxConnections","activeQueries",
           "dbSizeBytes","diskFreeBytes","diskTotalBytes","cacheHitRatio","xactCommit","xactRollback","deadlocks",
           "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastArchivedAt","archiveLagSec","replicationSlots"]
      and .up == true and .serverVersion == "17.6" and .connections == 7 and .cacheHitRatio == 0.9934
@@ -1259,7 +1259,7 @@ if have yq; then
   check "pg: metrics — every heartbeat carries postgres.metrics beside the existing fields; no secret or query text" 'pg_t_metrics_heartbeat'
   check "pg: the web admin is off by default; on/pgweb enable it, over sslmode=require while tls=on" 'pg_t_admin && grep -q "enabled_default: false" "$ROOT/capabilities/services.postgres/manifest.yaml"'
   check "pg: apply reconciles and reports; the healthcheck refreshes disk facts but never fails on them" \
-    'grep -q "pg_status_facts >/dev/null 2>&1 || true" "$ROOT/capabilities/services.postgres/healthcheck.sh" && grep -qE "^(if )?pg_reconcile[; ]" "$ROOT/capabilities/services.postgres/install.sh" && grep -q "^pg_report" "$ROOT/capabilities/services.postgres/install.sh"'
+    'grep -q "pg_status_facts >/dev/null 2>&1 || true" "$ROOT/capabilities/services.postgres/healthcheck.sh" && grep -qE "^(if |elif )?pg_reconcile[; ]" "$ROOT/capabilities/services.postgres/install.sh" && grep -q "^pg_report" "$ROOT/capabilities/services.postgres/install.sh"'
   check "control: a delivered secret never replaces a node-owned one (warned by name only); role passwords are delivered" 'pg_t_delivery'
   check "pg: dry-run enable pulls runtime.podman and renders the unit" \
     'run_aw --dry-run enable services.postgres && has "runtime.podman" && has "alwayswork-postgres.service" && has "postgres ready on 127.0.0.1:5432"'
@@ -1498,6 +1498,37 @@ bk_t_stanza_retry() {
   rm -f "$TMP/bklog.locks"; bk_off
   return "$r"
 }
+bk_t_seed() {
+  local r=0 st="$TMP/pg/state/services/postgres" a
+  bk_reset; bk_secrets; bk_on
+  # standby=on needs seed_from; with it, the repository read is the seed's.
+  pg_cfg '.capabilities.config.services.postgres.standby = "on"'
+  ! bk_probe pg_standby >/dev/null 2>&1 || r=1
+  pg_cfg '.capabilities.config.services.postgres.seed_from = "/contabo-use-1/app"'
+  [[ "$(bk_probe pg_backup_path)" == "/contabo-use-1/app" && "$(bk_probe pg_standby)" == on ]] || r=1
+  pg_cfg '.capabilities.config.services.postgres.seed_from = "/../etc"'
+  ! bk_probe pg_seed_from >/dev/null 2>&1 || r=1
+  pg_cfg '.capabilities.config.services.postgres.seed_from = "/contabo-use-1/app"'
+  # An empty data directory is seeded as a standby, from the seed's repository, in a throwaway container.
+  rm -rf "$st/data/pgdata"; rm -f "$TMP/bklog.argv"
+  bk_probe pg_seed_needed || r=1
+  bk_probe pg_seed_restore >/dev/null 2>&1 || r=1
+  a="$(grep "alwayswork-postgres-seed" "$TMP/bklog.argv" || true)"
+  [[ "$a" == *"--repo1-path=/contabo-use-1/app"* && "$a" == *"--type=standby"* && "$a" == *"--stanza=app"* ]] || { echo "$a"; r=1; }
+  # Data already there: never seeded again. A standby never creates a stanza.
+  mkdir -p "$st/data/pgdata"; echo 18 > "$st/data/pgdata/PG_VERSION"
+  ! bk_probe pg_seed_needed || r=1
+  rm -f "$TMP/bklog.argv" "$st/pgbackrest.stanza" "$st/pgbackrest.stanza.tried"
+  bk_probe pg_br_stanza_owed >/dev/null 2>&1; ! grep -q "stanza-create" "$TMP/bklog.argv" 2>/dev/null || r=1
+  # standby=off: the node's own path again, and a seeded restore is promoted (no --type).
+  pg_cfg '.capabilities.config.services.postgres.standby = "off"'
+  [[ "$(bk_probe pg_backup_path)" == "/$(hostname -s | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-\n' '-' | head -c 63)/app" ]] || r=1
+  rm -rf "$st/data/pgdata"; rm -f "$TMP/bklog.argv"
+  bk_probe pg_seed_restore >/dev/null 2>&1; ! grep "alwayswork-postgres-seed" "$TMP/bklog.argv" | grep -q -- "--type=standby" || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.standby) | del(.capabilities.config.services.postgres.seed_from)'
+  bk_off
+  return "$r"
+}
 bk_t_heartbeat() {
   local j r=0
   bk_reset; bk_secrets; bk_on
@@ -1550,6 +1581,7 @@ if have yq; then
   check "pg backup: the restore drill uses a scratch container, never the live data dir, checks disk first, records the result" 'bk_t_drill'
   check "pg backup: PITR restore needs --yes, moves the data dir aside (never deletes), restores to the target, verifies; a failure puts it back" 'bk_t_restore'
   check "pg: the stanza is retried past an archive-lock race, and owed from the heartbeat at most every ten minutes" 'bk_t_stanza_retry'
+  check "pg: seed_from restores an empty node from another's backup as a standby, never twice; standby=off is its own repository again" 'bk_t_seed'
   check "pg backup: heartbeat postgres.backup = {mode, lastBackupAt/Ok, lastDrillAt/Ok}, no secret" 'bk_t_heartbeat'
   check "pg backup: PGBACKREST_* are group secrets — imported from deliveries, never node-owned" 'bk_t_secrets'
   check "pg backup: image tracking compares the node-built image's base with the wanted one" 'bk_t_updates'

@@ -31,6 +31,12 @@
 #   backup_retention_full_weeks  PITR window in weeks (default 2 = 14 days)
 #   backup_monthly_keep          monthly fulls kept, one per month (default
 #                                12; 0 = no monthly repository)
+#   seed_from  another node's repository path (e.g. /contabo-use-1/mycel): an
+#              empty data directory is restored from it instead of initdb'd
+#              (needs backup=pgbackrest and the same group secrets)
+#   standby    on | off (default off): with seed_from, run as a standby that
+#              keeps replaying that node's archived WAL; set off to promote,
+#              after which this node backs up to its own path
 # Secrets (sealed store): POSTGRES_PASSWORD (superuser) and
 # POSTGRES_APP_PASSWORD are generated here and node-owned — a delivered group
 # secret never replaces them. PG_ROLE_<NAME>_PASSWORD is generated when
@@ -584,6 +590,7 @@ pg_report_json() {
 PG_METRICS_TTL="${PG_METRICS_TTL:-60}"
 PG_METRICS_SQL="SELECT json_build_object(
   'serverVersion', current_setting('server_version'),
+  'inRecovery', pg_is_in_recovery(),
   'uptimeSec', extract(epoch FROM now() - pg_postmaster_start_time())::bigint,
   'connections', (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::int,
   'maxConnections', current_setting('max_connections')::int,
@@ -616,6 +623,8 @@ pg_reconcile_pending_clear() { [[ "$DRY_RUN" == "1" ]] || rm -f "$(pg_reconcile_
 # heartbeat once the server answers, at most every ten minutes.
 pg_br_stanza_owed() {
   [[ "$DRY_RUN" != "1" ]] && pg_br_on || return 0
+  # A standby never creates a stanza: its repository is the node it was seeded from.
+  [[ "$(pg_standby)" == on ]] && return 0
   [[ "$(cat "$(pg_br_stanza_mark)" 2>/dev/null)" == "$(sha256sum < "$(pg_br_conf)" 2>/dev/null | cut -c1-16)" ]] && return 0
   local last; last="$(cat "$(pg_br_stanza_tried_file)" 2>/dev/null || echo 0)"
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
@@ -627,6 +636,7 @@ pg_br_stanza_owed() {
 pg_reconcile_owed() {
   pg_br_stanza_owed
   [[ -e "$(pg_reconcile_pending_file)" && "$DRY_RUN" != "1" ]] || return 0
+  pg_in_recovery && return 0
   PG_READY_TRIES=1 pg_reconcile || return 0
   pg_reconcile_pending_clear
   if pg_br_on; then pg_br_stanza_ensure || true; fi
@@ -650,7 +660,7 @@ pg_metrics_sample() {
     [[ "$free" =~ ^[0-9]+$ ]] || free=null
     [[ "$total" =~ ^[0-9]+$ ]] || total=null
     jq -c --arg at "$at" --argjson free "$free" --argjson total "$total" '
-      {at:$at, up:true, serverVersion, uptimeSec, connections, maxConnections, activeQueries,
+      {at:$at, up:true, serverVersion, inRecovery, uptimeSec, connections, maxConnections, activeQueries,
        dbSizeBytes, diskFreeBytes:$free, diskTotalBytes:$total, cacheHitRatio,
        xactCommit, xactRollback, deadlocks, longestQuerySec, longestTxSec,
        walArchivedCount, walFailedCount, lastArchivedAt, archiveLagSec, replicationSlots}' <<<"$row"
@@ -817,8 +827,23 @@ pg_backup_bucket() {
   printf '%s' "$b"
 }
 pg_node_name() { hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-\n' '-' | head -c 63; }
+pg_seed_from() {
+  local p; p="$(cap_config seed_from)"
+  [[ -z "$p" ]] && return 0
+  [[ "$p" =~ ^(/[A-Za-z0-9._-]+)+$ && ! "$p" =~ (^|/)\.\.?(/|$) && ${#p} -le 200 ]] \
+    || die "services.postgres: bad seed_from '$p' (/segment[/segment…], no . or ..)"
+  printf '%s' "$p"
+}
+pg_standby() {
+  local v; v="$(cap_config standby)"; [[ -n "$v" ]] || v=off
+  case "$v" in on|off) ;; *) die "services.postgres: bad standby '$v' (on|off)" ;; esac
+  [[ "$v" == on && -z "$(pg_seed_from)" ]] && die "services.postgres: standby=on needs seed_from"
+  printf '%s' "$v"
+}
+# A standby reads (archive-get) the repository it was seeded from and writes none.
 pg_backup_path() {
   local p; p="$(cap_config backup_path)"
+  if [[ "$(pg_standby)" == on ]]; then p="$(pg_seed_from)"; fi
   [[ -n "$p" ]] || p="/$(pg_node_name)/$(pg_db)"
   [[ "$p" =~ ^(/[A-Za-z0-9._-]+)+$ && ! "$p" =~ (^|/)\.\.?(/|$) && ${#p} -le 200 ]] \
     || die "services.postgres: bad backup_path '$p' (/segment[/segment…], no . or ..)"
@@ -1257,6 +1282,53 @@ pg_br_restore() {
   ok "postgres: restored to ${target:-the end of the archive} ($n databases); previous data kept at $aside — remove it once satisfied"
   run systemctl start --no-block "alwayswork-postgres-backup-full.service" || true
   info "a full backup of the new timeline has been started"
+}
+
+# --- seeding a node from another node's backup (standby, then promote) -------------------
+# A move to another node (another region): the new node restores the old node's latest
+# backup into its empty data directory and, with standby=on, keeps replaying the old node's
+# archived WAL (restore_command = pgBackRest archive-get from seed_from). Nothing is written
+# to that repository from here. standby=off promotes it; it then backs up to its own path.
+pg_in_recovery() {
+  [[ "$(pg_exec psql -X -At -U postgres -d postgres -c 'SELECT pg_is_in_recovery()' </dev/null 2>/dev/null)" == t ]]
+}
+pg_seed_needed() {
+  [[ -n "$(pg_seed_from)" ]] && pg_br_on && [[ ! -s "$(pg_data)/pgdata/PG_VERSION" ]]
+}
+pg_seed_restore() {
+  local conf type=standby
+  [[ "$(pg_standby)" == on ]] || type=default
+  log "services.postgres: seeding the empty data directory from $(pg_seed_from) ($([[ $type == standby ]] && echo standby || echo latest, promoted))"
+  if [[ "$DRY_RUN" == "1" ]]; then info "dry-run: pgbackrest --repo1-path=$(pg_seed_from) restore"; return 0; fi
+  pg_backup_check || { err "services.postgres: seeding needs the backup secrets"; return 1; }
+  conf="$(pg_root)/seed-conf"; [[ -e "$conf" ]] && run rm -rf "$conf"
+  # The repository is the seed's (--repo1-path below overrides the rendered own path).
+  pg_br_render "$conf" || return 1
+  local -a args=(--stanza="$(pg_stanza)" --repo=1 --pg1-path="$PG_PGDATA" "--repo1-path=$(pg_seed_from)")
+  [[ "$type" == standby ]] && args+=(--type=standby)
+  # shellcheck disable=SC2016  # $0/$@ belong to the container's shell
+  if ! pg_br_run "${PG_RESTORE_TIMEOUT:-21600}" "alwayswork-postgres-seed" \
+      --volume "$(pg_data):/var/lib/postgresql:U" \
+      --volume "$conf:$PG_BR_MNT:ro,U" \
+      --entrypoint /bin/sh "$(pg_image)" -c 'mkdir -p -m 0700 "$0" && exec pgbackrest "$@" restore' "$PG_PGDATA" "${args[@]}"; then
+    run rm -rf "$conf" "$(pg_data)/pgdata"
+    err "services.postgres: seeding from $(pg_seed_from) failed; the data directory is left empty and the next apply retries"
+    return 1
+  fi
+  run rm -rf "$conf"
+  ok "services.postgres: data directory seeded from $(pg_seed_from)"
+}
+# standby=off on a node still in recovery from its seed: promote, once the server answers.
+pg_promote_if_asked() {
+  [[ "$DRY_RUN" != "1" && -n "$(pg_seed_from)" && "$(pg_standby)" == off ]] || return 0
+  pg_wait_ready || return 1
+  pg_in_recovery || return 0
+  log "services.postgres: promoting (standby=off)"
+  pg_exec psql -X -At -U postgres -d postgres -c 'SELECT pg_promote(true, 300)' </dev/null >/dev/null 2>&1 || return 1
+  local i
+  for (( i = 0; i < 150; i++ )); do pg_in_recovery || { ok "services.postgres: promoted; this node is the primary now"; return 0; }; sleep 2; done
+  err "services.postgres: still in recovery after promote"
+  return 1
 }
 
 # --- aw service <action> postgres ------------------------------------------------------
