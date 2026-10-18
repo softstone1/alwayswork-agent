@@ -16,7 +16,7 @@
 #   hostnames extra DNS names for the server certificate (comma list), e.g.
 #             the tunnel name Hyperdrive verifies
 #   io_method Postgres 18+ asynchronous I/O: worker | sync | io_uring
-#             (default sync from 18 on; see pg_io_method)
+#             (default: the server's own, worker)
 #   memory_mb container memory budget (default: .limits.defaults.memory_mb)
 #   admin     web admin side-car: off (default) | pgweb (alias: on)
 #   admin_port loopback port of the admin UI (default 8081)
@@ -67,13 +67,10 @@ pg_data()    { printf '%s' "$(pg_root)/data"; }
 pg_backups() { printf '%s' "$(pg_root)/backups"; }
 pg_env_file(){ printf '%s' "$AW_ETC/postgres.env"; }
 pg_unit()    { wl_unit_name "$PG_ID"; }
-# Postgres 18's default, I/O worker processes, hung every connection in
-# authentication under this sandbox (userns=auto, cap-drop ALL; contabo-use-1,
-# Ubuntu 26.04) while plain Docker was fine; sync is the default from 18 on
-# until that is understood. An explicit value always wins.
+# io_method: the server's own default unless set. (A sync default from 18 on was a workaround
+# while the I/O workers looked guilty; the cause was no-new-privileges, see pg_workload_vars.)
 pg_io_method() {
   local m; m="$(cap_config io_method)"
-  if [[ -z "$m" ]] && (( $(pg_version | cut -d. -f1) >= 18 )); then m=sync; fi
   case "$m" in ''|worker|sync|io_uring) printf '%s' "$m" ;; *) die "services.postgres: bad io_method '$m' (worker|sync|io_uring)" ;; esac
 }
 pg_tls()     { local t; t="$(cap_config tls)"; [[ -n "$t" ]] || t=on; case "$t" in on|off) printf '%s' "$t" ;; *) die "services.postgres: bad tls '$t' (on|off)" ;; esac; }
@@ -372,6 +369,14 @@ pg_workload_vars() {
   [[ -z "$dd" || "$dd" =~ ^(userns|cpus|capdrop|nnp|pids|health)(,(userns|cpus|capdrop|nnp|pids|health))*$ ]] \
     || die "services.postgres: bad debug_drop '$dd'"
   WL_DEBUG_DROP="$dd"
+  # No no-new-privileges for Postgres. Under Podman with it, wake-ups between Postgres processes
+  # never arrive: every login hung at first start (I/O workers), and a backup waited for ever for
+  # its checkpoint (contabo-use-1, contabo-usc-1; Ubuntu 24.04 and 26.04). Bisected on a probe node:
+  # that flag alone. What it guards against — gaining privileges through a setuid binary — is
+  # already closed here: every capability is dropped (so the bounding set is empty and a setuid
+  # binary gains none), the server runs as uid 999, and --userns=auto maps it to an unprivileged
+  # host range.
+  WL_NO_NNP=1
   mem="$(cap_config memory_mb)"
   WL_NAME="$PG_ID"
   WL_IMAGE="$(pg_image)"
@@ -663,8 +668,29 @@ pg_br_drill_owed() {
   info "services.postgres: first restore drill started after the first good backup"
 }
 
+# A first full backup that never finished (killed with the server, or stuck before the cause
+# above was found) is started again from the heartbeat: once the stanza is ready, while nothing
+# is running, at most once an hour.
+pg_br_full_owed() {
+  [[ "$DRY_RUN" != "1" ]] && pg_br_on && have systemctl || return 0
+  [[ "$(pg_standby)" == on ]] && return 0
+  [[ "$(cat "$(pg_br_stanza_mark)" 2>/dev/null)" == "$(sha256sum < "$(pg_br_conf)" 2>/dev/null | cut -c1-16)" ]] || return 0
+  jq -e '.lastBackupOk == true' "$(pg_br_status_file)" >/dev/null 2>&1 && return 0
+  local u
+  for u in postgres-backup-full postgres-backup-diff postgres-backup-monthly postgres-restore-drill; do
+    [[ "$(systemctl is-active "alwayswork-$u.service" 2>/dev/null)" == activating ]] && return 0
+  done
+  local f last; f="$(pg_br_stanza_mark).full-started"
+  last="$(cat "$f" 2>/dev/null || echo 0)"; [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  (( $(date +%s) - last >= ${PG_BR_FULL_EVERY:-3600} )) || return 0
+  date +%s > "$f"
+  run systemctl start --no-block alwayswork-postgres-backup-full.service || true
+  info "services.postgres: full backup started (none has succeeded yet)"
+}
+
 pg_reconcile_owed() {
   pg_br_stanza_owed
+  pg_br_full_owed
   pg_br_drill_owed
   [[ -e "$(pg_reconcile_pending_file)" && "$DRY_RUN" != "1" ]] || return 0
   pg_in_recovery && return 0
@@ -1186,7 +1212,8 @@ pg_br_backup() {
 pg_br_run() {
   local secs="$1" name="$2"; shift 2
   local net; net="$(cap_config network)"; [[ -n "$net" ]] || net=alwayswork
-  engine_build_args
+  # The drill and a restore start Postgres too: the same no-new-privileges exception (pg_workload_vars).
+  WL_NO_NNP=1 engine_build_args
   local -a cmd=(podman run --rm --name "$name" "${AW_ENGINE_ARGS[@]}" --userns=auto --user 999:999 --network "$net"
     --shm-size 256m --label "dev.alwayswork.service=postgres" --label "dev.alwayswork.job_of=$PG_ID" "$@")
   run podman rm -f --ignore "$name" >/dev/null 2>&1 || true
