@@ -366,6 +366,8 @@ control_health_json() {
   # lines: a --rm container that dies at start leaves nothing in podman ps,
   # only its unit's journal (live: Postgres exiting 2 on contabo-use-1).
   local fu; if fu="$(health_failing_units_json 2>/dev/null)"; then _health_raw failingUnits "$fu"; fi
+  local la; la="$(jq -c 'select(type == "object")' "$AW_STATE/last-apply.json" 2>/dev/null || true)"
+  [[ -n "$la" ]] && _health_raw lastApply "$la"
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
   # Inventory (capacity, not load): what this box is made of.

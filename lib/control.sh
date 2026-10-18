@@ -706,10 +706,17 @@ control_apply_delivery() {
   # A failed apply must never be recorded or acked as successful: the version
   # stays unacked so the next tick retries the delivery instead of the node
   # drifting from the control plane in silence.
-  if ! run "$AW_ROOT/bin/alwayswork" apply; then
+  # The apply's own output is kept for the heartbeat (lastApply): a node with no shell has no other
+  # way to say why its apply fails (contabo-usc-1, a standby seed that never started).
+  local alog arc=0; alog="$(mktemp)"
+  run "$AW_ROOT/bin/alwayswork" apply >"$alog" 2>&1 || arc=$?
+  cat "$alog" >&2
+  if (( arc != 0 )); then
+    control_note_apply "$ver" 0 "$alog"; rm -f "$alog"
     err "control: apply of version $ver failed"
     return 1
   fi
+  control_note_apply "$ver" 1 "$alog"; rm -f "$alog"
   # Deferred lockdown: public SSH goes off only once the node is active AND
   # reachable through its tunnel — never at install time, where it would cut
   # off access before the tunnel is verified. A deferred lockdown keeps the
@@ -723,6 +730,20 @@ control_apply_delivery() {
   # Record the applied version only after the reconcile succeeded, so a failed
   # apply stays unacked and is retried on the next tick.
   cfg_set_expr '.control.appliedVersion' "$ver"
+}
+
+# control_note_apply <version> <ok 1|0> <log>: the last apply's outcome for the heartbeat — on a
+# failure its last error/warning lines, redacted of known secret shapes, at most 1500 characters.
+control_note_apply() {
+  local ver="$1" ok="$2" log="$3" tail=""
+  if [[ "$ok" == 0 ]]; then
+    tail="$(grep -E 'error|warn|ERROR|FATAL|failed|refused|die' "$log" 2>/dev/null | tail -n 12 \
+      | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig; s/aj_[A-Za-z0-9_-]+/aj_[redacted]/g; s/awd_[A-Za-z0-9_-]+/awd_[redacted]/g' \
+      | tr -cd '[:print:]\n' | tail -c 1500)"
+    [[ -n "$tail" ]] || tail="$(tail -n 8 "$log" 2>/dev/null | tr -cd '[:print:]\n' | tail -c 800)"
+  fi
+  jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson v "${ver:-0}" --argjson ok "$([[ $ok == 1 ]] && echo true || echo false)" --arg t "$tail" \
+    '{at:$at, version:$v, ok:$ok, errorTail:(if $t == "" then null else $t end)}' | aw_write "$AW_STATE/last-apply.json" 2>/dev/null || true
 }
 
 # control_apply_lockdown <delivery-json> — the zero-touch finale.
