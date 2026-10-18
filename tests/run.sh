@@ -1278,6 +1278,9 @@ case "$1" in
   exec)
     in="$(cat)"; [[ -n "$in" ]] && printf '%s\n' "$in" >> "$PG_LOG.stdin"
     case "$*" in
+      *" pgbackrest "*" stanza-create")
+        n="$(cat "$PG_LOG.locks" 2>/dev/null || echo 0)"
+        if (( n > 0 )); then echo $((n - 1)) > "$PG_LOG.locks"; echo "P00  ERROR: [050]: unable to acquire lock on file '/tmp/pgbackrest/app-archive-1.lock'" >&2; exit 50; fi ;;
       *" pgbackrest "*" backup")
         if [[ -n "${BR_FAIL:-}" ]]; then echo "P00  ERROR: [039]: access denied: $BR_FAIL" >&2; exit 39; fi
         echo "P00   INFO: backup command end: completed successfully" ;;
@@ -1479,6 +1482,22 @@ bk_t_restore() {
   ! bk_probe pg_restore --latest --yes >/dev/null 2>&1 || r=1
   return "$r"
 }
+bk_t_stanza_retry() {
+  local r=0 st="$TMP/pg/state/services/postgres"
+  bk_reset; bk_secrets; bk_on
+  bk_probe pg_br_render >/dev/null 2>&1 || return 1
+  # One archive-lock refusal, then success: retried, ready, the first full backup started.
+  echo 1 > "$TMP/bklog.locks"; rm -f "$st/pgbackrest.stanza" "$st/pgbackrest.stanza.tried"
+  PG_BR_STANZA_WAIT=0 bk_probe pg_br_stanza_ensure >/dev/null 2>&1 || r=1
+  [[ "$(grep -c "stanza-create" "$TMP/bklog.argv")" == 2 && -s "$st/pgbackrest.stanza" ]] || r=1
+  # Owed from the heartbeat: not again within ten minutes of a try, then yes.
+  rm -f "$TMP/bklog".argv "$st/pgbackrest.stanza"; date +%s > "$st/pgbackrest.stanza.tried"
+  bk_probe pg_br_stanza_owed >/dev/null 2>&1; ! grep -q "stanza-create" "$TMP/bklog.argv" 2>/dev/null || r=1
+  echo 0 > "$st/pgbackrest.stanza.tried"
+  bk_probe pg_br_stanza_owed >/dev/null 2>&1; grep -q "stanza-create" "$TMP/bklog.argv" && [[ -s "$st/pgbackrest.stanza" ]] || r=1
+  rm -f "$TMP/bklog.locks"; bk_off
+  return "$r"
+}
 bk_t_heartbeat() {
   local j r=0
   bk_reset; bk_secrets; bk_on
@@ -1530,6 +1549,7 @@ if have yq; then
   check "pg backup: on-demand and scheduled runs exec pgBackRest in the live container and record aw.facts; failures are redacted" 'bk_t_backup'
   check "pg backup: the restore drill uses a scratch container, never the live data dir, checks disk first, records the result" 'bk_t_drill'
   check "pg backup: PITR restore needs --yes, moves the data dir aside (never deletes), restores to the target, verifies; a failure puts it back" 'bk_t_restore'
+  check "pg: the stanza is retried past an archive-lock race, and owed from the heartbeat at most every ten minutes" 'bk_t_stanza_retry'
   check "pg backup: heartbeat postgres.backup = {mode, lastBackupAt/Ok, lastDrillAt/Ok}, no secret" 'bk_t_heartbeat'
   check "pg backup: PGBACKREST_* are group secrets — imported from deliveries, never node-owned" 'bk_t_secrets'
   check "pg backup: image tracking compares the node-built image's base with the wanted one" 'bk_t_updates'
