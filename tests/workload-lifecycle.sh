@@ -48,6 +48,19 @@ pkg_oci_render_env '{"name":"test","manifest":{"secrets":["TOKEN"]}}' && exit 1
 [[ "$(cat "$AW_ETC/pkg-test.env")" == old=retained ]]
 echo 'ok: missing and multiline credentials fail closed without replacing the env file'
 
+TEST_SECRET='bot:ghp_x'
+pkg_oci_authfile ghcr.io/acme/feeds:1 PULL "$TEST_DIR/auth.json"
+[[ "$(stat -c %a "$TEST_DIR/auth.json" 2>/dev/null || stat -f %Lp "$TEST_DIR/auth.json")" == 600 ]]
+[[ "$(jq -r '.auths["ghcr.io"].auth | @base64d' "$TEST_DIR/auth.json")" == 'bot:ghp_x' ]]
+pkg_oci_authfile acme/feeds:1 PULL "$TEST_DIR/hub.json"
+jq -e '.auths["docker.io"]' "$TEST_DIR/hub.json" >/dev/null
+TEST_SECRET='no-colon'
+pkg_oci_authfile ghcr.io/acme/feeds:1 PULL "$TEST_DIR/bad.json" && exit 1
+TEST_SECRET=''
+pkg_oci_authfile ghcr.io/acme/feeds:1 PULL "$TEST_DIR/bad.json" && exit 1
+pkg_oci_authfile ghcr.io/acme/feeds:1 'bad name' "$TEST_DIR/bad.json" && exit 1
+echo 'ok: a pull secret becomes a 0600 auth file for its registry; missing or malformed ones fail closed'
+
 source "$ROOT/commands/apply.sh"
 require_root() { :; }; cfg_require() { :; }; cfg_need() { :; }; aw_state_init() { :; }
 cfg_file() { echo test; }; cfg_bool() { return 1; }; power_apply() { :; }; aw_agent_reload_if_stale() { :; }
