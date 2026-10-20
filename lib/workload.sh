@@ -49,7 +49,8 @@ wl_snapshot() {
 
 # --- image ---------------------------------------------------------------------------
 # Pull a pinned image; when a Containerfile directory is given and the pull
-# fails, build the identical file locally.
+# fails, build the identical file locally. WL_AUTHFILE (optional) is a 0600
+# registry auth file for a private image; it is a path, never the credential.
 wl_ensure_image() {
   local img="$1" build_dir="${2:-}"; shift 2 || true
   [[ "$img" =~ ^[A-Za-z0-9._/:@-]+$ ]] || die "workload: refusing suspicious image '$img'"
@@ -62,7 +63,8 @@ wl_ensure_image() {
   fi
   if [[ "${WL_BUILD:-}" != "true" ]]; then
     log "workload: pulling $img"
-    if run podman pull "$img" >/dev/null; then ok "pulled $img"; return 0; fi
+    local -a auth=(); [[ -n "${WL_AUTHFILE:-}" ]] && auth=(--authfile "$WL_AUTHFILE")
+    if run podman pull "${auth[@]}" "$img" >/dev/null; then ok "pulled $img"; return 0; fi
     [[ -n "$build_dir" ]] || die "workload: could not pull $img"
     warn "workload: pull failed; building the same image locally"
   fi

@@ -62,6 +62,11 @@ for `packages` through the bridge (`OBJECTIVES.md`).
   ones as `<name>-<port>`.
 - `secrets` are names in the group's sealed secrets (`aw secrets`); a
   missing one is a warning, the container starts without it.
+- `pullSecret` (optional) names a sealed secret holding `user:token` for a
+  private registry (e.g. a GitHub token with only `read:packages` for
+  `ghcr.io`). The node writes it to a 0600 podman auth file for that one pull
+  and deletes it; it never enters the container's environment. A missing or
+  malformed value fails the package closed.
 - `health` is an argv; the unit stops the container when it fails and
   systemd restarts it.
 - The container runs with the same hardening as every workload; images

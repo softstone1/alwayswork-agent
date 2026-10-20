@@ -146,7 +146,13 @@ pkg_oci_apply() {
   mapfile -t WL_ARGS < <(jq -r '.manifest.args[]?' <<<"$p")
   pkg_oci_render_env "$p" || return 1
   WL_ENV_FILE="$(pkg_env_file "$name")"
-  wl_ensure_image "$image" || { err "packages: $name: image pull failed"; return 1; }
+  local pull_secret authdir=""; pull_secret="$(jq -r '.manifest.pullSecret // ""' <<<"$p")"
+  if [[ -n "$pull_secret" ]]; then
+    authdir="$(mktemp -d)" || { err "packages: $name: cannot stage registry auth"; return 1; }
+    pkg_oci_authfile "$image" "$pull_secret" "$authdir/auth.json" || { rm -rf "$authdir"; err "packages: $name: pull secret $pull_secret is missing or not user:token"; return 1; }
+  fi
+  WL_AUTHFILE="${authdir:+$authdir/auth.json}" wl_ensure_image "$image" || { [[ -z "$authdir" ]] || rm -rf "$authdir"; err "packages: $name: image pull failed"; return 1; }
+  [[ -z "$authdir" ]] || rm -rf "$authdir"
   wl_apply_unit || return 1
   pkg_clear_surfaces "$name"
   # Every published port is a surface (SYSTEM_SPEC §12.8): the first under
@@ -185,6 +191,21 @@ pkg_oci_render_env() {
   } > "$tmp"
   if (( invalid )); then rm -f "$tmp"; return 1; fi
   mv -f "$tmp" "$dest"; chmod 600 "$dest"
+}
+
+# A private image's registry login: `pullSecret` names a sealed secret holding
+# `user:token` (a read-only registry token). It becomes a 0600 podman auth
+# file for this one pull and is removed after it; it never reaches the
+# container's environment, a unit file or a command line.
+# pkg_oci_authfile <image> <secret-name> <dest>
+pkg_oci_authfile() {
+  local image="$1" k="$2" dest="$3" host v
+  [[ "$k" =~ ^[A-Z][A-Z0-9_]{0,63}$ ]] || return 1
+  host="${image%%/*}"
+  [[ "$image" == */* && ( "$host" == *.* || "$host" == *:* ) ]] || host=docker.io
+  v="$(sec_get "$k" 2>/dev/null || true)"
+  [[ "$v" =~ ^[^:[:space:]]+:[^[:space:]]+$ ]] || return 1
+  (umask 077; printf '%s' "$v" | jq -Rc --arg h "$host" '{auths: {($h): {auth: @base64}}}' > "$dest") || return 1
 }
 
 # --- kind: capability ---------------------------------------------------------------
