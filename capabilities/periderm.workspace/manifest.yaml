@@ -1,0 +1,16 @@
+id: periderm.workspace
+name: Periderm workspaces
+description: Sandboxed per-session change workspaces for Periderm, egress only through an allowlisting proxy, previews published through the tunnel.
+version: 1
+requires: [core, runtime.podman]
+profiles: [full]
+# What this capability deploys (PERIDERM_TECHNICAL_SPEC §7.2, §9.1). There is
+# no fixed image or surface: the control plane delivers each session's
+# workspace image, the proxy image and the egress allowlist in desired state
+# (`periderm`), and each previewing session reports one surface (pv-<hex>).
+# lib/periderm.sh reconciles them; this directory only prepares the node.
+workload:
+  id: periderm
+  kind: workload
+  networks: [periderm, periderm-egress]
+  workspace: volume

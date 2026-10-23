@@ -146,7 +146,7 @@ forge deliveries.
 |--------|------------|
 | Exposed service on the WAN | nothing listens publicly; tunnel is outbound-only |
 | Stolen disk | **not covered by default** — decide on LUKS at install time |
-| Malicious agent output | ephemeral containers, `cap-drop ALL`, no socket, resource caps, egress proxy recommended |
+| Malicious agent output | ephemeral containers, `cap-drop ALL`, no socket, resource caps; egress proxy enforced for Periderm workspaces (`--internal` network + allowlist proxy), recommended elsewhere |
 | Leaked API keys | sops+age store, mode 600, never in git or images |
 | Forged control-plane delivery (compromised proxy / stolen TLS session) | Ed25519-signed deliveries, key pinned at enrollment, sequence + expiry; unsigned, tampered, expired, or rolled-back deliveries are refused and keep last-known-good config |
 | Replay of an old signed delivery | monotonic sequence: older-than-applied deliveries are refused, never acknowledged |
@@ -220,7 +220,8 @@ fixes it. `aw status` prints a
 
 - Disk encryption (LUKS) — must be chosen before install
 - Cloudflare Access identity/MFA in front of any tunnel hostname
-- Egress allowlist for agent containers
+- Egress allowlist for agent containers (Periderm workspaces have one:
+  `periderm.workspace`, see `docs/WORKLOADS.md`; other workloads do not)
 - Rotating provider keys on a schedule
 - 2FA on GitHub, Cloudflare and every LLM provider account
 

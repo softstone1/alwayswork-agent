@@ -717,6 +717,13 @@ control_apply_delivery() {
     return 1
   fi
   control_note_apply "$ver" 1 "$alog"; rm -f "$alog"
+  # Periderm workspaces (lib/periderm.sh): after `apply`, so the capability,
+  # podman and the networks are in place first. Failure-isolated like the
+  # packages: a workspace that cannot start is logged, and never keeps the
+  # rest of this version from being applied and acked.
+  if declare -F periderm_apply_from_delivery >/dev/null; then
+    ( periderm_apply_from_delivery "$json" ) || warn "control: periderm workspaces of version $ver did not fully converge"
+  fi
   # Deferred lockdown: public SSH goes off only once the node is active AND
   # reachable through its tunnel — never at install time, where it would cut
   # off access before the tunnel is verified. A deferred lockdown keeps the

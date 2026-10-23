@@ -1035,6 +1035,32 @@
       "workload": null
     },
     {
+      "description": "Sandboxed per-session change workspaces for Periderm, egress only through an allowlisting proxy, previews published through the tunnel.",
+      "id": "periderm.workspace",
+      "name": "Periderm workspaces",
+      "package": {
+        "instanceModel": "singleton-per-machine",
+        "role": "application"
+      },
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 1,
+      "workload": {
+        "id": "periderm",
+        "kind": "workload",
+        "networks": [
+          "periderm",
+          "periderm-egress"
+        ],
+        "workspace": "volume"
+      }
+    },
+    {
       "description": "Docker engine with hardened defaults and no socket exposure to workers.",
       "id": "runtime.docker",
       "name": "Docker runtime",

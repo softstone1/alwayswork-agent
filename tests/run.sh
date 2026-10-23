@@ -2299,5 +2299,16 @@ echo
 check "workload reconciliation and argument boundary regressions" 'bash "$ROOT/tests/workload-lifecycle.sh"'
 check "scoped node update regressions" 'bash "$ROOT/tests/node-updates.sh"'
 check "infraAccess: awinfra0 + dedicated sshd via Access for Infrastructure" 'bash "$ROOT/tests/infra-access.sh" > "$TMP/infra.out" 2>&1 || { grep "FAIL" "$TMP/infra.out"; false; }'
+
+echo "== periderm.workspace =="
+check "control_apply_delivery reconciles periderm after apply, failure-isolated" \
+  'grep -q "( periderm_apply_from_delivery \"\$json\" ) || warn" "$ROOT/lib/control.sh" && grep -q "source \"\$AW_ROOT/lib/periderm.sh\"" "$ROOT/bin/alwayswork"'
+if yq --version 2>/dev/null | grep -qi mikefarah; then
+  check "periderm.workspace: networks, proxy, workspace and preview units, token, removal, gate (tests/periderm-workspace.sh)" \
+    'bash "$ROOT/tests/periderm-workspace.sh" > "$TMP/periderm.out" 2>&1 || { grep -E "FAIL|passed" "$TMP/periderm.out"; false; }'
+  tail -n 1 "$TMP/periderm.out" 2>/dev/null | sed 's/^/       /'
+else
+  echo "  skip  periderm.workspace (mikefarah yq missing)"
+fi
 printf 'passed: %s   failed: %s\n'  "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]
