@@ -43,6 +43,9 @@ pd_volume()       { printf 'alwayswork-pdws-%s' "$1"; }
 pd_ws_name()      { printf 'pdws-%s' "$1"; }
 pd_pv_name()      { printf 'pdpv-%s' "$1"; }
 pd_enabled()      { cfg_list '.capabilities.enabled' 2>/dev/null | grep -qx -- "$PD_CAP"; }
+# The builder role (lib/periderm-trust.sh) builds through the same proxy: on
+# a node that has it, the proxy is never removed for want of workspaces.
+pd_proxy_kept()   { cfg_list '.capabilities.enabled' 2>/dev/null | grep -qx -- periderm.builder; }
 pd_control_url()  { cfg_get '.control.url' "${ALWAYSWORK_CONTROL_URL:-}"; }
 
 # pd_preview_port <hex>: the session's loopback port, deterministic in the
@@ -255,7 +258,7 @@ pd_remove_proxy() { pd_remove_unit "$PD_PROXY"; }
 pd_remove_all() {
   local hex rc=0
   while IFS= read -r hex; do [[ -n "$hex" ]] && { pd_remove_session "$hex" || rc=1; }; done < <(pd_present)
-  pd_remove_proxy || rc=1
+  pd_proxy_kept || pd_remove_proxy || rc=1
   while IFS= read -r hex; do [[ -n "$hex" ]] && wl_unreport_service "pv-$hex"; done < <(pd_stale_surfaces)
   return "$rc"
 }
@@ -285,7 +288,7 @@ periderm_apply_from_delivery() {
       warn "periderm: desired state carries workspaces but $PD_CAP is not enabled here; ignoring them"
     fi
     # Leftovers of a capability since removed: nothing Periderm runs without it.
-    if [[ -n "$(pd_present)" || -f "$WL_UNIT_DIR/$(wl_unit_name "$PD_PROXY")" || -n "$(pd_stale_surfaces)" ]]; then
+    if [[ -n "$(pd_present)" || -n "$(pd_stale_surfaces)" ]] || { [[ -f "$WL_UNIT_DIR/$(wl_unit_name "$PD_PROXY")" ]] && ! pd_proxy_kept; }; then
       pd_remove_all || return 1
     fi
     return 0
@@ -364,7 +367,7 @@ periderm_apply_from_delivery() {
     (( keep )) || pd_remove_session "$have_hex" || rc=1
   done < <(pd_present)
   while IFS= read -r have_hex; do [[ -n "$have_hex" ]] && wl_unreport_service "pv-$have_hex"; done < <(pd_stale_surfaces "${want[@]:-}")
-  (( active > 0 )) || pd_remove_proxy || rc=1
+  (( active > 0 )) || pd_proxy_kept || pd_remove_proxy || rc=1
   (( n > 0 )) && info "periderm: $n workspace(s) in desired state ($active running)"
   return "$rc"
 }

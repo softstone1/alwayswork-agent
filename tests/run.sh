@@ -2310,5 +2310,16 @@ if yq --version 2>/dev/null | grep -qi mikefarah; then
 else
   echo "  skip  periderm.workspace (mikefarah yq missing)"
 fi
+
+echo "== periderm trust roles =="
+check "periderm job/watchdog run through 'aw periderm' (dispatch + lib sourced)" \
+  'grep -q "|periderm|help)" "$ROOT/bin/alwayswork" && grep -q "source \"\$AW_ROOT/lib/periderm-trust.sh\"" "$ROOT/bin/alwayswork"'
+if yq --version 2>/dev/null | grep -qi mikefarah; then
+  check "periderm builder/verifier/runtime: signed work, build, verify, activations, revert, backup (tests/periderm-trust.sh)" \
+    'bash "$ROOT/tests/periderm-trust.sh" > "$TMP/periderm-trust.out" 2>&1 || { grep -E "FAIL|passed" "$TMP/periderm-trust.out"; false; }'
+  tail -n 1 "$TMP/periderm-trust.out" 2>/dev/null | sed 's/^/       /'
+else
+  echo "  skip  periderm trust roles (mikefarah yq missing)"
+fi
 printf 'passed: %s   failed: %s\n'  "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

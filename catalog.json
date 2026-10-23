@@ -1035,6 +1035,67 @@
       "workload": null
     },
     {
+      "description": "Builds Periderm candidate images from signed build work, on the internal periderm network through the egress proxy (never --network=host), and uploads them to the control plane.",
+      "id": "periderm.builder",
+      "name": "Periderm builder",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "Runs Periderm production releases from activations in desired state, with a per-app listener, local probe-driven switch and revert, and volume backups on signed work.",
+      "id": "periderm.runtime",
+      "name": "Periderm runtime",
+      "package": {
+        "instanceModel": "singleton-per-machine",
+        "role": "application"
+      },
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 1,
+      "workload": {
+        "id": "periderm-apps",
+        "kind": "workload",
+        "networks": [
+          "alwayswork"
+        ],
+        "workspace": "volume"
+      }
+    },
+    {
+      "description": "Verifies Periderm candidates and backups from signed verify work in a clean T2 instance, and signs receipts with this node's key. Runs alone - it holds the host podman socket.",
+      "id": "periderm.verifier",
+      "name": "Periderm verifier",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
+      "profiles": [
+        "full"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
       "description": "Sandboxed per-session change workspaces for Periderm, egress only through an allowlisting proxy, previews published through the tunnel.",
       "id": "periderm.workspace",
       "name": "Periderm workspaces",

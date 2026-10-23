@@ -91,9 +91,18 @@ control_sign() {
   local msg sig
   msg="$(mktemp)"
   printf '%s' "$1" > "$msg"
-  sig="$(openssl pkeyutl -sign -inkey "$(control_key_file)" -rawin -in "$msg" 2>/dev/null | base64 -w0)"
+  sig="$(control_sign_file "$msg")"
   rm -f "$msg"
   [[ -n "$sig" ]] || die "control: could not sign request (openssl)"
+  printf '%s' "$sig"
+}
+
+# control_sign_file <path> — the device key's Ed25519 signature (base64) over
+# the exact bytes of a file. Prints nothing and fails when openssl cannot sign.
+control_sign_file() {
+  local sig
+  sig="$(openssl pkeyutl -sign -inkey "$(control_key_file)" -rawin -in "$1" 2>/dev/null | base64 -w0)"
+  [[ -n "$sig" ]] || return 1
   printf '%s' "$sig"
 }
 
@@ -126,28 +135,34 @@ _control_is_revoked() {
 # `new URL(req.url).pathname`. Letting "?since=N" leak into the canonical text
 # made every signed GET fail verification (401), which the client then mistook
 # for an empty delivery and re-applied defaults on every tick.
-control_call() {
-  local method="${1^^}" path="$2" body="${3:-}" header_file="${4:-}"
-  local url ts nonce bodyhash canonical sig signed_path resp http
-  url="$(control_url)"
-  signed_path="${path%%\?*}"
+# _control_auth_headers METHOD PATH BODY_SHA256 — the four device-signature
+# headers for one request, into CONTROL_AUTH_HEADERS (curl -H pairs). The
+# signature covers METHOD, the path without its query, a timestamp, a nonce
+# and the body's sha256; shared by JSON calls and raw byte transfers.
+_control_auth_headers() {
+  local method="$1" signed_path="${2%%\?*}" bodyhash="$3" ts nonce sig
   ts="$(date +%s)"
   nonce="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d '[:space:]')"
-  bodyhash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
-  canonical="$method
+  sig="$(control_sign "$method
 $signed_path
 $ts
 $nonce
-$bodyhash"
-  sig="$(control_sign "$canonical")"
+$bodyhash")"
+  CONTROL_AUTH_HEADERS=(-H "x-device-id: $(control_device_id)" -H "x-timestamp: $ts" -H "x-nonce: $nonce" -H "x-signature: $sig")
+}
+
+control_call() {
+  local method="${1^^}" path="$2" body="${3:-}" header_file="${4:-}"
+  local url bodyhash signed_path resp http
+  url="$(control_url)"
+  signed_path="${path%%\?*}"
+  bodyhash="$(printf '%s' "$body" | sha256sum | cut -d' ' -f1)"
+  _control_auth_headers "$method" "$path" "$bodyhash"
   # Bounded: an agent tick must never hang forever on one stalled connection.
   # -w appends the HTTP status on its own last line so we can tell a refused
   # credential (revocation) apart from a transient failure.
   local -a args=(-sS --connect-timeout 5 --max-time 30 -X "$method" "$url$path"
-    -H "x-device-id: $(control_device_id)"
-    -H "x-timestamp: $ts"
-    -H "x-nonce: $nonce"
-    -H "x-signature: $sig"
+    "${CONTROL_AUTH_HEADERS[@]}"
     -w '\n%{http_code}')
   [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data "$body")
   # Optional 4th arg: capture the response headers (for delivery signature
@@ -176,6 +191,32 @@ $bodyhash"
     warn "control: $method $signed_path rejected -> $(jq -c '.error' <<<"$resp")"
   fi
   printf '%s' "$resp"
+}
+
+# control_call_raw METHOD PATH IN_FILE OUT_FILE [MAX_TIME] — a signed device
+# request whose body is the raw bytes of IN_FILE ("" = empty body) and whose
+# response body goes to OUT_FILE: Periderm uploads, upload parts and blob
+# downloads (§9.3). The signature covers the body's sha256 like any other
+# device call. Returns 0 on 2xx, 1 on network/HTTP failure (the status is in
+# the warning), 2 when the response is a revocation signal.
+control_call_raw() {
+  local method="${1^^}" path="$2" infile="${3:-}" outfile="$4" max="${5:-600}" bodyhash http
+  if [[ -n "$infile" ]]; then bodyhash="$(sha256sum "$infile" | cut -d' ' -f1)"
+  else bodyhash="$(printf '' | sha256sum | cut -d' ' -f1)"; fi
+  _control_auth_headers "$method" "$path" "$bodyhash"
+  local -a args=(-sS --connect-timeout 10 --max-time "$max" -X "$method" "$(control_url)$path"
+    "${CONTROL_AUTH_HEADERS[@]}" -o "$outfile" -w '%{http_code}')
+  [[ -n "$infile" ]] && args+=(-H 'content-type: application/octet-stream' --data-binary "@$infile")
+  if ! http="$(curl "${args[@]}" 2>/dev/null)"; then
+    warn "control: $method ${path%%\?*} failed (network)"
+    return 1
+  fi
+  [[ "$http" =~ ^2[0-9][0-9]$ ]] && return 0
+  if [[ -s "$outfile" ]] && (( $(stat -c %s "$outfile" 2>/dev/null || echo 0) < 65536 )) && _control_is_revoked "$(cat "$outfile")"; then
+    return 2
+  fi
+  warn "control: $method ${path%%\?*} -> HTTP ${http:-?}"
+  return 1
 }
 
 # --- control-plane key pinning and delivery verification -----------------------
@@ -257,10 +298,9 @@ control_verify_delivery() {
     err "control: delivery is not signed (missing x-aw-sig-* headers); refusing"
     return 1
   fi
-  local f pinned_kid pinned_key
+  local f pinned_kid
   f="$(control_pubkey_file)"
   pinned_kid="$(jq -r '.kid // ""' "$f" 2>/dev/null)"
-  pinned_key="$(jq -r '.publicKey // ""' "$f" 2>/dev/null)"
   if [[ -z "$pinned_kid" ]]; then
     err "control: no pinned control-plane key; refusing delivery"
     return 1
@@ -283,24 +323,37 @@ control_verify_delivery() {
   # shellcheck disable=SC2064
   trap "rm -rf '$tmp'" EXIT
   printf 'AW-DESIRED-V1\n%s\n%s\n%s\n%s' "$(control_device_id)" "$seq" "$exp" "$hash" > "$tmp/canonical"
-  if ! printf '%s' "$sig" | base64 -d > "$tmp/sig" 2>/dev/null; then
-    err "control: delivery signature is not valid base64; refusing"
-    rm -rf "$tmp"; trap - EXIT; return 1
-  fi
-  if ! printf '%s' "$pinned_key" | base64 -d > "$tmp/pub.der" 2>/dev/null || \
-     ! openssl pkey -pubin -inform DER -in "$tmp/pub.der" -outform PEM -out "$tmp/pub.pem" 2>/dev/null; then
-    err "control: pinned control-plane key is corrupt; refusing"
-    rm -rf "$tmp"; trap - EXIT; return 1
-  fi
-  if openssl pkeyutl -verify -pubin -inkey "$tmp/pub.pem" -rawin \
-       -in "$tmp/canonical" -sigfile "$tmp/sig" >/dev/null 2>&1; then
-    log "control: delivery signature verified (kid $kid, sequence $seq)"
-    rm -rf "$tmp"; trap - EXIT
-    return 0
-  fi
-  err "control: DELIVERY SIGNATURE INVALID (kid $kid); refusing — keeping last-known-good config"
+  local vrc=0
+  control_verify_pinned "$tmp/canonical" "$sig" || vrc=$?
   rm -rf "$tmp"; trap - EXIT
+  case "$vrc" in
+    0) log "control: delivery signature verified (kid $kid, sequence $seq)"; return 0 ;;
+    2) err "control: delivery signature is not valid base64; refusing" ;;
+    3) err "control: pinned control-plane key is corrupt; refusing" ;;
+    *) err "control: DELIVERY SIGNATURE INVALID (kid $kid); refusing — keeping last-known-good config" ;;
+  esac
   return 1
+}
+
+# control_verify_pinned <message-file> <signature-b64> — the pinned
+# control-plane key's Ed25519 check over the exact bytes of a file. Shared by
+# deliveries and Periderm work items (each in its own signature domain).
+# Returns 0 verified, 1 invalid, 2 signature not base64, 3 no usable pinned key.
+control_verify_pinned() {
+  local msg="$1" sig="$2" key tmp rc=1
+  key="$(jq -r '.publicKey // ""' "$(control_pubkey_file)" 2>/dev/null)"
+  [[ -n "$key" ]] || return 3
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/aw-pin.XXXXXX")" || return 1
+  if ! printf '%s' "$sig" | base64 -d > "$tmp/sig" 2>/dev/null || [[ ! -s "$tmp/sig" ]]; then
+    rc=2
+  elif ! printf '%s' "$key" | base64 -d > "$tmp/pub.der" 2>/dev/null || \
+       ! openssl pkey -pubin -inform DER -in "$tmp/pub.der" -outform PEM -out "$tmp/pub.pem" 2>/dev/null; then
+    rc=3
+  elif openssl pkeyutl -verify -pubin -inkey "$tmp/pub.pem" -rawin -in "$msg" -sigfile "$tmp/sig" >/dev/null 2>&1; then
+    rc=0
+  fi
+  rm -rf "$tmp"
+  return "$rc"
 }
 
 # control_verified_delivery <path> — GET a delivery, verify its signature,
@@ -343,6 +396,12 @@ control_verified_delivery() {
   if (( seq == applied )); then
     log "control: delivery sequence $seq is already applied; keeping current config"
     rm -f "$hdr" "$body"; trap - EXIT
+    # Periderm work and activations are composed when the delivery is read,
+    # without a new sequence: pick up new signed work from the verified body
+    # (nothing else in it is applied again). Its output is never the caller's.
+    if declare -F periderm_trust_apply >/dev/null; then
+      ( periderm_trust_apply "$out" current ) >&2 || true
+    fi
     return 3
   fi
   rm -f "$hdr" "$body"; trap - EXIT
@@ -724,6 +783,11 @@ control_apply_delivery() {
   if declare -F periderm_apply_from_delivery >/dev/null; then
     ( periderm_apply_from_delivery "$json" ) || warn "control: periderm workspaces of version $ver did not fully converge"
   fi
+  # Periderm work and activations (lib/periderm-trust.sh): each work item is
+  # checked against its own signature; long jobs run detached, never here.
+  if declare -F periderm_trust_apply >/dev/null; then
+    ( periderm_trust_apply "$json" full ) || warn "control: periderm work of version $ver did not fully converge"
+  fi
   # Deferred lockdown: public SSH goes off only once the node is active AND
   # reachable through its tunnel — never at install time, where it would cut
   # off access before the tunnel is verified. A deferred lockdown keeps the
@@ -1000,6 +1064,8 @@ control_agent_tick() {
   # never triggers a wipe on its own.
   (( rc == 2 )) && control_maybe_drain
   (( rc == 0 )) || return 1
+  # Periderm reports and results queued while the control plane was away.
+  if declare -F periderm_trust_tick >/dev/null; then ( periderm_trust_tick ) || true; fi
   desired="0"
   if ! desired="$(jq -r '.configVersion // 0' <<<"$resp")"; then
     warn "control: heartbeat response was not JSON; skipping delivery check"

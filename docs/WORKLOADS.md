@@ -177,6 +177,69 @@ where the capability is enabled. Absent `periderm` = no workspaces.
   that allow. Other backends get no metadata drop; the proxy's address
   check still applies.
 
+## Periderm trust roles (`periderm.builder`, `periderm.verifier`, `periderm.runtime`)
+
+The same `periderm` block carries signed `work` and `activations`
+(Periderm spec §8.5, §9.1-§9.4); `lib/periderm-trust.sh` takes them after
+every apply, and also from a delivery whose sequence was already applied
+(work is composed when the delivery is read, without a new sequence).
+
+- **Work is checked before anything runs.** `bodySha256` is recomputed over
+  the canonical JSON of `{id, kind, attempt, expiresAt, request}` (a jq
+  canonicalizer matching the control plane's `JSON.stringify` of sorted keys
+  — plain `jq -S -c` is not: integer-like keys, exponent case and U+007F
+  differ; the test cross-checks it with node); the pinned control-plane key
+  must have signed `<domain>\n<device id>\n<id>\n<attempt>\n<expiresAt>\n<bodySha256>`
+  in the kind's domain (`AW-BUILD-V1`, `AW-VERIFY-V1`, `AW-BACKUP-V1`); expired
+  work and work whose role is not enabled are refused. Nothing is posted for
+  refused work.
+- **At most once per attempt, never inside the apply.** A claim directory
+  `$AW_STATE/periderm/work/<id>.<attempt>/claimed` is made, then
+  `aw periderm job <id> <attempt>` runs as a transient unit
+  (`alwayswork-pdjob-…`). Results and activation reports go through an
+  ordered outbox (`$AW_STATE/periderm/outbox`), flushed on every tick.
+- **build** (`periderm.builder`): the bundle is downloaded (digest-checked),
+  cloned, `commitId` checked out and confirmed; `podman build` of the root
+  Containerfile/Dockerfile on the `--internal` `periderm` network with the
+  egress proxy as `HTTP(S)_PROXY` build args — never `--network=host` —
+  `--cap-drop ALL` plus the few caps package installs need,
+  `no-new-privileges`, 4 GiB / 2 CPUs, 45 min. The image is saved as an
+  oci-archive and uploaded to the key the control plane chose (one request up
+  to 32 MiB, else 32 MiB multipart parts), then `{ok, imageId, durationMs,
+  logTail}` is posted. The proxy stays up on a builder even with no workspace.
+- **verify** (`periderm.verifier`): scratch `$AW_STATE/periderm/verify/<workId>`
+  receives what the request names (`candidate.tar`, `revert.tar`,
+  `source.bundle`, `backup.tar` when `request.backup` is set; or `release.tar`
+  + `backup.tar` in backup mode) and `request.json` (+ `workId`, `attempt`).
+  The verifier image runs as `periderm-verifier-<short>` on the `--internal`
+  `periderm-verify` network with the host podman socket and the scratch dir at
+  the same path, bounded to 90 min. The agent signs `receipt.sign` with the
+  device key only if it is exactly the receipt statement for this work over
+  this `receipt.json`, and posts `{receipt, signature}`. A node with this role
+  and any other Periderm role runs no Periderm work (and the capability
+  preflights refuse the combination).
+- **activations** (`periderm.runtime`), per app (`hex` from `appSurface`
+  `pa-<hex>`): `alwayswork-pdapp-<hex>-lb`, the proxy image with
+  `FORWARD_TO_FILE=/run/periderm/target` (the app's state dir mounted
+  read-only) on `127.0.0.1:25000 + (first 4 hex % 4000)`, reported as surface
+  `pa-<hex>`; one instance per release `alwayswork-pdapp-<hex>-<image12>` on
+  the `alwayswork` network (workload hardening, read-only root, volume
+  `pdapp-<hex>-data` at `/data`, env from the activation + `PORT`,
+  `DATA_DIR`). Images are loaded from the release archive and refused unless
+  the loaded id is `target.imageId`. An `approved` activation gets a watchdog
+  (`aw periderm watchdog`, transient unit): `staging` → start the target →
+  probe until `readyWithinMs` (else stop it, `failed`) → rewrite the target
+  file (atomic) → `active` → probe through `revertWindowMs`; 3 consecutive
+  failures switch back to `revertTo` and report `reverted` (no `revertTo`:
+  stop and report `failed`). This needs no control plane: reports queue. After
+  the window the previous instance stops. `active` activations are
+  reconciled (after a reboot); a release this node reverted is never brought
+  back. Apps no longer delivered lose units and surface; data volumes stay
+  unless `AW_PURGE=1`.
+- **backup** (`periderm.runtime`): `podman volume export pdapp-<hex>-data`
+  (hex: the app's activation here, else `sha256(appId)[0:12]`, the control
+  plane's `appSurfaceId`), uploaded to `request.blobKey`, `{ok:true}` posted.
+
 ## What is next (spec §12)
 
 - Workload specs from the control plane (`kind`, `engine`, `resources`,

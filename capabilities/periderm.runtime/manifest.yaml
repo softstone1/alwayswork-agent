@@ -1,0 +1,16 @@
+id: periderm.runtime
+name: Periderm runtime
+description: Runs Periderm production releases from activations in desired state, with a per-app listener, local probe-driven switch and revert, and volume backups on signed work.
+version: 1
+requires: [core, runtime.podman]
+profiles: [full]
+# PERIDERM_TECHNICAL_SPEC §9.4. Per app (hex = appSurface pa-<hex>): the
+# listener alwayswork-pdapp-<hex>-lb (proxy image, FORWARD_TO_FILE) on
+# 127.0.0.1:25000-28999, reported as surface pa-<hex>; one instance per
+# release alwayswork-pdapp-<hex>-<image12> on the workload network; data in
+# the volume pdapp-<hex>-data. lib/periderm-trust.sh reconciles them.
+workload:
+  id: periderm-apps
+  kind: workload
+  networks: [alwayswork]
+  workspace: volume
