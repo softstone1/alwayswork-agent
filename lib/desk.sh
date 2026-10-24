@@ -408,11 +408,58 @@ desk_posture_json() {
      + (if $vuln != "" then {vulnerablePackages:($vuln|tonumber)} else {} end)'
 }
 
+# desk_metrics_json — what the developer's machine is doing right now: CPU and
+# GPU busy, network rates on the physical interfaces, swap, how long the
+# session has been idle, connected displays. Rates are deltas against the
+# previous heartbeat's counters ($AW_STATE/desk-counters).
+desk_metrics_json() {
+  local sys="${AW_SYS:-}" st="$AW_STATE/desk-counters" now cpu_t cpu_i rx=0 tx=0 i name
+  now="$(date +%s)"
+  read -r _ a b c d e f g h _ < "$sys/proc/stat" 2>/dev/null || true
+  cpu_t=$(( ${a:-0} + ${b:-0} + ${c:-0} + ${d:-0} + ${e:-0} + ${f:-0} + ${g:-0} + ${h:-0} )); cpu_i=$(( ${d:-0} + ${e:-0} ))
+  for i in "$sys"/sys/class/net/*; do
+    name="$(basename "$i")"; [[ -e "$i/device" ]] || continue
+    rx=$(( rx + $(cat "$i/statistics/rx_bytes" 2>/dev/null || echo 0) )); tx=$(( tx + $(cat "$i/statistics/tx_bytes" 2>/dev/null || echo 0) ))
+  done
+  local prev; prev="$(cat "$st" 2>/dev/null || true)"
+  printf '%s %s %s %s %s\n' "$now" "$cpu_t" "$cpu_i" "$rx" "$tx" > "$st" 2>/dev/null || true
+  local cpu_pct="" rxk="" txk=""
+  if [[ -n "$prev" ]]; then
+    local pn pt pi pr ptx; read -r pn pt pi pr ptx <<<"$prev"
+    local dt=$(( now - pn )) dct=$(( cpu_t - pt )) dci=$(( cpu_i - pi ))
+    (( dct > 0 )) && cpu_pct=$(( 100 * (dct - dci) / dct ))
+    if (( dt > 0 && rx >= pr && tx >= ptx )); then rxk=$(( (rx - pr) * 8 / 1000 / dt )); txk=$(( (tx - ptx) * 8 / 1000 / dt )); fi
+  fi
+  local gpu="" g; for g in "$sys"/sys/class/drm/card*/device/gpu_busy_percent; do gpu="$(cat "$g" 2>/dev/null || true)"; [[ "$gpu" =~ ^[0-9]+$ ]] && break; gpu=""; done
+  local swap_t swap_f swap=""; swap_t="$(awk '/^SwapTotal:/{print $2}' "$sys/proc/meminfo" 2>/dev/null)"; swap_f="$(awk '/^SwapFree:/{print $2}' "$sys/proc/meminfo" 2>/dev/null)"
+  [[ "$swap_t" =~ ^[0-9]+$ && "$swap_f" =~ ^[0-9]+$ ]] && swap=$(( (swap_t - swap_f) / 1024 ))
+  local displays=0 s; for s in "$sys"/sys/class/drm/card*-*/status; do [[ "$(cat "$s" 2>/dev/null)" == connected ]] && displays=$(( displays + 1 )); done
+  local idle="" user sid hint; user="$(desk_user)"
+  if [[ -n "$user" ]] && have loginctl; then
+    sid="$(loginctl list-sessions --no-legend 2>/dev/null | awk -v u="$user" '$3 == u {print $1; exit}')"
+    if [[ -n "$sid" ]]; then
+      if [[ "$(loginctl show-session "$sid" -p IdleHint --value 2>/dev/null)" == yes ]]; then
+        hint="$(loginctl show-session "$sid" -p IdleSinceHint --value 2>/dev/null)"
+        [[ "$hint" =~ ^[0-9]+$ && "$hint" -gt 0 ]] && idle=$(( now - hint / 1000000 ))
+      else idle=0; fi
+    fi
+  fi
+  jq -nc --arg c "$cpu_pct" --arg g "$gpu" --arg r "$rxk" --arg t "$txk" --arg s "$swap" --arg i "$idle" --argjson d "$displays" \
+    '{displays:$d} + (if $c != "" then {cpuPct:($c|tonumber)} else {} end) + (if $g != "" then {gpuBusyPct:($g|tonumber)} else {} end)
+     + (if $r != "" then {netRxKbps:($r|tonumber), netTxKbps:($t|tonumber)} else {} end) + (if $s != "" then {swapUsedMb:($s|tonumber)} else {} end)
+     + (if $i != "" then {idleSec:($i|tonumber)} else {} end)'
+}
+
 # desk_health_fields — called by control_health_json on desks only.
 desk_health_fields() {
   desk_mode || return 0
   local v
-  v="$(desk_cached info 120 desk_info_json)"; [[ "$v" != "null" ]] && _health_raw desk "$v"
+  v="$(desk_cached info 120 desk_info_json)"
+  if [[ "$v" != "null" ]]; then
+    local m; m="$(desk_metrics_json 2>/dev/null || printf '{}')"
+    jq -e . >/dev/null 2>&1 <<<"$m" || m='{}'
+    _health_raw desk "$(jq -c --argjson m "$m" '. + {metrics:$m}' <<<"$v")"
+  fi
   v="$(desk_cached software 900 desk_software_json)"; [[ "$v" != "null" ]] && _health_raw software "$v"
   v="$(desk_cached posture 900 desk_posture_json)"; [[ "$v" != "null" ]] && _health_raw posture "$v"
   _health_raw terminal "$(desk_terminal_json)"

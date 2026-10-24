@@ -982,7 +982,9 @@ control_agent() {
   # seconds while an operator watches, and sleeps otherwise (no network).
   control_sampler "$$" &
   local fails=0 pause i deadline
+  export AW_AGENT_PID="$$"
   while :; do
+    control_watchdog_ping
     if control_agent_tick; then
       fails=0
     else
@@ -1000,9 +1002,19 @@ control_agent() {
     # second instead of at the next tick — with no extra client or daemon.
     deadline=$(( $(date +%s) + pause ))
     while (( $(date +%s) < deadline )); do
+      control_watchdog_ping
       control_wait_desired || { sleep 5; break; }
     done
   done
+}
+
+# control_watchdog_ping — tell systemd the agent loop is alive. The unit's
+# WatchdogSec kills and restarts an agent (and everything it started, such as
+# a hung network fetch) that stops pinging. A no-op outside systemd.
+control_watchdog_ping() {
+  [[ -n "${NOTIFY_SOCKET:-}" ]] || return 0
+  have systemd-notify || return 0
+  systemd-notify --pid="${AW_AGENT_PID:-$$}" WATCHDOG=1 2>/dev/null || true
 }
 
 # One long-poll for desired state. Returns 0 when it ended normally (change
@@ -1069,6 +1081,9 @@ control_agent_tick() {
   # never triggers a wipe on its own.
   (( rc == 2 )) && control_maybe_drain
   (( rc == 0 )) || return 1
+  # The lifeline (lib/lifeline.sh) restarts an agent whose heartbeats stop.
+  date +%s > "$AW_STATE/last-heartbeat" 2>/dev/null || true
+  control_watchdog_ping
   # Periderm reports and results queued while the control plane was away.
   if declare -F periderm_trust_tick >/dev/null; then ( periderm_trust_tick ) || true; fi
   desired="0"

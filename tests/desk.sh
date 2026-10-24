@@ -121,6 +121,19 @@ check "software: host packages with categories" 'jq -e "any(.[]; .name == \"git\
 check "desk info: user, KDE, active session, display manager" '( libs; desk_info_json ) | jq -e ".user == \"t1\" and .desktop == \"KDE\" and .sessionActive and .displayManager == \"sddm\"" >/dev/null'
 check "health fields only on desks"             '( libs; _HEALTH_ARGS=(); _HEALTH_FIELDS=""; _health_raw() { _HEALTH_FIELDS+="$1,"; }; desk_health_fields; [[ "$_HEALTH_FIELDS" == "desk,software,posture,terminal," ]] ) && ( printf "profile: worker\n" > "$AW_CONFIG"; libs; _HEALTH_FIELDS=""; _health_raw() { _HEALTH_FIELDS+="$1,"; }; desk_health_fields; [[ -z "$_HEALTH_FIELDS" ]] )'
 printf 'profile: desk\nagent:\n  user: t1\n' > "$AW_CONFIG"
+SYSF="$TMP/sysfs"; mkdir -p "$SYSF/proc" "$SYSF/sys/class/hwmon/hwmon2" "$SYSF/sys/class/net/enp1s0/statistics" "$SYSF/sys/class/net/enp1s0/device" "$SYSF/sys/class/drm/card1/device" "$SYSF/sys/class/drm/card1-HDMI-A-1" "$SYSF/sys/class/drm/card1-DP-1"
+echo k10temp > "$SYSF/sys/class/hwmon/hwmon2/name"; echo 42250 > "$SYSF/sys/class/hwmon/hwmon2/temp1_input"
+echo 37 > "$SYSF/sys/class/drm/card1/device/gpu_busy_percent"; echo connected > "$SYSF/sys/class/drm/card1-HDMI-A-1/status"; echo disconnected > "$SYSF/sys/class/drm/card1-DP-1/status"
+printf 'SwapTotal: 2048000 kB\nSwapFree: 1024000 kB\n' > "$SYSF/proc/meminfo"
+echo "cpu  100 0 100 800 0 0 0 0 0 0" > "$SYSF/proc/stat"; echo 1000 > "$SYSF/sys/class/net/enp1s0/statistics/rx_bytes"; echo 1000 > "$SYSF/sys/class/net/enp1s0/statistics/tx_bytes"
+check "CPU temperature from hwmon when there is no thermal zone" '[[ "$( export AW_SYS="$SYSF"; source "$ROOT/lib/core.sh"; source "$ROOT/lib/health.sh"; health_cpu_temp_c )" == 42 ]]'
+rm -f "$AW_STATE/desk-counters"
+( export AW_SYS="$SYSF"; libs; desk_metrics_json ) > /dev/null
+printf '%s 0 0 0 0\n' "$(( $(date +%s) - 10 ))" > "$AW_STATE/desk-counters"
+echo "cpu  200 0 200 1600 0 0 0 0 0 0" > "$SYSF/proc/stat"; echo 126000 > "$SYSF/sys/class/net/enp1s0/statistics/rx_bytes"; echo 63500 > "$SYSF/sys/class/net/enp1s0/statistics/tx_bytes"
+M="$( export AW_SYS="$SYSF"; libs; desk_metrics_json )"
+check "desk metrics: CPU %, GPU busy, network rates, swap, displays" 'jq -e ".cpuPct == 20 and .gpuBusyPct == 37 and .netRxKbps == 100 and .netTxKbps == 50 and .swapUsedMb == 1000 and .displays == 1" <<<"$M" >/dev/null'
+check "desk.base turns off LLMNR and mDNS responders" 'grep -q "LLMNR=no" "$ROOT/capabilities/desk.base/install.sh" && grep -q "MulticastDNS=no" "$ROOT/capabilities/desk.base/install.sh"'
 check "doctor: unencrypted root is a desk finding" '( libs; desk_audit ) | grep -q "not encrypted"'
 check "doctor: no One Client finding unless desk.warp is enabled" '( stub warp-cli "exit 1"; rm -f "$S/warp-cli"; libs; ! desk_audit | grep -q warp-cli )'
 

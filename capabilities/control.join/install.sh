@@ -21,6 +21,11 @@ ExecStart=/usr/local/bin/alwayswork agent 60
 # worker — must stop the agent instead of restarting it into a revoke loop.
 Restart=on-failure
 RestartSec=10
+# Self-healing: the agent pings systemd every loop (control_watchdog_ping).
+# A loop that stops for 15 minutes is killed with everything it started and
+# restarted; the agent's longest normal step (an apply) stays well under it.
+WatchdogSec=900
+NotifyAccess=all
 
 [Install]
 WantedBy=multi-user.target
@@ -34,6 +39,35 @@ run systemctl daemon-reload
 run systemctl enable alwayswork-agent.service
 run systemctl start --no-block alwayswork-agent.service
 ok "control agent installed"
+
+# The lifeline (lib/lifeline.sh): independent of the agent, every two
+# minutes. It restarts an agent whose heartbeats stopped, and runs the
+# control plane's signed recovery commands (restart or reinstall the agent).
+aw_write /etc/systemd/system/alwayswork-lifeline.service <<'UNIT'
+[Unit]
+Description=AlwaysWork lifeline (agent recovery, independent of the agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/alwayswork lifeline
+TimeoutStartSec=900
+UNIT
+
+aw_write /etc/systemd/system/alwayswork-lifeline.timer <<'UNIT'
+[Unit]
+Description=Run the AlwaysWork lifeline every two minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
+UNIT
+run systemctl daemon-reload
+run systemctl enable --now alwayswork-lifeline.timer
 
 # First-boot / headless provisioning: on every boot, `aw provision` resumes an
 # interrupted decommission, enrolls from a USB provisioning stick when one is
