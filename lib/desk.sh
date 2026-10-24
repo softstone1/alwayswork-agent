@@ -6,9 +6,10 @@
 # with a headless node it differs in exactly these ways:
 #
 #   - power is left to the desktop (no masked sleep, no logind overrides);
-#   - optionally (desk.warp), the Cloudflare One Client is enrolled into the
-#     operator's Zero Trust organization for the developer's own traffic —
-#     the desk itself needs only its tunnel connector;
+#   - the Cloudflare One Client (desk.warp) carries the developer's identity
+#     out (what the operator's Access apps check); the agent installs or
+#     adopts it, enrols it into the operator's organization and keeps it
+#     locked on unless the desk group allows otherwise;
 #   - the agentic CLIs live in the developer's home, per user;
 #   - a remote terminal exists only inside a time-boxed grant delivered by
 #     the control plane: a dedicated sshd on 127.0.0.1:22 (the tunnel's only
@@ -55,6 +56,8 @@ desk_apply_from_delivery() {
   fi
   user="$(jq -r '.desk.user // ""' <<<"$json")"
   org="$(jq -r '.desk.organization // ""' <<<"$json")"
+  # Absent (an older control plane) = locked, the safe default.
+  cfg_set_expr '.desk.warpLocked' "$(jq -c 'if .desk.warpLocked == false then false else true end' <<<"$json")"
   if [[ -n "$user" ]]; then
     [[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$user" != "root" ]] || { warn "desk: refusing desk user '$user'"; return 1; }
     cfg_set_str '.desk.user' "$user"
@@ -75,14 +78,21 @@ desk_apply_from_delivery() {
 # desk_warp_render_mdm <organization> — the managed-deployment file warp-svc
 # reads: the developer signs in with their identity in the browser, and the
 # device joins this organization only. No secret is involved.
+# desk_warp_render_mdm <organization> [locked true|false] — locked: the
+# developer cannot switch the client off; unlocked: it comes back on after
+# 15 minutes. The control plane's device profile says the same server-side.
 desk_warp_render_mdm() {
+  local locked="${2:-true}" auto=0
+  [[ "$locked" == true ]] || auto=15
   cat <<EOF
 <dict>
   <!-- managed by alwayswork (desk) -->
   <key>organization</key>
   <string>$1</string>
+  <key>switch_locked</key>
+  <$locked/>
   <key>auto_connect</key>
-  <integer>1</integer>
+  <integer>$auto</integer>
   <key>onboarding</key>
   <false/>
 </dict>
@@ -92,7 +102,8 @@ EOF
 desk_warp_enrol() {
   local org="$1" want have=""
   have warp-cli || [[ "${AW_TEST:-0}" == "1" ]] || return 1
-  want="$(desk_warp_render_mdm "$org")"
+  local locked; locked="$(cfg_get '.desk.warpLocked' true)"; [[ "$locked" == false ]] || locked=true
+  want="$(desk_warp_render_mdm "$org" "$locked")"
   [[ -f "$DESK_WARP_MDM" ]] && have="$(cat "$DESK_WARP_MDM" 2>/dev/null)"
   [[ "$have" == "$want" ]] && return 0
   ensure_dir "$(dirname "$DESK_WARP_MDM")"
