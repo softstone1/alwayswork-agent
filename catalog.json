@@ -1069,6 +1069,26 @@
       "workload": null
     },
     {
+      "description": "Runs a Periderm session's builder as a coding CLI the owner subscribes to (Claude Code, Codex, opencode or dsh) in its own container beside the workspace; the CLI's login comes from the node's secrets and never enters the workspace.",
+      "id": "periderm.agent",
+      "name": "Periderm agent harness",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
+      "profiles": [
+        "full",
+        "desk"
+      ],
+      "requires": [
+        "core",
+        "runtime.podman",
+        "periderm.workspace"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
       "description": "Builds Periderm candidate images from signed build work, on the internal periderm network through the egress proxy (never --network=host), and uploads them to the control plane.",
       "id": "periderm.builder",
       "name": "Periderm builder",
@@ -1138,7 +1158,8 @@
         "role": "application"
       },
       "profiles": [
-        "full"
+        "full",
+        "desk"
       ],
       "requires": [
         "core",
