@@ -35,11 +35,16 @@ stub loginctl 'case "$1" in list-sessions) echo "2 1000 t1 seat0 tty2";; show-se
 stub findmnt 'echo "/dev/nvme0n1p2[/@]"'
 stub lsblk 'printf "%s\n" ${LSBLK_TYPES:-part disk}'
 stub ufw 'echo "Status: active"'
+export USERS="$TMP/users"; printf 'nobody\n' > "$USERS"
+stub useradd 'echo "${@: -1}" >> "$USERS"'
+stub passwd 'exit 0'
+stub visudo '[[ "${VISUDO_REJECT:-0}" == 1 ]] && exit 1; exit 0'
+stub getent '[[ "$1" == passwd ]] && grep -qx "$2" "$USERS"'
 export PATH="$S:$PATH"
 
 export AW_TEST=1 DRY_RUN=0 AW_ROOT="$ROOT"
 export AW_ETC="$TMP/etc/alwayswork" AW_STATE="$TMP/state" AW_LOG_DIR="$TMP/log"
-export AW_SYSTEMD_DIR="$TMP/systemd/system" AW_SSHD_BIN="$S/sshd" AW_WARP_MDM="$TMP/warp/mdm.xml"
+export AW_SUDOERS_DIR="$TMP/sudoers.d" AW_SYSTEMD_DIR="$TMP/systemd/system" AW_SSHD_BIN="$S/sshd" AW_WARP_MDM="$TMP/warp/mdm.xml"
 export AW_CONFIG="$AW_ETC/worker.yaml"
 mkdir -p "$AW_ETC" "$AW_STATE" "$AW_SYSTEMD_DIR"
 printf 'profile: desk\nagent:\n  user: t1\n' > "$AW_CONFIG"
@@ -88,6 +93,16 @@ check "health reports the open grant"           '( libs; desk_terminal_json ) | 
 : > "$CALLS"
 check "the same grant again restarts nothing"   'apply "$(delivery "$UNTIL")" && ! calls | grep -q "restart alwayswork-terminal"'
 check "a grant for another user swaps principals" 'apply "$(delivery "$UNTIL" tg_second0000001 dev2)" && [[ "$(ls "$AW_ETC/terminal/principals")" == dev2 ]] && grep -qx "AllowUsers dev2" "$CFG"'
+
+echo "== desk: the operator account =="
+SUDO="$TMP/sudoers.d/alwayswork-terminal"
+check "a grant for the operator creates their locked account" 'apply "$(delivery "$UNTIL" tg_oper00000001 sothy1ok)" && grep -qx sothy1ok "$USERS" && calls | grep -q "useradd -m -s /bin/bash" && grep -qx sothy1ok "$AW_STATE/terminal-operators"'
+check "the operator logs in as themselves, with sudo for the grant" 'grep -qx "AllowUsers sothy1ok" "$CFG" && grep -qx "sothy1ok ALL=(ALL:ALL) NOPASSWD: ALL" "$SUDO"'
+check "a rejected sudoers drop-in is never installed" '( export VISUDO_REJECT=1; rm -f "$SUDO"; libs; ! desk_terminal_sudo sothy1ok ) && [[ ! -f "$SUDO" ]]'
+check "an existing account the agent did not create is refused" 'printf "alice\n" >> "$USERS" && apply "$(delivery "$UNTIL" tg_alice0000001 alice)" && [[ ! -f "$UNIT" ]] && grep -q "did not create" "$TMP/out"'
+check "dots are allowed in operator names, root never" '( libs; [[ a.b =~ ^[a-z_][a-z0-9._-]{0,31}$ ]] ) && ! apply "$(delivery "$UNTIL" tg_root00000001 root)" 2>/dev/null; [[ ! -f "$UNIT" ]]'
+apply "$(delivery "$UNTIL" tg_oper00000002 sothy1ok)"
+check "closing removes the operator's sudo"           'apply "$(delivery null)" && [[ ! -f "$SUDO" ]]'
 
 echo "== desk: closing =="
 check "no terminal in the delivery closes it"   'apply "$(delivery null)" && [[ ! -f "$UNIT" && ! -f "$AW_STATE/terminal.json" && ! -e "$AW_ETC/terminal/ca.pub" && ! -d "$AW_ETC/terminal/principals" ]]'
