@@ -92,3 +92,21 @@ it remains host setup. The generated catalog labels this distinction. Host apps
 remain role=host, never role=software implicitly. Software dependency recipes are
 planned separately. Shared collection and security enforcement belong to the node
 foundation; app manifests declare sources/requirements, not privileged collectors.
+
+## Developer desks (`profile: desk`)
+
+A desk is a developer's workstation that is also a node (control plane `docs/DESK.md`).
+`profiles/desk.yaml` adds three capabilities to the usual core, podman and dsh:
+
+| Capability | What it does |
+|---|---|
+| `desk.base` | Leaves power to the desktop (undoes a headless policy), keeps the sshd binary for terminal grants, and names the developer (`.desk.user`, else the installing `SUDO_USER`). |
+| `desk.warp` | Installs the Cloudflare One Client (`cloudflare-warp-bin` from the CachyOS repo, AUR fallback; Cloudflare's signed apt repo on Debian/Ubuntu), enables `warp-svc`, and writes `mdm.xml` with the organization from the signed delivery. The developer signs in once in the browser. Uninstall withdraws only the enrolment. |
+| `tools.agents` | Claude Code, Codex, opencode and dsh for the developer, in their home. A CLI that is already there is kept and reported; a missing one is installed from npm into `~/.local` as the developer. Config: `tools`, `version.<tool>`. Uninstall never deletes them. |
+
+`lib/desk.sh` applies the delivery's `desk` block: the organization, and the terminal grant
+(a dedicated `alwayswork-terminal-sshd.service` on `127.0.0.1:22`, certificates from the
+grant's CA only, one user, no forwarding, `RuntimeMaxSec` to the grant's deadline, never
+enabled at boot). `aw desk status|software|posture|terminal-close` shows the same data the
+heartbeat sends (`desk`, `software`, `posture`, `terminal`) and lets the developer end a grant
+early — which vetoes that grant on the desk.

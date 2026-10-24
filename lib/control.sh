@@ -798,6 +798,11 @@ control_apply_delivery() {
   if declare -F infra_apply_from_delivery >/dev/null; then
     infra_apply_from_delivery "$json" || { err "control: infra SSH of version $ver failed; will retry"; return 1; }
   fi
+  # Developer desks (lib/desk.sh): the One Client's organization and the
+  # time-boxed terminal. After the lockdown, which frees port 22 for it.
+  if declare -F desk_apply_from_delivery >/dev/null; then
+    desk_apply_from_delivery "$json" || { err "control: desk settings of version $ver did not apply; will retry"; return 1; }
+  fi
   # Record the applied version only after the reconcile succeeded, so a failed
   # apply stays unacked and is retried on the next tick.
   cfg_set_expr '.control.appliedVersion' "$ver"

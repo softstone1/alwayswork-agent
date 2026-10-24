@@ -1,0 +1,6 @@
+id: desk.base
+name: Developer desk
+description: A developer's own workstation as a node. Desktop keeps its power settings, SSH stays off, remote shells only inside time-boxed grants.
+version: 1
+requires: [core]
+profiles: [desk]

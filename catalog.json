@@ -998,6 +998,40 @@
       "workload": null
     },
     {
+      "description": "A developer's own workstation as a node. Desktop keeps its power settings, SSH stays off, remote shells only inside time-boxed grants.",
+      "id": "desk.base",
+      "name": "Developer desk",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
+      "profiles": [
+        "desk"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
+      "description": "The Cloudflare One Client (WARP) enrolled into the operator's Zero Trust organization; the developer signs in once in the browser.",
+      "id": "desk.warp",
+      "name": "Cloudflare One Client",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
+      "profiles": [
+        "desk"
+      ],
+      "requires": [
+        "core"
+      ],
+      "version": 1,
+      "workload": null
+    },
+    {
       "description": "Node, Python and pnpm for building and testing on the box.",
       "id": "dev.toolchain",
       "name": "Development toolchain",
@@ -1247,6 +1281,24 @@
           }
         ]
       }
+    },
+    {
+      "description": "Claude Code, Codex, opencode and dsh in the developer's own home; ones already installed are kept as they are and reported.",
+      "id": "tools.agents",
+      "name": "Agentic CLIs",
+      "package": {
+        "instanceModel": "host-setup",
+        "role": "host"
+      },
+      "profiles": [
+        "desk"
+      ],
+      "requires": [
+        "core",
+        "desk.base"
+      ],
+      "version": 1,
+      "workload": null
     },
     {
       "description": "Chromium on the node for the agent (CDP for the harness, noVNC for a human), a persistent profile, published through the tunnel.",

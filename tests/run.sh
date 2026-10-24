@@ -2299,6 +2299,10 @@ echo
 check "workload reconciliation and argument boundary regressions" 'bash "$ROOT/tests/workload-lifecycle.sh"'
 check "scoped node update regressions" 'bash "$ROOT/tests/node-updates.sh"'
 check "infraAccess: awinfra0 + dedicated sshd via Access for Infrastructure" 'bash "$ROOT/tests/infra-access.sh" > "$TMP/infra.out" 2>&1 || { grep "FAIL" "$TMP/infra.out"; false; }'
+if yq --version 2>/dev/null | grep -qi mikefarah; then
+  check "desk: One Client enrolment, time-boxed terminal sshd, veto, power, posture and software (tests/desk.sh)" 'bash "$ROOT/tests/desk.sh" > "$TMP/desk.out" 2>&1 || { grep "FAIL" "$TMP/desk.out"; false; }'
+  check "desk profile: every capability exists" 'for c in $(yq ".capabilities[]" "$ROOT/profiles/desk.yaml"); do [[ -f "$ROOT/capabilities/$c/manifest.yaml" ]] || exit 1; done'
+fi
 
 echo "== periderm.workspace =="
 check "control_apply_delivery reconciles periderm after apply, failure-isolated" \

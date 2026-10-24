@@ -22,6 +22,7 @@ CAPABILITIES
 OPERATIONS
   status                    Node, runtime and capability status
   power <status|apply|off>  Headless / always-on power policy
+  desk <status|software|posture|terminal-close>  Developer desk: posture, software, end a terminal grant
   clean                     Remove orphans, caches and junk
   enroll --control URL [--token T|--usb]  Announce this worker; USB or console approval
   enroll                    Resume a pending enrolment or claim (after the console click)

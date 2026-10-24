@@ -108,7 +108,9 @@ cmd_doctor() {
   fi
 
   # --- always-on ------------------------------------------------------------
-  if cfg_bool '.always_on.enabled' true; then
+  if desk_mode; then
+    _dpass "desk: power left to the desktop (sleep allowed)"
+  elif cfg_bool '.always_on.enabled' true; then
     if [[ "$(systemctl is-enabled sleep.target 2>/dev/null || true)" == "masked" ]]; then
       _dpass "sleep/suspend masked (safe for 24/7 agents)"
     else
@@ -197,6 +199,12 @@ cmd_doctor() {
       else _dwarn "capability ${id} healthcheck failed" "aw logs not available; inspect the service"; failing=$(( failing + 1 )); fi
     fi
   done < <(cfg_list '.capabilities.enabled')
+
+  # --- desk (lib/desk.sh) ----------------------------------------------------
+  if desk_mode; then
+    local dfinding
+    while IFS= read -r dfinding; do [[ -n "$dfinding" ]] && _dwarn "desk: $dfinding"; done < <(desk_audit)
+  fi
 
   section "Summary"
   local total score
