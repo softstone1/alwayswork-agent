@@ -47,9 +47,12 @@ Wants=network-online.target
 Before=alwayswork-agent.service
 
 [Service]
+# No RemainAfterExit: a oneshot that stays "active (exited)" is never
+# started again, so the timer's OnUnitActiveSec retry (and the USB hotplug
+# start) became no-ops after the first run, and a node approved in the
+# console after that first run waited for a reboot to finish enrolling.
 Type=oneshot
 ExecStart=/usr/local/bin/alwayswork provision
-RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target

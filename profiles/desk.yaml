@@ -1,10 +1,9 @@
 profile: desk
-description: A developer's workstation as a node. Desktop power, Cloudflare One Client, agentic CLIs per user, dsh as a workload, terminal only by time-boxed grant.
+description: A developer's workstation as a node. Desktop power, agentic CLIs per user, dsh as a workload, terminal only by time-boxed grant. Add desk.warp for the Cloudflare One Client.
 capabilities:
   - core
   - runtime.podman
   - agents.dsh
   - control.join
   - desk.base
-  - desk.warp
   - tools.agents
