@@ -51,6 +51,7 @@ desk_now_ms()         { printf '%s000\n' "$(date +%s)"; }
 desk_apply_from_delivery() {
   local json="$1" user org
   if ! jq -e '.desk | type == "object"' >/dev/null 2>&1 <<<"$json"; then
+    rm -f "$AW_STATE/desk-delivery.json" 2>/dev/null || true
     desk_terminal_close "no desk block in the delivery"
     return 0
   fi
@@ -70,7 +71,21 @@ desk_apply_from_delivery() {
       desk_warp_enrol "$org" || warn "desk: Cloudflare One Client enrolment is not configured yet"
     fi
   fi
-  desk_terminal_apply "$json"
+  # The desk block is kept so the agent tick can retry the terminal on its
+  # own (desk_tick); a terminal that cannot open yet never holds up the rest
+  # of the delivery, an agent update included.
+  jq -c '.desk' <<<"$json" | aw_write "$AW_STATE/desk-delivery.json" 2>/dev/null || true
+  desk_terminal_apply "$json" || warn "desk: terminal not converged yet; retried every tick"
+  return 0
+}
+
+# desk_tick — every agent tick: converge the terminal from the last desk
+# delivery (open it if it should be and is not, close it once it lapsed).
+desk_tick() {
+  local f="$AW_STATE/desk-delivery.json" block
+  [[ -f "$f" ]] || return 0
+  block="$(cat "$f" 2>/dev/null)"; jq -e . >/dev/null 2>&1 <<<"$block" || return 0
+  desk_terminal_apply "$(jq -c '{desk: .}' <<<"$block")" >/dev/null 2>&1 || true
 }
 
 # --- Cloudflare One Client ------------------------------------------------------
@@ -201,6 +216,14 @@ Restart=no
 EOF
 }
 
+# desk_loopback22_taken — another sshd holds 127.0.0.1:22 (itself, or the
+# wildcard). Infra access's sshd on its 198.18.x.y/32 does not conflict.
+desk_loopback22_taken() {
+  local out
+  if [[ -n "${AW_TEST_SS22:-}" ]]; then out="$AW_TEST_SS22"; elif [[ "${AW_TEST:-0}" == "1" ]]; then return 1; else out="$(ss -Htln 'sport = :22' 2>/dev/null | awk '{print $4}')"; fi
+  grep -Eq '^(127\.0\.0\.1|0\.0\.0\.0|\*|\[::\]|\[::1\]|::):22$' <<<"$out"
+}
+
 # desk_terminal_apply <delivery-json>
 desk_terminal_apply() {
   local json="$1" t gid until user ca now left dir cfg unit principals changed=0
@@ -218,7 +241,7 @@ desk_terminal_apply() {
   [[ "$ca" =~ ^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+\ [A-Za-z0-9+/=]+ ]] || { warn "desk: refusing a terminal CA that is not an OpenSSH public key"; desk_terminal_close "bad CA"; return 1; }
   principals="$(jq -r '(.principals // [])[] | select(test("^[a-z0-9._-]{1,64}$"))' <<<"$t")"
   [[ -n "$principals" ]] || { warn "desk: terminal grant names no usable principal"; desk_terminal_close "no principal"; return 1; }
-  if [[ "${AW_TEST:-0}" != "1" ]] && ss -Htln 'sport = :22' 2>/dev/null | grep -q . && ! systemctl is-active --quiet "$DESK_TERMINAL_UNIT" 2>/dev/null; then
+  if desk_loopback22_taken && ! systemctl is-active --quiet "$DESK_TERMINAL_UNIT" 2>/dev/null; then
     warn "desk: port 22 on this desk is held by another sshd; the terminal waits until it is off (the lockdown stops it)"
     return 1
   fi

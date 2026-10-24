@@ -1084,6 +1084,7 @@ control_agent_tick() {
   # The lifeline (lib/lifeline.sh) restarts an agent whose heartbeats stop.
   date +%s > "$AW_STATE/last-heartbeat" 2>/dev/null || true
   control_watchdog_ping
+  if declare -F desk_tick >/dev/null; then desk_tick; fi
   # Periderm reports and results queued while the control plane was away.
   if declare -F periderm_trust_tick >/dev/null; then ( periderm_trust_tick ) || true; fi
   desired="0"

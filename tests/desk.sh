@@ -93,8 +93,11 @@ check "sshd stopped"                            '[[ ! -f "$ACTIVE/alwayswork-ter
 check "the host key is kept for the next grant" '[[ -f "$AW_ETC/terminal/ssh_host_ed25519_key" ]]'
 check "an expired grant is closed, not opened"  'apply "$(delivery $(( $(now_ms) - 1000 )))" && [[ ! -f "$UNIT" ]]'
 check "no desk block at all closes it"          'apply "$(delivery "$UNTIL")" && [[ -f "$UNIT" ]] && apply "{\"state\":\"approved\",\"config\":{}}" && [[ ! -f "$UNIT" ]]'
-check "a malformed grant id is refused and closes" 'apply "$(delivery "$UNTIL")" && ! apply "$(delivery "$UNTIL" "bad id")" && [[ ! -f "$UNIT" ]]'
-check "a non-OpenSSH CA is refused"             '! apply "$(jq -c ".desk.terminal.caPublicKey = \"-----BEGIN\"" <<<"$(delivery "$UNTIL")")" && [[ ! -f "$UNIT" ]]'
+check "a malformed grant id is refused and closes (the delivery still applies)" 'apply "$(delivery "$UNTIL")" && apply "$(delivery "$UNTIL" "bad id")" && [[ ! -f "$UNIT" ]] && grep -q "malformed terminal grant" "$TMP/out"'
+check "a non-OpenSSH CA is refused"             'apply "$(jq -c ".desk.terminal.caPublicKey = \"-----BEGIN\"" <<<"$(delivery "$UNTIL")")" && [[ ! -f "$UNIT" ]] && grep -q "not an OpenSSH public key" "$TMP/out"'
+check "infra sshd on its /32 does not block the terminal" '( libs; ! AW_TEST_SS22="198.18.128.6:22" desk_loopback22_taken )'
+check "a loopback or wildcard sshd does"           '( libs; AW_TEST_SS22="0.0.0.0:22" desk_loopback22_taken ) && ( libs; AW_TEST_SS22="127.0.0.1:22" desk_loopback22_taken ) && ( libs; AW_TEST_SS22="[::]:22" desk_loopback22_taken )'
+check "a held port defers the terminal, the delivery applies, the tick opens it later" 'AW_TEST_SS22="0.0.0.0:22" apply "$(delivery "$UNTIL" tg_tick00000001)" && [[ ! -f "$UNIT" ]] && ( libs; desk_tick ) && [[ -f "$UNIT" ]]'
 check "veto: closed at the desk stays closed"   'apply "$(delivery "$UNTIL" tg_veto00000001)" && printf "tg_veto00000001\n" > "$AW_STATE/terminal-veto" && apply "$(delivery "$UNTIL" tg_veto00000001)" && [[ ! -f "$UNIT" ]]'
 check "veto: a new grant opens again"           'apply "$(delivery "$UNTIL" tg_new000000001)" && [[ -f "$UNIT" ]]'
 
