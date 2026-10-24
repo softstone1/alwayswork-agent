@@ -193,6 +193,21 @@ control_call() {
   printf '%s' "$resp"
 }
 
+# control_registry_auth <image> <dest> — a podman auth file for an image in
+# the control plane's own registry (<control host>/<name>@sha256:…): a pull
+# token good for an hour, minted over this node's signed channel. Returns 1
+# when the image lives elsewhere or no token could be had; the token only
+# ever lands in <dest> (0600), never argv or the environment.
+control_registry_auth() {
+  local image="$1" dest="$2" host resp
+  control_enrolled || return 1
+  host="$(control_url)"; host="${host#*://}"; host="${host%%/*}"
+  [[ -n "$host" && "$image" == "$host/"* ]] || return 1
+  resp="$(control_call POST /v1/device/registry-token)" || return 1
+  jq -e '(.username | type) == "string" and (.password | type) == "string"' >/dev/null 2>&1 <<<"$resp" || return 1
+  (umask 077; jq -c --arg h "$host" '{auths: {($h): {auth: ((.username + ":" + .password) | @base64)}}}' <<<"$resp" > "$dest")
+}
+
 # control_call_raw METHOD PATH IN_FILE OUT_FILE [MAX_TIME] — a signed device
 # request whose body is the raw bytes of IN_FILE ("" = empty body) and whose
 # response body goes to OUT_FILE: Periderm uploads, upload parts and blob

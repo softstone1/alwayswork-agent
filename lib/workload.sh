@@ -51,6 +51,8 @@ wl_snapshot() {
 # Pull a pinned image; when a Containerfile directory is given and the pull
 # fails, build the identical file locally. WL_AUTHFILE (optional) is a 0600
 # registry auth file for a private image; it is a path, never the credential.
+# Without one, an image in the control plane's registry gets its own
+# short-lived login (control_registry_auth).
 wl_ensure_image() {
   local img="$1" build_dir="${2:-}"; shift 2 || true
   [[ "$img" =~ ^[A-Za-z0-9._/:@-]+$ ]] || die "workload: refusing suspicious image '$img'"
@@ -63,8 +65,14 @@ wl_ensure_image() {
   fi
   if [[ "${WL_BUILD:-}" != "true" ]]; then
     log "workload: pulling $img"
-    local -a auth=(); [[ -n "${WL_AUTHFILE:-}" ]] && auth=(--authfile "$WL_AUTHFILE")
-    if run podman pull "${auth[@]}" "$img" >/dev/null; then ok "pulled $img"; return 0; fi
+    local -a auth=(); local own=""
+    if [[ -n "${WL_AUTHFILE:-}" ]]; then auth=(--authfile "$WL_AUTHFILE")
+    elif declare -F control_registry_auth >/dev/null; then
+      # The control plane's own registry: a short-lived login for this one pull.
+      own="$(mktemp)" && if control_registry_auth "$img" "$own"; then auth=(--authfile "$own"); else rm -f "$own"; own=""; fi
+    fi
+    if run podman pull "${auth[@]}" "$img" >/dev/null; then [[ -z "$own" ]] || rm -f "$own"; ok "pulled $img"; return 0; fi
+    [[ -z "$own" ]] || rm -f "$own"
     [[ -n "$build_dir" ]] || die "workload: could not pull $img"
     warn "workload: pull failed; building the same image locally"
   fi
