@@ -171,8 +171,12 @@ cmd_doctor() {
   fi
 
   if have arch-audit; then
-    local vuln; vuln="$(arch-audit --quiet 2>/dev/null | wc -l)"
-    if (( vuln > 0 )); then _dwarn "${vuln} known-vulnerable package(s)" "run: sudo aw update"
+    # arch-audit fetches the advisory feed: bounded, so a stalled network
+    # (a VPN coming up, a captive portal) never hangs doctor.
+    local audit rc=0 vuln; audit="$(timeout 30 arch-audit --quiet 2>/dev/null)" || rc=$?
+    vuln="$(grep -c . <<<"$audit" || true)"
+    if (( rc == 124 )); then _dwarn "arch-audit timed out (advisory feed unreachable)" "retried on the next doctor run"
+    elif (( vuln > 0 )); then _dwarn "${vuln} known-vulnerable package(s)" "run: sudo aw update"
     else _dpass "no known vulnerable packages (arch-audit)"; fi
   fi
 
