@@ -144,6 +144,39 @@ All workloads join the node-local `alwayswork` podman network (created by
 published to the host except what each workload puts on `127.0.0.1`.
 `network: none` isolates a workload entirely.
 
+## Periderm workspaces (`periderm.workspace`)
+
+The control plane declares a node's Periderm change sessions in desired
+state (`periderm: {proxyImage, egressAllow, workspaces: [...]}`, Periderm
+spec §7.2/§9.1); `lib/periderm.sh` reconciles them after every apply, only
+where the capability is enabled. Absent `periderm` = no workspaces.
+
+- Networks: `periderm` is `--internal` (no route out); `periderm-egress` is
+  a plain bridge, separate from `alwayswork`. A `periderm` network that is
+  not internal is refused.
+- `alwayswork-periderm-proxy` (the proxy image, default mode) joins both and
+  is the workspaces' `HTTPS_PROXY`: allowlisted hostnames only
+  (`PERIDERM_EGRESS_ALLOW` = `egressAllow` + the image's registry/Git
+  defaults); it refuses private, loopback, link-local and metadata
+  addresses. It runs while at least one workspace runs.
+- `alwayswork-pdws-<hex>` (hex = the 12 digits of `previewSurface`
+  `pv-<hex>`): the workload contract plus read-only root, tmpfs `/tmp` and
+  `/home/node`, budget from `limits`, `--network periderm` only, no host
+  mounts — its own named volume at `/workspace` — and a 0600 env file with
+  `PERIDERM_CONTROL`, the workspace token (age-opened with the node key,
+  never on a command line) and the proxy variables. `paused` stops it and
+  keeps the volume.
+- `alwayswork-pdpv-<hex>`: when `previewPort` is set, the proxy image as a
+  forwarder (`FORWARD_TO=alwayswork-pdws-<hex>:<port>`) published on
+  `127.0.0.1:21000 + (first 4 hex % 4000)` and reported as surface
+  `pv-<hex>`, so the tunnel names and routes the preview.
+- A session no longer delivered loses its units, token file and volume
+  (checkpoints live in the control plane).
+- Firewall (ufw): DNS from both subnets, forwarded egress from
+  `periderm-egress` only, and `169.254.169.254` dropped from it ahead of
+  that allow. Other backends get no metadata drop; the proxy's address
+  check still applies.
+
 ## What is next (spec §12)
 
 - Workload specs from the control plane (`kind`, `engine`, `resources`,

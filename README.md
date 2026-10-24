@@ -70,6 +70,7 @@ install script and an uninstall script. Adding tooling is configuration, not a f
 | `runtime.docker` / `runtime.podman` | Container runtime with hardened defaults |
 | `tools.browser` | The agent's browser: Chromium + noVNC as a workload; CDP for the harness, a watchable view at `<node>-browser.<base>` — see `docs/WORKLOADS.md` |
 | `services.postgres` | PostgreSQL as a workload container: data subvolume, healthcheck, snapshots, dumps, `aw service …`; reached by apps through Hyperdrive — see `docs/SERVICES.md` |
+| `periderm.workspace` | Periderm change sessions from desired state: one sandboxed workspace per session on an `--internal` network, egress only through an allowlisting proxy, previews on loopback through the tunnel — see `docs/WORKLOADS.md` |
 | `agents.dsh` | The node's agent harness (DeepSeek Harness web UI) as a standard workload container: `userns=auto`, read-only rootfs, cgroup budget, loopback only — see `docs/WORKLOADS.md` |
 | `access.tunnel` | Cloudflare Tunnel, outbound-only public access |
 | `access.tailscale` | Private admin plane |

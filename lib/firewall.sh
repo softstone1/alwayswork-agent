@@ -139,6 +139,28 @@ fw_close_forward_from() {
   fw_rule_untrack "$cap" "route:${subnet}" "-"
 }
 
+# fw_deny_forward_to CAP SUBNET DEST — drop forwarded traffic from SUBNET to
+# DEST (a host or CIDR), ahead of any route allow for that subnet: the cloud
+# metadata address stays out of reach of a container that may go out.
+# ufw only; elsewhere it returns 1 and the caller says what still protects it.
+fw_deny_forward_to() {
+  local cap="$1" subnet="$2" dest="$3"
+  case "$(fw_backend)" in
+    ufw) run ufw route insert 1 deny from "$subnet" to "$dest" comment "alwayswork:${cap}" \
+           || run ufw route deny from "$subnet" to "$dest" comment "alwayswork:${cap}" ;;
+    *)   warn "cannot drop ${subnet} -> ${dest}: needs ufw"; return 1 ;;
+  esac
+  fw_rule_track "$cap" "deny:${subnet}>${dest}" "-"
+}
+fw_close_deny_forward_to() {
+  local cap="$1" subnet="$2" dest="$3"
+  case "$(fw_backend)" in
+    ufw) run ufw route delete deny from "$subnet" to "$dest" ;;
+    *)   return 1 ;;
+  esac
+  fw_rule_untrack "$cap" "deny:${subnet}>${dest}" "-"
+}
+
 fw_close_subnet_port() {
   local cap="$1" subnet="$2" port="$3" proto="${4:-tcp}"
   case "$(fw_backend)" in

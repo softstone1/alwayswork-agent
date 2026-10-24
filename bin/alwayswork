@@ -54,6 +54,8 @@ source "$AW_ROOT/lib/updates.sh"
 source "$AW_ROOT/lib/objectives.sh"
 # shellcheck source=../lib/packages.sh
 source "$AW_ROOT/lib/packages.sh"
+# shellcheck source=../lib/periderm.sh
+source "$AW_ROOT/lib/periderm.sh"
 # shellcheck source=../lib/control.sh
 source "$AW_ROOT/lib/control.sh"
 # shellcheck source=../lib/health.sh
