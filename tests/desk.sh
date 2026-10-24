@@ -66,6 +66,9 @@ check "One Client enrolment names the organization" 'grep -q "<string>anakut</st
 check "warp-svc restarted on enrolment change"  'calls | grep -q "systemctl restart warp-svc"'
 : > "$CALLS"
 check "an unchanged enrolment restarts nothing" 'apply "$(delivery null)" && ! calls | grep -q "restart warp-svc"'
+check "locked by default: switch_locked true, no auto-reconnect needed" 'grep -q "<true/>" "$AW_WARP_MDM" && grep -A1 "<key>switch_locked</key>" "$AW_WARP_MDM" | grep -q "<true/>" && grep -A1 "<key>auto_connect</key>" "$AW_WARP_MDM" | grep -q "<integer>0</integer>"'
+check "unlocked by the group: switch free, back on after 15 minutes" 'apply "$(jq -c ".desk.warpLocked = false" <<<"$(delivery null)")" && grep -A1 "<key>switch_locked</key>" "$AW_WARP_MDM" | grep -q "<false/>" && grep -A1 "<key>auto_connect</key>" "$AW_WARP_MDM" | grep -q "<integer>15</integer>"'
+check "locked again when the control plane says so"  'apply "$(delivery null)" && grep -A1 "<key>switch_locked</key>" "$AW_WARP_MDM" | grep -q "<true/>"'
 check "no open grant: no terminal unit"         '[[ ! -f "$UNIT" ]]'
 check "root is refused as the desk user"        '! apply "$(jq -c ".desk.user = \"root\"" <<<"$(delivery null)")"'
 

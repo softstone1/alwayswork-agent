@@ -1,6 +1,6 @@
 id: desk.warp
 name: Cloudflare One Client
-description: Optional on a desk. The Cloudflare One Client (WARP) enrolled into the operator's Zero Trust organization for the developer's own traffic; the desk itself needs only its tunnel.
+description: The developer's identity on a desk. The Cloudflare One Client (WARP), installed or adopted, enrolled into the operator's Zero Trust organization and locked on unless the desk group allows otherwise.
 version: 1
 requires: [core]
 profiles: [desk]
