@@ -393,6 +393,8 @@ control_health_json() {
   # Operator SSH via Access for Infrastructure (lib/infra.sh): address,
   # sshd state and CA fingerprint only.
   declare -F infra_health_json >/dev/null && _health_raw infraAccess "$(infra_health_json 2>/dev/null)"
+  # Developer desks (lib/desk.sh): session, key software, posture, terminal.
+  declare -F desk_health_fields >/dev/null && desk_health_fields
 
   # A field that jq rejects must be visible, not a silent empty heartbeat.
   local jqerr; jqerr="$(mktemp)"

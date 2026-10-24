@@ -14,6 +14,8 @@
 ssh_server_purge() {
   have dpkg-query && have apt-get || return 0
   [[ -e "${AW_SYSTEMD_DIR:-/etc/systemd/system}/alwayswork-sshd.service" ]] && return 0
+  # A desk keeps the binary for its time-boxed terminal grants (lib/desk.sh).
+  declare -F desk_mode >/dev/null && desk_mode && return 0
   dpkg-query -W -f='${Status}' openssh-server 2>/dev/null | grep -q "install ok installed" || return 0
   log "Removing the SSH server (openssh-server): nothing on this node uses it"
   run env DEBIAN_FRONTEND=noninteractive apt-get purge -y -q openssh-server >/dev/null 2>&1 \

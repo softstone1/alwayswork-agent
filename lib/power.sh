@@ -9,6 +9,11 @@ power_nm_conf()       { printf '%s\n' /etc/NetworkManager/conf.d/99-alwayswork.c
 power_watchdog_conf() { printf '%s\n' /etc/systemd/system.conf.d/99-alwayswork.conf; }
 
 power_apply() {
+  # A desk is someone's workstation: the desktop owns power (lib/desk.sh).
+  if declare -F desk_mode >/dev/null && desk_mode; then
+    info "desk: leaving power management to the desktop"
+    return 0
+  fi
   if ! cfg_bool '.always_on.enabled' true; then
     info "always_on is disabled; leaving power management to the system"
     return 0
@@ -85,6 +90,7 @@ power_status() {
 
 # One issue per line (empty when clean) — used by doctor.
 power_audit() {
+  declare -F desk_mode >/dev/null && desk_mode && return 0
   cfg_bool '.always_on.enabled' true || return 0
   if [[ "$(systemctl is-enabled sleep.target 2>/dev/null || true)" != "masked" ]]; then
     printf '%s\n' "sleep.target is not masked (the box may suspend and drop agents)"

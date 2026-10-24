@@ -1,0 +1,6 @@
+id: tools.agents
+name: Agentic CLIs
+description: Claude Code, Codex, opencode and dsh in the developer's own home; ones already installed are kept as they are and reported.
+version: 1
+requires: [core, desk.base]
+profiles: [desk]
