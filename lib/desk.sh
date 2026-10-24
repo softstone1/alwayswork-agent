@@ -182,13 +182,26 @@ GatewayPorts no
 PermitUserEnvironment no
 
 MaxAuthTries 3
-LoginGraceTime 20
+# Browser-rendered SSH asks the person for the UNIX user while the
+# connection waits: 20 s was too short to type it.
+LoginGraceTime 120
 ClientAliveInterval 60
 ClientAliveCountMax 3
 LogLevel VERBOSE
 SyslogFacility AUTH
 PrintMotd no
+$(desk_sshd_penalties_line)
 EOF
+}
+
+# Every connection reaches this sshd from 127.0.0.1 (cloudflared), so
+# OpenSSH 9.8+'s per-source penalties would lock every operator out after
+# one bad attempt. The grant's Access app is the gate; penalties are off.
+desk_sshd_penalties_line() {
+  local v; v="$("${AW_SSHD_BIN:-sshd}" -V 2>&1 | grep -oE 'OpenSSH_[0-9]+\.[0-9]+' | head -n1 | cut -d_ -f2)"
+  [[ -n "$v" ]] || return 0
+  local maj="${v%%.*}" min="${v#*.}"
+  if (( maj > 9 || (maj == 9 && min >= 8) )); then printf 'PerSourcePenalties no'; fi
 }
 
 # desk_terminal_render_unit <config> <seconds-left> — systemd stops the unit
