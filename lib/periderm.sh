@@ -17,6 +17,12 @@
 #   alwayswork-pdws-<hex>          one workspace per session: read-only root,
 #                     tmpfs /tmp and /home/node, its own named volume at
 #                     /workspace, the workspace token in a 0600 env file.
+#   alwayswork-pdhn-<hex>          a subscription harness (capability
+#                     periderm.agent, §6.5), when the session's builder is a
+#                     CLI: it joins the workspace's network and user namespaces,
+#                     shares its /workspace volume and holds the workspace
+#                     token and the CLI's login. The workspace then serves the
+#                     exec bridge only and holds no credential.
 #   alwayswork-pdpv-<hex>          a TCP forwarder (the proxy image in
 #                     FORWARD_TO mode) publishing the session's preview on
 #                     127.0.0.1:<port>, reported as surface `pv-<hex>` so the
@@ -42,6 +48,10 @@ pd_env_file()     { printf '%s/pdws-%s.env' "$(pd_env_dir)" "$1"; }
 pd_volume()       { printf 'alwayswork-pdws-%s' "$1"; }
 pd_ws_name()      { printf 'pdws-%s' "$1"; }
 pd_pv_name()      { printf 'pdpv-%s' "$1"; }
+pd_hn_name()      { printf 'pdhn-%s' "$1"; }
+pd_hn_env_file()  { printf '%s/pdhn-%s.env' "$(pd_env_dir)" "$1"; }
+PD_AGENT_CAP="periderm.agent"
+pd_agent_enabled() { cfg_list '.capabilities.enabled' 2>/dev/null | grep -qx -- "$PD_AGENT_CAP"; }
 pd_enabled()      { cfg_list '.capabilities.enabled' 2>/dev/null | grep -qx -- "$PD_CAP"; }
 # The builder role (lib/periderm-trust.sh) builds through the same proxy: on
 # a node that has it, the proxy is never removed for want of workspaces.
@@ -125,7 +135,7 @@ pd_firewall_close() {
 pd_wl_reset() {
   WL_NAME="$1"; WL_IMAGE="$2"; WL_DESC="$3"
   WL_PUBLISH=(); WL_VOLUMES=(); WL_ENV_FILE=""; WL_LABELS=("dev.alwayswork.workload=$1")
-  WL_READ_ONLY=1; WL_TMPFS=(); WL_HEALTH=""; WL_NETWORK="$PD_NET"; WL_ARGS=(); WL_EXTRA=()
+  WL_READ_ONLY=1; WL_TMPFS=(); WL_HEALTH=""; WL_NETWORK="$PD_NET"; WL_ARGS=(); WL_EXTRA=(); WL_USERNS=""; WL_BINDS_TO=""
   # The sandbox's confinement is not optional: when the node turned engine
   # hardening off (lib/engine.sh), these still apply here.
   engine_hardening_enabled || WL_EXTRA+=(--cap-drop ALL --security-opt no-new-privileges:true)
@@ -157,7 +167,14 @@ pd_apply_workspace() {
   [[ "$mem" =~ ^[0-9]{3,6}$ ]] || die "periderm: $sid: bad memory limit '$mem'"
   [[ "$pids" =~ ^[0-9]{2,6}$ ]] || die "periderm: $sid: bad pids limit '$pids'"
   envf="$(pd_env_file "$hex")"
-  pd_render_env "$envf" "$(jq -r '.sealedToken // ""' <<<"$ws")" || die "periderm: $sid: no usable workspace token"
+  local hk; hk="$(jq -r '.harness.kind // ""' <<<"$ws")"
+  if [[ -n "$hk" ]]; then
+    # A subscription CLI builds: the token goes to the harness, never to the workspace.
+    pd_agent_enabled || die "periderm: $sid builds with the $hk harness but $PD_AGENT_CAP is not enabled here"
+    pd_render_exec_env "$envf" || die "periderm: $sid: could not write the workspace environment"
+  else
+    pd_render_env "$envf" "$(jq -r '.sealedToken // ""' <<<"$ws")" || die "periderm: $sid: no usable workspace token"
+  fi
   pd_wl_reset "$(pd_ws_name "$hex")" "$image" "Periderm workspace $sid"
   WL_LABELS+=("dev.alwayswork.periderm.session=$sid" "dev.alwayswork.periderm.app=$app" "dev.alwayswork.periderm.generation=$gen")
   WL_TMPFS=("/home/node:rw,nosuid,nodev,size=1g,mode=1777")
@@ -166,7 +183,72 @@ pd_apply_workspace() {
   # The last --cpus/--memory/--pids-limit wins over the engine defaults.
   WL_EXTRA+=(--cpus "$cpu" --memory "${mem}m" --pids-limit "$pids" --shm-size 256m)
   WL_PULL="" WL_BUILD="" wl_ensure_image "$image" || return 1
+  wl_apply_unit || return 1
+  if [[ -n "$hk" ]]; then pd_apply_harness "$hex" "$ws" || return 1
+  else pd_remove_harness "$hex" || return 1; fi
+}
+
+# pd_harness_secrets <kind>: the CLI's login from this node's sealed store (group
+# secrets), as env-file lines. One value per line: JSON logins are compacted.
+pd_harness_secrets() {
+  local kind="$1" v k found=0
+  case "$kind" in
+    claude)
+      v="$(sec_get CLAUDE_CODE_OAUTH_TOKEN)"
+      [[ "$v" =~ ^[A-Za-z0-9._~+/=-]{16,4096}$ ]] || { err "periderm.agent: no usable CLAUDE_CODE_OAUTH_TOKEN in this node's secrets (claude setup-token, then the group's secrets)"; return 1; }
+      printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$v" ;;
+    codex|opencode)
+      k="$( [[ "$kind" == codex ]] && echo CODEX_AUTH_JSON || echo OPENCODE_AUTH_JSON )"
+      v="$(sec_get "$k" | jq -c . 2>/dev/null)" || v=""
+      [[ -n "$v" && "$v" != null ]] || { err "periderm.agent: no usable $k in this node's secrets (the CLI's auth.json, as a group secret)"; return 1; }
+      printf '%s=%s\n' "$k" "$v" ;;
+    dsh)
+      while IFS= read -r k; do
+        [[ "$k" =~ ^(DSH_[A-Z0-9_]+|DEEPSEEK_API_KEY)$ ]] || continue
+        v="$(sec_get "$k")"; [[ -n "$v" && "$v" != *$'\n'* ]] || continue
+        printf '%s=%s\n' "${k#DSH_}" "$v"; found=1
+      done < <(sec_list)
+      (( found )) || { err "periderm.agent: no DSH_* or DEEPSEEK_API_KEY secret on this node"; return 1; } ;;
+    *) err "periderm.agent: unknown harness '$kind'"; return 1 ;;
+  esac
+}
+
+# pd_apply_harness <hex> <workspace-json>: the CLI's container, bound to the
+# workspace's unit and inside its network and user namespaces (§6.5).
+# shellcheck disable=SC2034
+pd_apply_harness() {
+  local hex="$1" ws="$2" sid kind image turns mins envf secrets
+  sid="$(jq -r '.sessionId' <<<"$ws")"; kind="$(jq -r '.harness.kind // ""' <<<"$ws")"
+  image="$(jq -r '.harness.image // ""' <<<"$ws")"
+  turns="$(jq -r '.harness.maxTurns // 80' <<<"$ws")"; mins="$(jq -r '.harness.maxMinutes // 45' <<<"$ws")"
+  [[ "$kind" =~ ^(claude|codex|opencode|dsh)$ ]] || { err "periderm: $sid: unknown harness '$kind'"; return 1; }
+  [[ "$image" =~ ^[A-Za-z0-9._/:@-]+$ ]] || { err "periderm: $sid: bad harness image"; return 1; }
+  [[ "$turns" =~ ^[0-9]{1,3}$ && "$mins" =~ ^[0-9]{1,3}$ ]] || { err "periderm: $sid: bad harness caps"; return 1; }
+  envf="$(pd_hn_env_file "$hex")"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    secrets="$(pd_harness_secrets "$kind")" || return 1
+  fi
+  pd_render_env "$envf" "$(jq -r '.sealedToken // ""' <<<"$ws")" "PERIDERM_HARNESS=$kind
+PERIDERM_HARNESS_MAX_TURNS=$turns
+PERIDERM_HARNESS_MAX_MINUTES=$mins
+${secrets:-}" || { err "periderm: $sid: no usable workspace token"; return 1; }
+  pd_wl_reset "$(pd_hn_name "$hex")" "$image" "Periderm $kind harness $sid"
+  WL_LABELS+=("dev.alwayswork.periderm.session=$sid" "dev.alwayswork.periderm.harness=$kind")
+  WL_NETWORK="container:$(wl_container "$(pd_ws_name "$hex")")"
+  WL_USERNS="container:$(wl_container "$(pd_ws_name "$hex")")"
+  WL_BINDS_TO="$(wl_unit_name "$(pd_ws_name "$hex")")"
+  WL_TMPFS=("/home/node:rw,nosuid,nodev,size=1g,mode=1777")
+  WL_VOLUMES=("$(pd_volume "$hex"):/workspace")
+  WL_ENV_FILE="$envf"
+  WL_EXTRA+=(--cpus 2 --memory 2048m --pids-limit 512)
+  WL_PULL="" WL_BUILD="" wl_ensure_image "$image" || return 1
   wl_apply_unit
+}
+
+pd_remove_harness() {
+  local hex="$1"
+  pd_remove_unit "$(pd_hn_name "$hex")" || return 1
+  run rm -f "$(pd_hn_env_file "$hex")"
 }
 
 # pd_apply_preview <hex> <port> <proxy-image> <host-port>: the forwarder that
@@ -187,7 +269,7 @@ pd_apply_preview() {
 # never an argv, never a log line. A token that does not look like one is
 # refused and the previous file kept.
 pd_render_env() {
-  local dest="$1" sealed="$2" token url tmp
+  local dest="$1" sealed="$2" extra="${3:-}" token url tmp
   if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] render %s\n' "$dest" >&2; return 0; fi
   [[ "$sealed" == -----BEGIN\ AGE\ ENCRYPTED\ FILE-----* ]] || { err "periderm: the workspace token is not an armored age file"; return 1; }
   have age || { err "periderm: age is not installed; cannot open the workspace token"; return 1; }
@@ -201,6 +283,19 @@ pd_render_env() {
   chmod 600 "$tmp"
   printf 'PERIDERM_CONTROL=%s\nPERIDERM_WORKSPACE_TOKEN=%s\nHTTPS_PROXY=%s\nHTTP_PROXY=%s\nNO_PROXY=127.0.0.1,localhost\n' \
     "${url%/}" "$token" "http://$(wl_container "$PD_PROXY"):$PD_PROXY_PORT" "http://$(wl_container "$PD_PROXY"):$PD_PROXY_PORT" > "$tmp"
+  [[ -n "$extra" ]] && printf '%s\n' "$extra" | grep -v '^$' >> "$tmp"
+  mv -f "$tmp" "$dest"; chmod 600 "$dest"
+}
+
+# pd_render_exec_env <path>: the workspace's environment when a harness drives
+# it: the exec bridge, the proxy, and no token (§6.5).
+pd_render_exec_env() {
+  local dest="$1" tmp
+  if [[ "$DRY_RUN" == "1" ]]; then printf '    [dry-run] render %s\n' "$dest" >&2; return 0; fi
+  ensure_dir "$(dirname "$dest")"; chmod 700 "$(dirname "$dest")" 2>/dev/null || true
+  tmp="$(umask 077; mktemp "${dest}.XXXXXX")" || return 1
+  printf 'PERIDERM_MODE=exec\nHTTPS_PROXY=%s\nHTTP_PROXY=%s\nNO_PROXY=127.0.0.1,localhost\n' \
+    "http://$(wl_container "$PD_PROXY"):$PD_PROXY_PORT" "http://$(wl_container "$PD_PROXY"):$PD_PROXY_PORT" > "$tmp"
   mv -f "$tmp" "$dest"; chmod 600 "$dest"
 }
 
@@ -210,7 +305,7 @@ pd_render_env() {
 pd_present() {
   local f n
   {
-    for f in "$WL_UNIT_DIR"/alwayswork-pdws-*.service "$WL_UNIT_DIR"/alwayswork-pdpv-*.service "$(pd_env_dir)"/pdws-*.env; do
+    for f in "$WL_UNIT_DIR"/alwayswork-pdws-*.service "$WL_UNIT_DIR"/alwayswork-pdpv-*.service "$WL_UNIT_DIR"/alwayswork-pdhn-*.service "$(pd_env_dir)"/pdws-*.env "$(pd_env_dir)"/pdhn-*.env; do
       [[ -e "$f" ]] && basename "$f"
     done
     if have podman; then
@@ -218,7 +313,7 @@ pd_present() {
       podman volume ls --format '{{.Name}}' 2>/dev/null
     fi
   } | while IFS= read -r n; do
-    [[ "$n" =~ (^|alwayswork-)pd(ws|pv)-([0-9a-f]{12})(\.service|\.env)?$ ]] && printf '%s\n' "${BASH_REMATCH[3]}"
+    [[ "$n" =~ (^|alwayswork-)pd(ws|pv|hn)-([0-9a-f]{12})(\.service|\.env)?$ ]] && printf '%s\n' "${BASH_REMATCH[3]}"
   done | sort -u
 }
 
@@ -244,6 +339,8 @@ pd_remove_session() {
   local hex="$1"
   log "periderm: removing workspace $hex"
   pd_remove_preview "$hex" || return 1
+  # The harness lives in the workspace's namespaces: it goes first.
+  pd_remove_harness "$hex" || return 1
   pd_remove_unit "$(pd_ws_name "$hex")" || return 1
   run rm -f "$(pd_env_file "$hex")" || return 1
   if have podman && [[ "$DRY_RUN" != "1" ]] && podman volume exists "$(pd_volume "$hex")" 2>/dev/null; then
@@ -333,6 +430,7 @@ periderm_apply_from_delivery() {
       # Paused (or no proxy): stopped, volume kept for when it resumes.
       [[ "$paused" == true ]] && info "periderm: workspace $hex paused; stopped, volume kept"
       pd_remove_preview "$hex" || rc=1
+      pd_remove_harness "$hex" || rc=1
       pd_remove_unit "$(pd_ws_name "$hex")" || rc=1
       run rm -f "$(pd_env_file "$hex")" || rc=1
       continue

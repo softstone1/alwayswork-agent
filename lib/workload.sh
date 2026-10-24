@@ -93,7 +93,9 @@ wl_ensure_image() {
 #   WL_HEALTH_START  start period before failures count (default 60s)
 #   WL_HEALTH_ON_FAILURE  stop (default) | none: what a failed healthcheck does
 #   WL_EXTRA       array of extra podman flags (e.g. --shm-size 256m)
-#   WL_NETWORK     "" (the node's `alwayswork` network) | none | <name>
+#   WL_NETWORK     "" (the node's `alwayswork` network) | none | <name> | container:<container>
+#   WL_USERNS      opt-in: a --userns value instead of auto (e.g. container:<container>)
+#   WL_BINDS_TO    opt-in: a unit this one is bound to and ordered after (BindsTo= + After=)
 #   WL_ARGS        array of arguments after the image (optional)
 # systemd quoting, not shell quoting: bare when safe, else double quotes with
 # backslash and double-quote escaped (systemd.syntax(7) "Quoting").
@@ -119,7 +121,7 @@ wl_write_unit() {
   # left out — userns, cpus, capdrop, nnp, pids, health — to bisect a workload that misbehaves
   # under them and not under plain Docker.
   local -a iso=()
-  [[ ",${WL_DEBUG_DROP:-}," == *",userns,"* ]] || iso+=(--userns=auto)
+  [[ ",${WL_DEBUG_DROP:-}," == *",userns,"* ]] || iso+=("--userns=${WL_USERNS:-auto}")
   if [[ "${WL_READ_ONLY:-0}" == "1" ]]; then iso+=(--read-only --tmpfs "/tmp:rw,nosuid,size=512m"); fi
   for v in "${WL_TMPFS[@]:-}"; do [[ -n "$v" ]] && iso+=(--tmpfs "$v"); done
   case "${WL_NETWORK:-}" in
@@ -138,7 +140,8 @@ wl_write_unit() {
   fi
   # Opt-ins, not defaults: never let them leak to the next workload written
   # in this process (each workload's *_workload_vars sets them before this).
-  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP WL_NO_NNP
+  local binds="${WL_BINDS_TO:-}"
+  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP WL_NO_NNP WL_USERNS WL_BINDS_TO
   for v in "${WL_PUBLISH[@]:-}"; do [[ -n "$v" ]] && iso+=(--publish "127.0.0.1:$v"); done
   for v in "${WL_VOLUMES[@]:-}"; do [[ -n "$v" ]] && iso+=(--volume "$v"); done
   [[ -n "${WL_ENV_FILE:-}" ]] && iso+=(--env-file "$WL_ENV_FILE")
@@ -155,8 +158,9 @@ wl_write_unit() {
 [Unit]
 Description=AlwaysWork workload: ${WL_DESC}
 Documentation=https://github.com/softstone1/alwayswork-agent
-After=network-online.target
-Wants=network-online.target
+After=network-online.target${binds:+ ${binds}}
+Wants=network-online.target${binds:+
+BindsTo=${binds}}
 # Managed by alwayswork (lib/workload.sh). Image: ${WL_IMAGE}${envsum:+  env: ${envsum}}
 
 [Service]
@@ -173,7 +177,7 @@ ExecStart=${podman_bin} run --rm --replace --sdnotify=conmon --name ${container}
 ExecStop=${podman_bin} stop -t 30 ${container}
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target${binds:+ ${binds}}
 UNIT
 }
 

@@ -1,0 +1,14 @@
+id: periderm.agent
+name: Periderm agent harness
+description: Runs a Periderm session's builder as a coding CLI the owner subscribes to (Claude Code, Codex, opencode or dsh) in its own container beside the workspace; the CLI's login comes from the node's secrets and never enters the workspace.
+version: 1
+requires: [core, runtime.podman, periderm.workspace]
+profiles: [full, desk]
+# PERIDERM_TECHNICAL_SPEC §6.5. A session whose builder policy names a
+# harness arrives in desired state with `harness: {kind, image, maxTurns,
+# maxMinutes}`; lib/periderm.sh runs alwayswork-pdhn-<hex> in the workspace's
+# network and user namespaces. The login is a group secret:
+#   claude    CLAUDE_CODE_OAUTH_TOKEN   (claude setup-token)
+#   codex     CODEX_AUTH_JSON           (~/.codex/auth.json after codex login)
+#   opencode  OPENCODE_AUTH_JSON        (~/.local/share/opencode/auth.json)
+#   dsh       DSH_* / DEEPSEEK_API_KEY

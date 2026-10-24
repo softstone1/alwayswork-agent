@@ -139,6 +139,35 @@ check "a bad previewSurface is refused (it names every resource)" \
 check "no periderm field: everything goes, proxy and volumes included" \
   'apply "{\"state\":\"approved\",\"config\":{\"configVersion\":8}}" && [[ -z "$(ls "$AW_SYSTEMD_DIR")" && -z "$(ls "$PS" | grep -e ctr- -e vol-)" && -z "$(ls "$AW_ETC/periderm" 2>/dev/null)" ]] && [[ "$(hb | jq length)" == 0 ]]'
 
+echo "== periderm.agent: a subscription harness builds =="
+CLAUDE_TOK="sk-ant-oat01-Cla1deT0kenValueForTests_abcdef"
+applyh() { ( libs; sec_get() { [[ "$1" == CLAUDE_CODE_OAUTH_TOKEN ]] && printf '%s' "${CLAUDE_TOK:-}"; return 0; }; sec_list() { :; }; periderm_apply_from_delivery "$1" ) > "$TMP/out" 2>&1; }
+wsh() { jq -c '. + {harness:{kind:"claude", image:"ghcr.io/acme/periderm-harness@sha256:cccc", maxTurns:60, maxMinutes:30}}' <<<"$(ws "$@")"; }
+HN="$AW_SYSTEMD_DIR/alwayswork-pdhn-$H1.service"; HENV="$AW_ETC/periderm/pdhn-$H1.env"
+check "without periderm.agent the session fails closed: no workspace, no harness" \
+  '! applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")" && [[ ! -f "$HN" ]] && grep -q "periderm.agent is not enabled" "$TMP/out"'
+yq -i '.capabilities.enabled = ["core","runtime.podman","periderm.workspace","periderm.agent"]' "$AW_CONFIG"
+check "converge with the claude harness"  'applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")" || { cat "$TMP/out"; false; }'
+check "workspace env: exec bridge mode, proxy, no token" \
+  'grep -qx "PERIDERM_MODE=exec" "$ENVF" && grep -qx "HTTPS_PROXY=http://alwayswork-periderm-proxy:3128" "$ENVF" && ! grep -q "TOKEN" "$ENVF"'
+check "harness unit: in the workspace's network and user namespaces, bound to its unit" \
+  'grep -q -- "--network container:alwayswork-pdws-$H1" "$HN" && grep -q -- "--userns=container:alwayswork-pdws-$H1" "$HN" && ! grep -q -- "--userns=auto" "$HN" && grep -qx "BindsTo=alwayswork-pdws-$H1.service" "$HN" && grep -q "^After=network-online.target alwayswork-pdws-$H1.service" "$HN" && grep -q "^WantedBy=multi-user.target alwayswork-pdws-$H1.service" "$HN"'
+check "harness unit: shares only the workspace volume (no :U), hardened, its image" \
+  '[[ "$(flags "$HN" "--volume ")" == 1 ]] && grep -q -- "--volume alwayswork-pdws-$H1:/workspace " "$HN" && grep -q -- "--cap-drop ALL" "$HN" && grep -q -- "--read-only" "$HN" && ! grep -q -- "--publish" "$HN" && grep -q "periderm-harness@sha256:cccc" "$HN"'
+check "harness env: 0600, workspace token, caps and the CLI login from the node's secrets" \
+  '[[ "$(stat -c %a "$HENV")" == 600 ]] && grep -qx "PERIDERM_WORKSPACE_TOKEN=$TOKEN" "$HENV" && grep -qx "PERIDERM_HARNESS=claude" "$HENV" && grep -qx "PERIDERM_HARNESS_MAX_TURNS=60" "$HENV" && grep -qx "PERIDERM_HARNESS_MAX_MINUTES=30" "$HENV" && grep -qx "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOK" "$HENV"'
+check "the login never in a unit, an argv or the log" \
+  '! grep -rq "$CLAUDE_TOK" "$AW_SYSTEMD_DIR" && ! grep -q "$CLAUDE_TOK" "$CALLS" && ! grep -q "$CLAUDE_TOK" "$TMP/out"'
+check "no login on the node: the harness fails and says what to set" \
+  'CLAUDE_TOK="" ; ! applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")"; grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$TMP/out"'
+CLAUDE_TOK="sk-ant-oat01-Cla1deT0kenValueForTests_abcdef"
+check "back to the broker: harness unit and its env go, the workspace gets its token" \
+  'applyh "$(delivery "$(ws pds_AbC-12_xyz pv-$H1 5173)")" && [[ ! -f "$HN" && ! -f "$HENV" ]] && grep -qx "PERIDERM_WORKSPACE_TOKEN=$TOKEN" "$ENVF"'
+check "a removed harness session: the harness goes before its workspace" \
+  'applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")" && : > "$CALLS" && applyh "{\"state\":\"approved\",\"config\":{\"configVersion\":8}}" && [[ ! -f "$HN" && ! -f "$WS" ]] && [[ "$(grep -n "disable --now alwayswork-pdhn-$H1" "$CALLS" | cut -d: -f1)" -lt "$(grep -n "disable --now alwayswork-pdws-$H1" "$CALLS" | cut -d: -f1)" ]]'
+yq -i '.capabilities.enabled = ["core","runtime.podman","periderm.workspace"]' "$AW_CONFIG"
+rm -f "$PS"/net-*
+
 echo "== periderm.workspace: capability gate =="
 yq -i '.capabilities.enabled = ["core","runtime.podman"]' "$AW_CONFIG"
 rm -f "$PS"/net-*; : > "$CALLS"
