@@ -61,6 +61,27 @@ pkg_oci_authfile ghcr.io/acme/feeds:1 PULL "$TEST_DIR/bad.json" && exit 1
 pkg_oci_authfile ghcr.io/acme/feeds:1 'bad name' "$TEST_DIR/bad.json" && exit 1
 echo 'ok: a pull secret becomes a 0600 auth file for its registry; missing or malformed ones fail closed'
 
+source "$ROOT/lib/control.sh"
+control_enrolled() { return 0; }; control_url() { echo https://control.test; }
+control_call() { echo "$1 $2" >> "$TEST_DIR/minted"; printf '%s' '{"username":"dev_1","password":"awr1.1.abc","expiresAt":"x"}'; }
+control_registry_auth control.test/periderm-harness@sha256:00 "$TEST_DIR/own.json"
+[[ "$(stat -c %a "$TEST_DIR/own.json" 2>/dev/null || stat -f %Lp "$TEST_DIR/own.json")" == 600 ]]
+[[ "$(jq -r '.auths["control.test"].auth | @base64d' "$TEST_DIR/own.json")" == 'dev_1:awr1.1.abc' ]]
+[[ "$(cat "$TEST_DIR/minted")" == "POST /v1/device/registry-token" ]]
+control_registry_auth ghcr.io/acme/feeds:1 "$TEST_DIR/other.json" && exit 1
+control_registry_auth control.test.evil/x@sha256:00 "$TEST_DIR/other.json" && exit 1
+[[ ! -s "$TEST_DIR/other.json" && "$(wc -l < "$TEST_DIR/minted")" == 1 ]]
+# wl_ensure_image hands podman the file for that one pull, then removes it.
+podman() { case "$1" in image) return 1 ;; pull) printf '%s\n' "$@" > "$TEST_DIR/pull"; f="$(sed -n '/--authfile/{n;p}' <<<"$(printf '%s\n' "$@")")"; [[ -z "$f" ]] || cp "$f" "$TEST_DIR/seen.json" ;; esac; }
+wl_ensure_image control.test/periderm-harness@sha256:00
+grep -qx -- --authfile "$TEST_DIR/pull"
+jq -e '.auths["control.test"]' "$TEST_DIR/seen.json" >/dev/null
+[[ ! -e "$(sed -n '/--authfile/{n;p}' "$TEST_DIR/pull")" ]]
+wl_ensure_image ghcr.io/acme/feeds@sha256:00
+grep -qx -- --authfile "$TEST_DIR/pull" && exit 1
+unset -f podman
+echo 'ok: an image in the control plane registry pulls with a minted, one-pull login; other registries get none'
+
 source "$ROOT/commands/apply.sh"
 require_root() { :; }; cfg_require() { :; }; cfg_need() { :; }; aw_state_init() { :; }
 cfg_file() { echo test; }; cfg_bool() { return 1; }; power_apply() { :; }; aw_agent_reload_if_stale() { :; }
