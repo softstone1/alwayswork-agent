@@ -27,7 +27,7 @@ case "${args[0]}" in
   show) echo sddm.service ;;
   *) exit 0 ;;
 esac'
-stub sshd 'exit 0'
+stub sshd '[[ "$1" == -V ]] && { echo "OpenSSH_${SSHD_VER:-10.6}p1, OpenSSL 3.6.5" >&2; exit 0; }; exit 0'
 stub ssh-keygen 'while [[ $# -gt 0 ]]; do [[ "$1" == -f ]] && { : > "$2"; : > "$2.pub"; }; shift; done'
 stub warp-cli 'case "$*" in *--version*) echo "warp-cli 2026.8.2115.0";; *status*) echo "Status update: ${WARP_STATE:-Connected}";; esac'
 stub pacman '[[ "$1" == -Q ]] && { echo "git 2.51.0-1"; echo "podman 5.6.1-1"; echo "cloudflare-warp-bin 2026.8.2115-1"; }; exit 0'
@@ -78,6 +78,8 @@ check "an open grant applies"                   'apply "$(delivery "$UNTIL")"'
 check "sshd listens on loopback only, port 22"  '[[ "$(grep -c "^ListenAddress" "$CFG")" == 1 ]] && grep -qx "ListenAddress 127.0.0.1" "$CFG" && grep -qx "Port 22" "$CFG"'
 check "certificates from the grant CA only"     'grep -qx "TrustedUserCAKeys $AW_ETC/terminal/ca.pub" "$CFG" && [[ "$(cat "$AW_ETC/terminal/ca.pub")" == "$CA" ]] && grep -qx "AuthorizedKeysFile none" "$CFG" && grep -qx "PasswordAuthentication no" "$CFG"'
 check "one user, its principals, no root"       'grep -qx "AllowUsers t1" "$CFG" && grep -qx "PermitRootLogin no" "$CFG" && [[ "$(cat "$AW_ETC/terminal/principals/t1")" == dev ]] && [[ "$(ls "$AW_ETC/terminal/principals")" == t1 ]]'
+check "a person has time to type the user; no per-source penalties behind cloudflared" 'grep -qx "LoginGraceTime 120" "$CFG" && grep -qx "PerSourcePenalties no" "$CFG"'
+check "older OpenSSH gets no PerSourcePenalties line (it would reject it)" '( export SSHD_VER=9.6; libs; ! desk_terminal_render_config t1 p c k | grep -q PerSourcePenalties )'
 check "no forwarding of any kind"               'grep -qx "AllowTcpForwarding no" "$CFG" && grep -qx "X11Forwarding no" "$CFG" && grep -qx "AllowAgentForwarding no" "$CFG" && grep -qx "PermitTunnel no" "$CFG"'
 check "systemd enforces the deadline"           'secs=$(grep -oP "^RuntimeMaxSec=\K[0-9]+" "$UNIT") && (( secs > 1790 && secs <= 1800 )) && grep -qx "KillMode=control-group" "$UNIT" && grep -qx "Restart=no" "$UNIT"'
 check "never enabled at boot"                   '! grep -q "^\[Install\]" "$UNIT" && ! calls | grep -q "systemctl enable alwayswork-terminal"'
