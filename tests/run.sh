@@ -2300,6 +2300,7 @@ check "bootstrap uses the shared ssh policy" 'grep -q "apply_ssh_policy" "$ROOT/
 echo
 check "workload reconciliation and argument boundary regressions" 'bash "$ROOT/tests/workload-lifecycle.sh"'
 check "scoped node update regressions" 'bash "$ROOT/tests/node-updates.sh"'
+check "lifeline: silent-agent restart, signed recovery commands, watchdog and out-of-band doctor (tests/lifeline.sh)" 'bash "$ROOT/tests/lifeline.sh" > "$TMP/lifeline.out" 2>&1 || { grep "FAIL" "$TMP/lifeline.out"; false; }'
 check "infraAccess: awinfra0 + dedicated sshd via Access for Infrastructure" 'bash "$ROOT/tests/infra-access.sh" > "$TMP/infra.out" 2>&1 || { grep "FAIL" "$TMP/infra.out"; false; }'
 if yq --version 2>/dev/null | grep -qi mikefarah; then
   check "desk: One Client enrolment, time-boxed terminal sshd, veto, power, posture and software (tests/desk.sh)" 'bash "$ROOT/tests/desk.sh" > "$TMP/desk.out" 2>&1 || { grep "FAIL" "$TMP/desk.out"; false; }'

@@ -26,6 +26,27 @@ _health_raw() {
   [[ -n "${2:-}" ]] && jq -e . >/dev/null 2>&1 <<<"$2" || return 0
   _HEALTH_ARGS+=(--argjson "$1" "$2"); _HEALTH_FIELDS+="$1:\$$1,"
 }
+# health_cpu_temp_c — the CPU temperature in °C, or nothing. ACPI thermal
+# zones first; else the CPU's hwmon sensor (AMD k10temp/zenpower Tctl, Intel
+# coretemp package), which is all many desktops and mini PCs expose.
+health_cpu_temp_c() {
+  local zone v d name f
+  for zone in "${AW_SYS:-}"/sys/class/thermal/thermal_zone*/temp; do
+    [[ -r "$zone" ]] || continue
+    v="$(cat "$zone" 2>/dev/null || true)"
+    [[ "$v" =~ ^[0-9]+$ ]] && { printf '%s' "$(( v / 1000 ))"; return 0; }
+  done
+  for d in "${AW_SYS:-}"/sys/class/hwmon/hwmon*; do
+    name="$(cat "$d/name" 2>/dev/null || true)"
+    case "$name" in k10temp|zenpower|coretemp|cpu_thermal) ;; *) continue ;; esac
+    for f in "$d"/temp1_input "$d"/temp*_input; do
+      v="$(cat "$f" 2>/dev/null || true)"
+      [[ "$v" =~ ^[0-9]+$ ]] && { printf '%s' "$(( v / 1000 ))"; return 0; }
+    done
+  done
+  return 0
+}
+
 _health_bool() { if "$@"; then printf 'true'; else printf 'false'; fi; }
 
 # Doctor cache: {score, at} written by `aw doctor` on every run (at = unix ms).
@@ -53,8 +74,15 @@ health_doctor_refresh() {
   [[ $(( now - at )) -ge 3600000 ]] || return 0
   [[ "$DRY_RUN" == "1" ]] && return 0
   [[ -x "$AW_ROOT/bin/alwayswork" ]] || return 0
-  # Bounded: the heartbeat waits on this, and a doctor check that hangs (a
-  # stalled network fetch) must never silence the node.
+  # Out of band: doctor runs in its own transient unit with a hard runtime
+  # limit and records its result for the next heartbeat, so a check that
+  # hangs (a stalled network fetch) can never hold up the heartbeat.
+  if [[ "${AW_TEST:-0}" != "1" ]] && have systemd-run && [[ -d /run/systemd/system ]]; then
+    systemctl is-active --quiet alwayswork-doctor.service 2>/dev/null && return 0
+    systemd-run --quiet --collect --unit=alwayswork-doctor --property=RuntimeMaxSec=300 \
+      --setenv=ASSUME_YES=1 --setenv=NO_COLOR=1 "$AW_ROOT/bin/alwayswork" doctor >/dev/null 2>&1 || true
+    return 0
+  fi
   ASSUME_YES=1 NO_COLOR=1 timeout 180 "$AW_ROOT/bin/alwayswork" doctor >/dev/null 2>&1 </dev/null || true
 }
 
@@ -292,13 +320,8 @@ control_health_json() {
   _health_num diskRootTotalGb "$(df -BG --output=size / 2>/dev/null | tail -1 | tr -dc '0-9' || true)"
   _health_num diskRootUsedPct "$(df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9' || true)"
 
-  local zone
-  for zone in /sys/class/thermal/thermal_zone*/temp; do
-    [[ -r "$zone" ]] || continue
-    v="$(cat "$zone" 2>/dev/null || true)"
-    [[ "$v" =~ ^[0-9]+$ ]] && _health_num tempC "$(( v / 1000 ))"
-    break
-  done
+  local tc; tc="$(health_cpu_temp_c)"
+  [[ -n "$tc" ]] && _health_num tempC "$tc"
 
   local kind state
   kind="none"
