@@ -59,6 +59,9 @@ calls() { cat "$CALLS" 2>/dev/null; }
 echo "== desk: delivery and Cloudflare One =="
 check "a desk delivery applies"                 'apply "$(delivery null)"'
 check "desk user and organization recorded"     '( libs; [[ "$(cfg_get .desk.user)" == t1 && "$(cfg_get .desk.organization)" == anakut ]] )'
+check "without desk.warp the developer's own client is left alone" '[[ ! -e "$AW_WARP_MDM" ]] && ! calls | grep -q "restart warp-svc"'
+printf 'profile: desk\nagent:\n  user: t1\ncapabilities:\n  enabled: [core, desk.base, desk.warp]\n' > "$AW_CONFIG"
+check "with desk.warp the delivery applies"     'apply "$(delivery null)"'
 check "One Client enrolment names the organization" 'grep -q "<string>anakut</string>" "$AW_WARP_MDM" && grep -q "<key>organization</key>" "$AW_WARP_MDM"'
 check "warp-svc restarted on enrolment change"  'calls | grep -q "systemctl restart warp-svc"'
 : > "$CALLS"
@@ -116,6 +119,7 @@ check "desk info: user, KDE, active session, display manager" '( libs; desk_info
 check "health fields only on desks"             '( libs; _HEALTH_ARGS=(); _HEALTH_FIELDS=""; _health_raw() { _HEALTH_FIELDS+="$1,"; }; desk_health_fields; [[ "$_HEALTH_FIELDS" == "desk,software,posture,terminal," ]] ) && ( printf "profile: worker\n" > "$AW_CONFIG"; libs; _HEALTH_FIELDS=""; _health_raw() { _HEALTH_FIELDS+="$1,"; }; desk_health_fields; [[ -z "$_HEALTH_FIELDS" ]] )'
 printf 'profile: desk\nagent:\n  user: t1\n' > "$AW_CONFIG"
 check "doctor: unencrypted root is a desk finding" '( libs; desk_audit ) | grep -q "not encrypted"'
+check "doctor: no One Client finding unless desk.warp is enabled" '( stub warp-cli "exit 1"; rm -f "$S/warp-cli"; libs; ! desk_audit | grep -q warp-cli )'
 
 echo "       desk: passed $PASS failed $FAIL"
 (( FAIL == 0 ))

@@ -6,8 +6,9 @@
 # with a headless node it differs in exactly these ways:
 #
 #   - power is left to the desktop (no masked sleep, no logind overrides);
-#   - the Cloudflare One Client (warp-svc) is enrolled into the operator's
-#     Zero Trust organization for the developer's own traffic;
+#   - optionally (desk.warp), the Cloudflare One Client is enrolled into the
+#     operator's Zero Trust organization for the developer's own traffic —
+#     the desk itself needs only its tunnel connector;
 #   - the agentic CLIs live in the developer's home, per user;
 #   - a remote terminal exists only inside a time-boxed grant delivered by
 #     the control plane: a dedicated sshd on 127.0.0.1:22 (the tunnel's only
@@ -60,7 +61,11 @@ desk_apply_from_delivery() {
   fi
   if [[ -n "$org" && "$org" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
     cfg_set_str '.desk.organization' "$org"
-    desk_warp_enrol "$org" || warn "desk: Cloudflare One Client enrolment is not configured yet"
+    # Only a desk that runs desk.warp is enrolled; a client the developer
+    # installed on their own is left exactly as they configured it.
+    if cfg_list '.capabilities.enabled' 2>/dev/null | grep -qx desk.warp; then
+      desk_warp_enrol "$org" || warn "desk: Cloudflare One Client enrolment is not configured yet"
+    fi
   fi
   desk_terminal_apply "$json"
 }
@@ -406,6 +411,9 @@ desk_health_fields() {
 desk_audit() {
   desk_mode || return 0
   [[ -n "$(desk_user)" ]] || printf '%s\n' "desk has no developer user (set by the desk group; install with sudo from the developer's account)"
-  have warp-cli || printf '%s\n' "the Cloudflare One Client (warp-cli) is not installed"
+  # The One Client is optional on a desk: only a desk that asked for it is told it is missing.
+  if cfg_list '.capabilities.enabled' 2>/dev/null | grep -qx desk.warp && ! have warp-cli; then
+    printf '%s\n' "desk.warp is enabled but the Cloudflare One Client (warp-cli) is not installed"
+  fi
   if desk_disk_encrypted; then :; elif [[ $? == 1 ]]; then printf '%s\n' "the root filesystem is not encrypted (LUKS): a stolen desk exposes its data"; fi
 }

@@ -96,7 +96,7 @@ foundation; app manifests declare sources/requirements, not privileged collector
 ## Developer desks (`profile: desk`)
 
 A desk is a developer's workstation that is also a node (control plane `docs/DESK.md`).
-`profiles/desk.yaml` adds three capabilities to the usual core, podman and dsh:
+`profiles/desk.yaml` adds `desk.base` and `tools.agents` to the usual core, podman and dsh; `desk.warp` is optional (the desk is reached through its tunnel connector, not the One Client):
 
 | Capability | What it does |
 |---|---|

@@ -1015,7 +1015,7 @@
       "workload": null
     },
     {
-      "description": "The Cloudflare One Client (WARP) enrolled into the operator's Zero Trust organization; the developer signs in once in the browser.",
+      "description": "Optional on a desk. The Cloudflare One Client (WARP) enrolled into the operator's Zero Trust organization for the developer's own traffic; the desk itself needs only its tunnel.",
       "id": "desk.warp",
       "name": "Cloudflare One Client",
       "package": {
