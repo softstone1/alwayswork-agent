@@ -53,7 +53,9 @@ health_doctor_refresh() {
   [[ $(( now - at )) -ge 3600000 ]] || return 0
   [[ "$DRY_RUN" == "1" ]] && return 0
   [[ -x "$AW_ROOT/bin/alwayswork" ]] || return 0
-  ASSUME_YES=1 NO_COLOR=1 "$AW_ROOT/bin/alwayswork" doctor >/dev/null 2>&1 </dev/null || true
+  # Bounded: the heartbeat waits on this, and a doctor check that hangs (a
+  # stalled network fetch) must never silence the node.
+  ASSUME_YES=1 NO_COLOR=1 timeout 180 "$AW_ROOT/bin/alwayswork" doctor >/dev/null 2>&1 </dev/null || true
 }
 
 # --- listener audit (issue #16, NETWORK_SECURITY N1) -------------------------

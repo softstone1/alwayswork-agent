@@ -255,6 +255,7 @@ check "enroll --help documents claim" 'run_aw enroll --help && has "pending clai
 check "enroll --status is honest"      'run_aw enroll --status && has "not enrolled"'
 check "provision unit Before agent"    'grep -q "Before=alwayswork-agent.service" "$ROOT/capabilities/control.join/install.sh"'
 check "provision timer shipped"        'grep -q "alwayswork-provision.timer" "$ROOT/capabilities/control.join/install.sh"'
+check "doctor bounds arch-audit; the heartbeat bounds doctor" 'grep -q "timeout 30 arch-audit" "$ROOT/commands/doctor.sh" && grep -q "timeout 180 \"\$AW_ROOT/bin/alwayswork\" doctor" "$ROOT/lib/health.sh"'
 check "provision service can be re-run by its timer (no RemainAfterExit)" '! grep -q "^RemainAfterExit=yes" "$ROOT/capabilities/control.join/install.sh" && grep -q "^OnUnitActiveSec=5min" "$ROOT/capabilities/control.join/install.sh"'
 check "agent verifies the drain order"     'grep -q "control_maybe_drain" "$ROOT/lib/control.sh"'
 check "claims endpoint wired"          'grep -q "/v1/claims" "$ROOT/lib/control.sh"'
