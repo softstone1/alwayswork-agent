@@ -1,0 +1,10 @@
+id: periderm.builder
+name: Periderm builder
+description: Builds Periderm candidate images from signed build work, on the internal periderm network through the egress proxy (never --network=host), and uploads them to the control plane.
+version: 1
+requires: [core, runtime.podman]
+profiles: [full]
+# Work arrives as signed `build` items in desired state (`periderm.work`,
+# PERIDERM_TECHNICAL_SPEC §7.3, §9.1); lib/periderm-trust.sh checks and runs
+# them. This directory only prepares the node. No workload of its own: the
+# egress proxy it builds through is periderm.workspace's.

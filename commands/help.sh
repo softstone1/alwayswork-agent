@@ -36,6 +36,7 @@ OPERATIONS
   package [list|reapply]    Packages delivered by the control plane (oci, capability, distro)
   config show|get|set       Node-local settings in worker.yaml (e.g. aw config set .updates.guard false)
   bridge --once             Serve the harness's allowlisted requests (path unit)
+  periderm flush            Send queued Periderm results and activation reports now
 
 APPS
   app list [category]       Browse the curated tool catalog

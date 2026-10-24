@@ -1,0 +1,11 @@
+id: periderm.verifier
+name: Periderm verifier
+description: Verifies Periderm candidates and backups from signed verify work in a clean T2 instance, and signs receipts with this node's key. Runs alone - it holds the host podman socket.
+version: 1
+requires: [core, runtime.podman]
+profiles: [full]
+# PERIDERM_TECHNICAL_SPEC §8.5: never on the workspace/builder node. The
+# verifier image (delivered as `periderm.verifierImage`) drives candidates
+# through the host podman socket on the internal `periderm-verify` network;
+# the agent signs the receipt statement it writes. A node with this role and
+# any other Periderm role runs no Periderm work at all.
