@@ -237,6 +237,46 @@ desk_loopback22_taken() {
   grep -Eq '^(127\.0\.0\.1|0\.0\.0\.0|\*|\[::\]|\[::1\]|::):22$' <<<"$out"
 }
 
+# --- the operator account ------------------------------------------------------
+#
+# A grant logs in as the operator's own account, named after their email
+# prefix: Cloudflare's browser-rendered SSH issues its short-lived
+# certificate only for that name, and the desk's logs then say who it was.
+# The account is created on first use (no password, locked), gets
+# passwordless sudo for the grant only, and keeps its home afterwards.
+# An existing account that this agent did not create is never taken over
+# (except the desk's own developer).
+
+desk_terminal_operators_file() { printf '%s\n' "$AW_STATE/terminal-operators"; }
+desk_terminal_sudoers_file()   { printf '%s\n' "${AW_SUDOERS_DIR:-/etc/sudoers.d}/alwayswork-terminal"; }
+
+desk_terminal_ensure_operator() {
+  local user="$1"
+  [[ "$user" == "$(desk_user)" ]] && return 0
+  if getent passwd "$user" >/dev/null 2>&1; then
+    grep -qx "$user" "$(desk_terminal_operators_file)" 2>/dev/null && return 0
+    warn "desk: '$user' is an existing account this agent did not create; refusing to use it for a terminal grant"
+    return 1
+  fi
+  log "desk: creating operator account $user (no password; reachable only inside terminal grants)"
+  run useradd -m -s /bin/bash -c "AlwaysWork operator (desk terminal grants)" "$user" || { warn "desk: could not create $user"; return 1; }
+  run passwd -l "$user" >/dev/null 2>&1 || true
+  printf '%s\n' "$user" >> "$(desk_terminal_operators_file)"
+}
+
+# desk_terminal_sudo <user|""> — passwordless sudo for the grant's operator, or none.
+desk_terminal_sudo() {
+  local f cand; f="$(desk_terminal_sudoers_file)"
+  if [[ -z "$1" ]]; then run rm -f "$f"; return 0; fi
+  local want; want="$(printf '# managed by alwayswork (desk terminal grant) — removed when the grant closes.\n%s ALL=(ALL:ALL) NOPASSWD: ALL' "$1")"
+  [[ -f "$f" && "$(cat "$f" 2>/dev/null)" == "$want" ]] && return 0
+  ensure_dir "$(dirname "$f")"; cand="$(dirname "$f")/.alwayswork-terminal.new"
+  ( umask 0337; printf '%s\n' "$want" > "$cand" ) || return 1
+  run chmod 0440 "$cand" 2>/dev/null || true
+  if ! visudo -cf "$cand" >/dev/null 2>&1; then run rm -f "$cand"; warn "desk: visudo rejected the terminal sudoers drop-in"; return 1; fi
+  run mv -f "$cand" "$f"
+}
+
 # desk_terminal_apply <delivery-json>
 desk_terminal_apply() {
   local json="$1" t gid until user ca now left dir cfg unit principals changed=0
@@ -249,8 +289,7 @@ desk_terminal_apply() {
   if (( until <= now )); then desk_terminal_close "grant $gid expired"; return 0; fi
   # Closed at the desk (aw desk terminal-close): the developer's veto holds for this grant.
   if [[ "$(cat "$AW_STATE/terminal-veto" 2>/dev/null)" == "$gid" ]]; then desk_terminal_close "grant $gid closed at the desk"; return 0; fi
-  [[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$user" != "root" ]] || { warn "desk: refusing terminal user '$user'"; desk_terminal_close "bad user"; return 1; }
-  getent passwd "$user" >/dev/null 2>&1 || [[ "${AW_TEST:-0}" == "1" ]] || { warn "desk: terminal user '$user' does not exist on this desk"; return 1; }
+  [[ "$user" =~ ^[a-z_][a-z0-9._-]{0,31}$ && "$user" != "root" ]] || { warn "desk: refusing terminal user '$user'"; desk_terminal_close "bad user"; return 1; }
   [[ "$ca" =~ ^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]+\ [A-Za-z0-9+/=]+ ]] || { warn "desk: refusing a terminal CA that is not an OpenSSH public key"; desk_terminal_close "bad CA"; return 1; }
   principals="$(jq -r '(.principals // [])[] | select(test("^[a-z0-9._-]{1,64}$"))' <<<"$t")"
   [[ -n "$principals" ]] || { warn "desk: terminal grant names no usable principal"; desk_terminal_close "no principal"; return 1; }
@@ -259,6 +298,7 @@ desk_terminal_apply() {
     return 1
   fi
 
+  desk_terminal_ensure_operator "$user" || { desk_terminal_close "operator account unavailable"; return 1; }
   dir="$(desk_terminal_dir)"; ensure_dir "$dir/principals"; run chmod 0755 "$dir" "$dir/principals"
   if [[ ! -f "$dir/ssh_host_ed25519_key" ]]; then
     run ssh-keygen -q -t ed25519 -N '' -C "alwayswork-terminal@$(hostname 2>/dev/null || echo desk)" -f "$dir/ssh_host_ed25519_key" </dev/null >/dev/null 2>&1 \
@@ -283,6 +323,7 @@ desk_terminal_apply() {
     run systemctl restart "$DESK_TERMINAL_UNIT" || { warn "desk: the terminal sshd did not start"; return 1; }
     log "desk: terminal open for $user until $(date -d "@$((until / 1000))" 2>/dev/null || echo "$until") (grant $gid)"
   fi
+  desk_terminal_sudo "$user" || warn "desk: the operator has no sudo for this grant"
   jq -nc --arg g "$gid" --argjson u "$until" --arg user "$user" '{grantId:$g, until:$u, user:$user}' | aw_write "$(desk_terminal_state)"
 }
 
@@ -292,9 +333,10 @@ desk_terminal_apply() {
 desk_terminal_close() {
   local why="${1:-closed}" unit dir had=0
   unit="$(desk_systemd_dir)/$DESK_TERMINAL_UNIT"; dir="$(desk_terminal_dir)"
-  [[ -f "$unit" || -f "$(desk_terminal_state)" ]] && had=1
+  [[ -f "$unit" || -f "$(desk_terminal_state)" || -f "$(desk_terminal_sudoers_file)" ]] && had=1
   (( had )) || return 0
   run systemctl stop "$DESK_TERMINAL_UNIT" 2>/dev/null || true
+  desk_terminal_sudo ""
   run rm -f "$unit" "$dir/ca.pub" "$dir/sshd_config" "$(desk_terminal_state)"
   run rm -rf "$dir/principals"
   run systemctl daemon-reload 2>/dev/null || true
