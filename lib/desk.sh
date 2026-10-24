@@ -103,7 +103,7 @@ desk_warp_json() {
   if have warp-cli; then
     installed=true
     version="$(timeout 5 warp-cli --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)"
-    out="$(timeout 5 warp-cli --accept-tos status 2>/dev/null | tr 'A-Z' 'a-z')"
+    out="$(timeout 5 warp-cli --accept-tos status 2>/dev/null | tr '[:upper:]' '[:lower:]')"
     case "$out" in
       *"registration missing"*|*unregistered*) state="unregistered" ;;
       *disconnected*) state="disconnected" ;;
@@ -289,7 +289,7 @@ desk_info_json() {
   fi
   dm="$(systemctl show display-manager -p Id --value 2>/dev/null | sed 's/\.service$//')"
   model="$(printf '%s %s' "$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)" "$(cat /sys/class/dmi/id/product_name 2>/dev/null)" | xargs 2>/dev/null)"
-  fw="$(cat /sys/class/dmi/id/bios_version 2>/dev/null | head -c 120)"
+  fw="$(head -c 120 /sys/class/dmi/id/bios_version 2>/dev/null)"
   jq -nc --arg u "$user" --arg d "$desktop" --arg m "$dm" --argjson a "$active" --arg hm "$model" --arg fw "$fw" \
     '{sessionActive:$a} + (if $u != "" then {user:$u} else {} end) + (if $d != "" then {desktop:$d} else {} end)
      + (if $m != "" then {displayManager:$m} else {} end) + (if $hm != "" then {hostModel:$hm} else {} end) + (if $fw != "" then {firmware:$fw} else {} end)'
@@ -368,7 +368,8 @@ desk_disk_encrypted() {
 }
 
 desk_secure_boot() {
-  local f; f="$(ls /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | head -n1)"
+  local f=""
+  for f in /sys/firmware/efi/efivars/SecureBoot-*; do [[ -e "$f" ]] && break; f=""; done
   [[ -n "$f" ]] || return 1
   [[ "$(od -An -t u1 -j4 -N1 "$f" 2>/dev/null | tr -d ' ')" == "1" ]]
 }
