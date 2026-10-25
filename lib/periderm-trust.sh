@@ -368,14 +368,22 @@ pd_ensure_verify_network() {
   fi
 }
 
+# pd_verify_fail <id> <attempt> <error>: the verifier could not run. Said to
+# the control plane, which retries it, instead of a silence until the lease ends.
+pd_verify_fail() {
+  err "periderm: verify $1 could not run: $3"
+  pd_post_result "$1" "$2" "$(jq -nc --arg e "$3" '{ok:false, error:$e}')"
+  return 1
+}
+
 pd_verify_run() {
   local wd="$1" id attempt mode scratch img name req want sig sha
   id="$(jq -r '.item.id' "$wd/work.json")"; attempt="$(jq -r '.item.attempt' "$wd/work.json")"
   req="$(jq -c '.item.request' "$wd/work.json")"; mode="$(jq -r '.mode // "candidate"' <<<"$req")"
   img="$(jq -r '.verifierImage' "$wd/work.json")"
-  [[ "$img" =~ ^[A-Za-z0-9._/:@-]+$ ]] || { err "periderm: verify $id: no usable verifierImage"; return 1; }
+  [[ "$img" =~ ^[A-Za-z0-9._/:@-]+$ ]] || { pd_verify_fail "$id" "$attempt" "no usable verifierImage"; return 1; }
   scratch="$(pd_verify_dir "$id")"
-  rm -rf "$scratch"; mkdir -p "$scratch" || return 1
+  rm -rf "$scratch"; mkdir -p "$scratch" || { pd_verify_fail "$id" "$attempt" "could not make its scratch directory"; return 1; }
   # Traversable, not listable: the candidates the verifier starts (userns=auto)
   # read the files it bind-mounts from here.
   chmod 711 "$(dirname "$scratch")" "$scratch"
@@ -392,19 +400,19 @@ pd_verify_run() {
     backup)
       gets+=("$(jq -r '.release.archiveKey // ""' <<<"$req")|release.tar|$(jq -r '.release.archiveSha256 // ""' <<<"$req")")
       gets+=("$(jq -r '.blobKey // ""' <<<"$req")|backup.tar|$(jq -r '.sha256 // ""' <<<"$req")") ;;
-    *) err "periderm: verify $id: unknown mode '$mode'"; return 1 ;;
+    *) pd_verify_fail "$id" "$attempt" "unknown mode '$mode'"; return 1 ;;
   esac
   local g key file dig
   for g in "${gets[@]}"; do
     IFS='|' read -r key file dig <<<"$g"
-    [[ -n "$key" ]] || { err "periderm: verify $id: the request does not name $file"; return 1; }
+    [[ -n "$key" ]] || { pd_verify_fail "$id" "$attempt" "the request does not name $file"; return 1; }
     [[ "$dig" =~ ^[0-9a-f]{64}$ ]] || dig=""
-    pd_blob_get "$key" "$scratch/$file" "$dig" || return 1
+    pd_blob_get "$key" "$scratch/$file" "$dig" || { pd_verify_fail "$id" "$attempt" "could not fetch $file"; return 1; }
     chmod 644 "$scratch/$file"
   done
   ( umask 077; jq -c --arg w "$id" --argjson a "$attempt" '. + {workId:$w, attempt:$a}' <<<"$req" > "$scratch/request.json" )
-  pd_ensure_verify_network || return 1
-  WL_PULL="" WL_BUILD="" wl_ensure_image "$img" >/dev/null || return 1
+  pd_ensure_verify_network || { pd_verify_fail "$id" "$attempt" "could not create the verify network"; return 1; }
+  ( WL_PULL="" WL_BUILD="" wl_ensure_image "$img" ) >/dev/null || { pd_verify_fail "$id" "$attempt" "could not pull the verifier image"; return 1; }
   name="periderm-verifier-$(pd_short "$id.$attempt")"
   log "periderm: verifying $id ($mode) in $name"
   # The verifier drives candidates through the host podman socket: it is the
@@ -416,19 +424,19 @@ pd_verify_run() {
     --label "dev.alwayswork.periderm.work=$id" "$img" "$scratch/request.json")
   if ! run timeout "$PD_VERIFY_TIMEOUT" podman "${flags[@]}" >"$wd/verify.log" 2>&1; then
     run podman rm -f "$name" >/dev/null 2>&1 || true
-    err "periderm: verifier for $id failed: $(tail -c 300 "$wd/verify.log")"; return 1
+    pd_verify_fail "$id" "$attempt" "the verifier failed: $(tail -c 300 "$wd/verify.log" | tr -cd '[:print:]\n')"; return 1
   fi
   if ! jq -e 'type == "object"' "$scratch/receipt.json" >/dev/null 2>&1 || [[ ! -s "$scratch/receipt.sign" ]]; then
-    err "periderm: verifier for $id wrote no receipt"; return 1
+    pd_verify_fail "$id" "$attempt" "verifier wrote no receipt"; return 1
   fi
   # The node signs only a receipt statement for this work, over this receipt:
   # never arbitrary bytes the container wrote.
   sha="$(pd_canon_sha < "$scratch/receipt.json")"
   want="$(printf 'AW-VERIFY-RECEIPT-V1\n%s\n%s\n%s' "$id" "$attempt" "$sha")"
   if [[ "$(cat "$scratch/receipt.sign")" != "$want" || "$(wc -c < "$scratch/receipt.sign")" != "${#want}" ]]; then
-    err "periderm: receipt.sign for $id is not the receipt statement for this work; refusing to sign"; return 1
+    pd_verify_fail "$id" "$attempt" "receipt.sign for $id is not the receipt statement for this work; refusing to sign"; return 1
   fi
-  sig="$(control_sign_file "$scratch/receipt.sign")" || { err "periderm: could not sign the receipt"; return 1; }
+  sig="$(control_sign_file "$scratch/receipt.sign")" || { pd_verify_fail "$id" "$attempt" "could not sign the receipt"; return 1; }
   pd_post_result "$id" "$attempt" "$(jq -nc --slurpfile r "$scratch/receipt.json" --arg s "$sig" '{receipt:$r[0], signature:$s}')"
   rm -f "$scratch"/*.tar "$scratch/source.bundle"
   ok "periderm: receipt for $id signed and sent"

@@ -44,7 +44,8 @@ case "$1 $2" in
   "rm -f")           rm -f "$PS/ctr-${@: -1}" ;;
   *) case "$1" in
        build) echo "STEP 1/2: FROM scratch"; echo "STEP 2/2: COPY . /app"; echo "COMMIT"; exit "${BUILD_RC:-0}" ;;
-       run)   req="${@: -1}"; d="$(dirname "$req")"; ls "$d" > "$SCRATCH_LS"
+       run)   [[ -z "${VERIFY_RC:-}" ]] || { echo "Error: the verifier crashed"; exit "$VERIFY_RC"; }
+              req="${@: -1}"; d="$(dirname "$req")"; ls "$d" > "$SCRATCH_LS"
               w="$(jq -r .workId "$req")"; a="$(jq -r .attempt "$req")"
               printf "%s" "{\"workId\":\"$w\",\"attempt\":$a,\"candidateId\":\"pdcand_1\",\"imageId\":\"sha256:abc\",\"checks\":[],\"mutation\":{\"10\":1,\"2\":0.5}}" > "$d/receipt.json"
               sha="$(jq -j "$CANON canon" "$d/receipt.json" | sha256sum | cut -d" " -f1)"
@@ -247,9 +248,14 @@ check "no backup in the request: no backup.tar downloaded" \
   '[[ "$(sort "$SCRATCH_LS" | paste -sd,)" == "candidate.tar,request.json,revert.tar,source.bundle" ]] && ! reqs | grep -q "backup.tar"'
 reset_logs; export RECEIPT_SHA=0000000000000000000000000000000000000000000000000000000000000000
 apply "$(delivery "[$(work verify pdwv_forged 1 $LATER "$VREQ")]")"
-check "a receipt.sign that is not this receipt's statement is never signed or posted" \
-  '! reqs | grep -q "pdwv_forged/result" && grep -q "refusing to sign" "$JOBS_LOG"'
+check "a receipt.sign that is not this receipt's statement is never signed: only an unsigned could-not-run report goes" \
+  'FR="$(reqs | jq -r "select(.p == \"/v1/device/periderm/work/pdwv_forged/result\") | .b")"; jq -e ".result.ok == false and (.result.error | test(\"refusing to sign\")) and (.result | has(\"signature\") | not) and (.result | has(\"receipt\") | not)" <<<"$FR" >/dev/null && grep -q "refusing to sign" "$JOBS_LOG"'
 unset RECEIPT_SHA
+reset_logs; export VERIFY_RC=3
+apply "$(delivery "[$(work verify pdwv_crash 1 $LATER "$VREQ")]")"
+check "a verifier that fails reports it could not run (with its last lines), so the control plane retries" \
+  'CR="$(reqs | jq -r "select(.p == \"/v1/device/periderm/work/pdwv_crash/result\") | .b")"; jq -e ".attempt == 1 and .result.ok == false and (.result.error | test(\"the verifier failed: .*crashed\"))" <<<"$CR" >/dev/null'
+unset VERIFY_RC
 reset_logs; roles periderm.verifier periderm.runtime
 check "the verifier refuses to share a node with another Periderm role (nothing runs)" \
   '! apply "$(delivery "[$(work verify pdwv_x 1 $LATER "$VREQ")]")" && grep -q "shares this node" "$TMP/out" && ! calls | grep -q "^systemd-run\|^podman run"'
