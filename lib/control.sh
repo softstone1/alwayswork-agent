@@ -795,14 +795,22 @@ control_apply_delivery() {
   # podman and the networks are in place first. Failure-isolated like the
   # packages: a workspace that cannot start is logged, and never keeps the
   # rest of this version from being applied and acked.
+  # Their outcome rides the heartbeat as lastPeriderm, like lastApply: the
+  # node's journal is the only other place it would be written.
+  local plog prc=0; plog="$(mktemp)"
   if declare -F periderm_apply_from_delivery >/dev/null; then
-    ( periderm_apply_from_delivery "$json" ) || warn "control: periderm workspaces of version $ver did not fully converge"
+    ( periderm_apply_from_delivery "$json" ) >>"$plog" 2>&1 || { prc=1; echo "warn: control: periderm workspaces of version $ver did not fully converge" >>"$plog"; }
   fi
   # Periderm work and activations (lib/periderm-trust.sh): each work item is
   # checked against its own signature; long jobs run detached, never here.
   if declare -F periderm_trust_apply >/dev/null; then
-    ( periderm_trust_apply "$json" full ) || warn "control: periderm work of version $ver did not fully converge"
+    ( periderm_trust_apply "$json" full ) >>"$plog" 2>&1 || { prc=1; echo "warn: control: periderm work of version $ver did not fully converge" >>"$plog"; }
   fi
+  cat "$plog" >&2
+  if declare -F periderm_apply_from_delivery >/dev/null || declare -F periderm_trust_apply >/dev/null; then
+    control_note_apply "$ver" "$(( prc == 0 ))" "$plog" last-periderm.json
+  fi
+  rm -f "$plog"
   # Deferred lockdown: public SSH goes off only once the node is active AND
   # reachable through its tunnel — never at install time, where it would cut
   # off access before the tunnel is verified. A deferred lockdown keeps the
@@ -823,10 +831,11 @@ control_apply_delivery() {
   cfg_set_expr '.control.appliedVersion' "$ver"
 }
 
-# control_note_apply <version> <ok 1|0> <log>: the last apply's outcome for the heartbeat — on a
+# control_note_apply <version> <ok 1|0> <log> [file]: the last apply's outcome for the heartbeat — on a
 # failure its last error/warning lines, redacted of known secret shapes, at most 1500 characters.
+# [file] (default last-apply.json) under $AW_STATE; last-periderm.json is the Periderm reconcile's.
 control_note_apply() {
-  local ver="$1" ok="$2" log="$3" tail=""
+  local ver="$1" ok="$2" log="$3" file="${4:-last-apply.json}" tail=""
   if [[ "$ok" == 0 ]]; then
     tail="$(grep -E 'error|warn|ERROR|FATAL|failed|refused|die' "$log" 2>/dev/null | tail -n 12 \
       | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig; s/aj_[A-Za-z0-9_-]+/aj_[redacted]/g; s/awd_[A-Za-z0-9_-]+/awd_[redacted]/g' \
@@ -834,7 +843,7 @@ control_note_apply() {
     [[ -n "$tail" ]] || tail="$(tail -n 8 "$log" 2>/dev/null | tr -cd '[:print:]\n' | tail -c 800)"
   fi
   jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson v "${ver:-0}" --argjson ok "$([[ $ok == 1 ]] && echo true || echo false)" --arg t "$tail" \
-    '{at:$at, version:$v, ok:$ok, errorTail:(if $t == "" then null else $t end)}' | aw_write "$AW_STATE/last-apply.json" 2>/dev/null || true
+    '{at:$at, version:$v, ok:$ok, errorTail:(if $t == "" then null else $t end)}' | aw_write "$AW_STATE/$file" 2>/dev/null || true
 }
 
 # control_apply_lockdown <delivery-json> — the zero-touch finale.
