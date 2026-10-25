@@ -195,7 +195,15 @@ pd_harness_secrets() {
   case "$kind" in
     claude)
       v="$(sec_get CLAUDE_CODE_OAUTH_TOKEN)"
-      [[ "$v" =~ ^[A-Za-z0-9._~+/=-]{16,4096}$ ]] || { err "periderm.agent: no usable CLAUDE_CODE_OAUTH_TOKEN in this node's secrets (claude setup-token, then the group's secrets)"; return 1; }
+      # Pasted from a terminal: line wraps and spaces are never part of the
+      # token, and `claude setup-token` prints it inside a sentence.
+      v="${v//[[:space:]]/}"
+      [[ "$v" =~ (sk-ant-oat[A-Za-z0-9_-]+) ]] && v="${BASH_REMATCH[1]}"
+      if [[ -z "$v" ]]; then
+        err "periderm.agent: CLAUDE_CODE_OAUTH_TOKEN is not in this node's secrets (claude setup-token, then the group's secrets)"; return 1
+      elif ! [[ "$v" =~ ^[A-Za-z0-9._~+/=-]{16,4096}$ ]]; then
+        err "periderm.agent: CLAUDE_CODE_OAUTH_TOKEN in this node's secrets is malformed (${#v} characters, not a token from claude setup-token); set it again"; return 1
+      fi
       printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$v" ;;
     codex|opencode)
       k="$( [[ "$kind" == codex ]] && echo CODEX_AUTH_JSON || echo OPENCODE_AUTH_JSON )"
