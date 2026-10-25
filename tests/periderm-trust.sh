@@ -65,7 +65,7 @@ esac'
 stub systemd-run '
 args=("$@"); while [[ "${args[0]}" == --* ]]; do args=("${args[@]:1}"); done
 "${args[@]}" >> "$JOBS_LOG" 2>&1; exit 0'
-stub ufw 'exit 0'
+stub ufw '[[ "$1" == status ]] && echo "Status: active"; exit 0'
 # curl: the control plane at https://cp.test and the instances probed over HTTP.
 stub curl '
 method=GET url="" out="" data="" dfile="" w="" ts="" nonce="" sig=""
@@ -235,6 +235,8 @@ apply "$(delivery "[$(work verify pdwv_ok 2 $LATER "$VREQ")]")"
 SCR="$AW_STATE/periderm/verify/pdwv_ok"
 RUNL="$(calls | grep '^podman run ' | tail -n1)"
 check "the internal periderm-verify network is created" 'calls | grep -qx "podman network create --internal periderm-verify"'
+check "the verifier can resolve its candidates by name through a strict firewall: DNS only, from the verify subnet" \
+  'calls | grep -q "^ufw allow from 10.90.0.0/24 to any port 53 proto udp comment alwayswork:periderm.verifier" && calls | grep -q "^ufw allow from 10.90.0.0/24 to any port 53 proto tcp comment alwayswork:periderm.verifier" && ! calls | grep -q "^ufw route allow from 10.90.0.0/24.*periderm.verifier"'
 check "verifier container: socket, same-path scratch, network, env, command" \
   'grep -q -- "-v /run/podman/podman.sock:/run/podman/podman.sock" <<<"$RUNL" && grep -q -- "-v $SCR:$SCR " <<<"$RUNL" && grep -q -- "--network periderm-verify" <<<"$RUNL" && grep -q -- "--name periderm-verifier-[0-9a-f]\{12\}" <<<"$RUNL" && grep -q -- "-e PERIDERM_VERIFY_NETWORK=periderm-verify" <<<"$RUNL" && grep -q -- "-e PERIDERM_VERIFIER_HOST=periderm-verifier-[0-9a-f]\{12\}" <<<"$RUNL" && grep -q -- "-e PERIDERM_VERIFIER_IMAGE=ghcr.io/acme/periderm-verifier@sha256:cccc" <<<"$RUNL" && [[ "${RUNL##* }" == "$SCR/request.json" ]]'
 check "scratch held candidate.tar, revert.tar, source.bundle, backup.tar and request.json (+workId, attempt)" \
