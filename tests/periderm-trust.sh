@@ -256,6 +256,10 @@ apply "$(delivery "[$(work verify pdwv_crash 1 $LATER "$VREQ")]")"
 check "a verifier that fails reports it could not run (with its last lines), so the control plane retries" \
   'CR="$(reqs | jq -r "select(.p == \"/v1/device/periderm/work/pdwv_crash/result\") | .b")"; jq -e ".attempt == 1 and .result.ok == false and (.result.error | test(\"the verifier failed: .*crashed\"))" <<<"$CR" >/dev/null'
 unset VERIFY_RC
+reset_logs; mkdir -p "$AW_STATE/periderm/work/pdwv_orphan.1/claimed"
+apply "$(delivery "[$(work verify pdwv_orphan 1 $LATER "$VREQ")]")"
+check "claimed verify work whose job is gone (not running, not done) is reported once as stopped, never re-run" \
+  'OR="$(reqs | jq -r "select(.p == \"/v1/device/periderm/work/pdwv_orphan/result\") | .b")"; jq -e ".result.ok == false and (.result.error | test(\"stopped without finishing\"))" <<<"$OR" >/dev/null && ! calls | grep -q "^systemd-run" && reset_logs && apply "$(delivery "[$(work verify pdwv_orphan 1 $LATER "$VREQ")]")" && ! reqs | grep -q "pdwv_orphan/result"'
 reset_logs; roles periderm.verifier periderm.runtime
 check "the verifier refuses to share a node with another Periderm role (nothing runs)" \
   '! apply "$(delivery "[$(work verify pdwv_x 1 $LATER "$VREQ")]")" && grep -q "shares this node" "$TMP/out" && ! calls | grep -q "^systemd-run\|^podman run"'
