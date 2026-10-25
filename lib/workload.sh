@@ -103,6 +103,7 @@ wl_ensure_image() {
 #   WL_EXTRA       array of extra podman flags (e.g. --shm-size 256m)
 #   WL_NETWORK     "" (the node's `alwayswork` network) | none | <name> | container:<container>
 #   WL_USERNS      opt-in: a --userns value instead of auto (e.g. container:<container>)
+#   WL_RM_DEPEND   opt-in: 1 = remove containers joined to this one before it restarts
 #   WL_BINDS_TO    opt-in: a unit this one is bound to and ordered after (BindsTo= + After=)
 #   WL_ARGS        array of arguments after the image (optional)
 # systemd quoting, not shell quoting: bare when safe, else double quotes with
@@ -148,8 +149,11 @@ wl_write_unit() {
   fi
   # Opt-ins, not defaults: never let them leak to the next workload written
   # in this process (each workload's *_workload_vars sets them before this).
-  local binds="${WL_BINDS_TO:-}"
-  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP WL_NO_NNP WL_USERNS WL_BINDS_TO
+  local binds="${WL_BINDS_TO:-}" rmdep=""
+  # WL_RM_DEPEND=1: containers joined to this one (--network container:) are
+  # removed with it before a restart; otherwise podman refuses to replace it.
+  [[ "${WL_RM_DEPEND:-}" == 1 ]] && rmdep=" --depend"
+  unset WL_HEALTH_START WL_HEALTH_ON_FAILURE WL_DEBUG_DROP WL_NO_NNP WL_USERNS WL_BINDS_TO WL_RM_DEPEND
   for v in "${WL_PUBLISH[@]:-}"; do [[ -n "$v" ]] && iso+=(--publish "127.0.0.1:$v"); done
   for v in "${WL_VOLUMES[@]:-}"; do [[ -n "$v" ]] && iso+=(--volume "$v"); done
   [[ -n "${WL_ENV_FILE:-}" ]] && iso+=(--env-file "$WL_ENV_FILE")
@@ -178,7 +182,7 @@ Restart=always
 RestartSec=5
 TimeoutStartSec=300
 TimeoutStopSec=60
-ExecStartPre=-${podman_bin} rm -f ${container}
+ExecStartPre=-${podman_bin} rm -f${rmdep} ${container}
 ExecStart=${podman_bin} run --rm --replace --sdnotify=conmon --name ${container} \\
   ${flags}\\
   ${WL_IMAGE} ${args}

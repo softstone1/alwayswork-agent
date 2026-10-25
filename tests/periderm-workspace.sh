@@ -152,6 +152,8 @@ check "workspace env: exec bridge mode, proxy, no token" \
   'grep -qx "PERIDERM_MODE=exec" "$ENVF" && grep -qx "HTTPS_PROXY=http://alwayswork-periderm-proxy:3128" "$ENVF" && ! grep -q "TOKEN" "$ENVF"'
 check "harness unit: in the workspace's network and user namespaces, bound to its unit" \
   'grep -q -- "--network container:alwayswork-pdws-$H1" "$HN" && grep -q -- "--userns=container:alwayswork-pdws-$H1" "$HN" && ! grep -q -- "--userns=auto" "$HN" && grep -qx "BindsTo=alwayswork-pdws-$H1.service" "$HN" && grep -q "^After=network-online.target alwayswork-pdws-$H1.service" "$HN" && grep -q "^WantedBy=multi-user.target alwayswork-pdws-$H1.service" "$HN"'
+check "a replaced workspace takes its harness container with it (rm --depend); nothing else does" \
+  'grep -q "^ExecStartPre=-.* rm -f --depend alwayswork-pdws-$H1$" "$WS" && ! grep -q -- "--depend" "$HN" && ! grep -q -- "--depend" "$AW_SYSTEMD_DIR/alwayswork-periderm-proxy.service"'
 check "harness unit: shares only the workspace volume (no :U), hardened, its image" \
   '[[ "$(flags "$HN" "--volume ")" == 1 ]] && grep -q -- "--volume alwayswork-pdws-$H1:/workspace " "$HN" && grep -q -- "--cap-drop ALL" "$HN" && grep -q -- "--read-only" "$HN" && ! grep -q -- "--publish" "$HN" && grep -q "periderm-harness@sha256:cccc" "$HN"'
 check "harness env: 0600, workspace token, caps and the CLI login from the node's secrets" \

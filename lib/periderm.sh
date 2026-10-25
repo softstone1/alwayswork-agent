@@ -135,7 +135,7 @@ pd_firewall_close() {
 pd_wl_reset() {
   WL_NAME="$1"; WL_IMAGE="$2"; WL_DESC="$3"
   WL_PUBLISH=(); WL_VOLUMES=(); WL_ENV_FILE=""; WL_LABELS=("dev.alwayswork.workload=$1")
-  WL_READ_ONLY=1; WL_TMPFS=(); WL_HEALTH=""; WL_NETWORK="$PD_NET"; WL_ARGS=(); WL_EXTRA=(); WL_USERNS=""; WL_BINDS_TO=""
+  WL_READ_ONLY=1; WL_TMPFS=(); WL_HEALTH=""; WL_NETWORK="$PD_NET"; WL_ARGS=(); WL_EXTRA=(); WL_USERNS=""; WL_BINDS_TO=""; WL_RM_DEPEND=""
   # The sandbox's confinement is not optional: when the node turned engine
   # hardening off (lib/engine.sh), these still apply here.
   engine_hardening_enabled || WL_EXTRA+=(--cap-drop ALL --security-opt no-new-privileges:true)
@@ -182,6 +182,9 @@ pd_apply_workspace() {
   WL_ENV_FILE="$envf"
   # The last --cpus/--memory/--pids-limit wins over the engine defaults.
   WL_EXTRA+=(--cpus "$cpu" --memory "${mem}m" --pids-limit "$pids" --shm-size 256m)
+  # The harness joins this container's namespaces: a new workspace (image,
+  # limits) must take the harness container with it, or podman refuses.
+  WL_RM_DEPEND=1
   WL_PULL="" WL_BUILD="" wl_ensure_image "$image" || return 1
   wl_apply_unit || return 1
   if [[ -n "$hk" ]]; then pd_apply_harness "$hex" "$ws" || return 1
