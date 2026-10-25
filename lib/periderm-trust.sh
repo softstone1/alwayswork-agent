@@ -126,6 +126,8 @@ pd_outbox_flush() {
 
 pd_post_result() { # <workId> <attempt> <result-json>
   pd_outbox_put POST "/v1/device/periderm/work/$1/result" "$(jq -nc --argjson a "$2" --argjson r "$3" '{attempt:$a, result:$r}')" || return 1
+  # Queued for the control plane: this attempt has said its result.
+  [[ -d "$(pd_work_dir "$1" "$2")" ]] && touch "$(pd_work_dir "$1" "$2")/reported"
   pd_outbox_flush || warn "periderm: result of $1 queued; it is sent when the control plane answers"
 }
 
@@ -250,13 +252,13 @@ pd_work_take() {
   [[ "$id" =~ ^[A-Za-z0-9_-]{1,64}$ && "$attempt" =~ ^[1-9][0-9]{0,3}$ ]] || { warn "periderm: refusing malformed work"; return 1; }
   wd="$(pd_work_dir "$id" "$attempt")"
   if [[ -d "$wd/claimed" ]]; then             # taken before: at most once per attempt
-    # …unless its job died without finishing (the node restarted, the unit was
-    # killed): that is said once, and the control plane starts a new attempt.
-    if [[ ! -e "$wd/done" && ! -e "$wd/orphaned" ]] && have systemctl \
+    # …unless its job ended without a result (it died, or failed on a path that
+    # did not report): that is said once, and the control plane retries.
+    if [[ ! -e "$wd/reported" && ! -e "$wd/orphaned" ]] && have systemctl \
        && ! systemctl is-active --quiet "alwayswork-pdjob-$id-$attempt.service" 2>/dev/null \
        && [[ "$(jq -r '.kind' <<<"$item")" == verify ]]; then
       touch "$wd/orphaned"
-      pd_verify_fail "$id" "$attempt" "the job stopped without finishing" || true
+      pd_verify_fail "$id" "$attempt" "the job ended without a result" || true
     fi
     return 0
   fi
