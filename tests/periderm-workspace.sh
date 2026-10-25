@@ -158,6 +158,10 @@ check "harness env: 0600, workspace token, caps and the CLI login from the node'
   '[[ "$(stat -c %a "$HENV")" == 600 ]] && grep -qx "PERIDERM_WORKSPACE_TOKEN=$TOKEN" "$HENV" && grep -qx "PERIDERM_HARNESS=claude" "$HENV" && grep -qx "PERIDERM_HARNESS_MAX_TURNS=60" "$HENV" && grep -qx "PERIDERM_HARNESS_MAX_MINUTES=30" "$HENV" && grep -qx "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_TOK" "$HENV"'
 check "the login never in a unit, an argv or the log" \
   '! grep -rq "$CLAUDE_TOK" "$AW_SYSTEMD_DIR" && ! grep -q "$CLAUDE_TOK" "$CALLS" && ! grep -q "$CLAUDE_TOK" "$TMP/out"'
+check "a pasted login is cleaned: line wraps, spaces and surrounding text go" \
+  'CLAUDE_TOK=$'"'"'Your token: sk-ant-oat01-AbC_\n  dEf-123 \n'"'"'; applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")" && grep -qx "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-AbC_dEf-123" "$HENV"'
+check "a malformed login says so, without the value" \
+  'CLAUDE_TOK="not;a;token!!!!!!!!" ; ! applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")"; grep -q "malformed (19 characters" "$TMP/out" && ! grep -q "not;a;token" "$TMP/out"'
 check "no login on the node: the harness fails and says what to set" \
   'CLAUDE_TOK="" ; ! applyh "$(delivery "$(wsh pds_AbC-12_xyz pv-$H1 5173)")"; grep -q "CLAUDE_CODE_OAUTH_TOKEN" "$TMP/out"'
 CLAUDE_TOK="sk-ant-oat01-Cla1deT0kenValueForTests_abcdef"
