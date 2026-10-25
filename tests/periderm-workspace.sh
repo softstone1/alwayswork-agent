@@ -205,6 +205,24 @@ rm -f "$TMP/applied" "$TMP/order"
 check "a failing periderm step neither aborts nor un-acks the delivery, and runs after apply" \
   'iso "{\"state\":\"approved\",\"sequence\":11,\"config\":{\"configVersion\":11}}" && [[ "$(cat "$TMP/applied")" == 11 && "$(paste -sd, "$TMP/order")" == apply,periderm ]] && grep -q "periderm workspaces of version 11" "$TMP/out"'
 
+# Its outcome rides the heartbeat (health.lastPeriderm) with the error lines.
+rm -f "$AW_STATE/last-periderm.json"
+note() {
+  ( libs; source "$ROOT/lib/control.sh"
+    cfg_set_str() { :; }; cfg_set_expr() { :; }
+    tunnel_section_present() { return 1; }; control_apply_access() { :; }; upd_apply_from_delivery() { :; }
+    obj_apply_from_delivery() { :; }; pkg_apply_from_delivery() { :; }
+    control_apply_lockdown() { :; }; infra_apply_from_delivery() { :; }
+    aw_write() { cat > "$1"; }
+    run() { [[ "$1" == "$AW_ROOT/bin/alwayswork" ]] && return 0; "$@"; }
+    periderm_apply_from_delivery() { [[ -z "${PD_FAILS:-}" ]] || { err "periderm.agent: no usable CLAUDE_CODE_OAUTH_TOKEN in this node's secrets"; exit 1; }; }
+    control_apply_delivery "$1" ) > "$TMP/out" 2>&1
+}
+check "a failed periderm reconcile is noted for the heartbeat with its error lines" \
+  'PD_FAILS=1 note "{\"state\":\"approved\",\"sequence\":12,\"config\":{\"configVersion\":12}}" && jq -e ".ok == false and .version == 12 and (.errorTail | test(\"CLAUDE_CODE_OAUTH_TOKEN\"))" "$AW_STATE/last-periderm.json" >/dev/null'
+check "a converged one is noted ok" \
+  'note "{\"state\":\"approved\",\"sequence\":13,\"config\":{\"configVersion\":13}}" && jq -e ".ok == true and .version == 13 and .errorTail == null" "$AW_STATE/last-periderm.json" >/dev/null'
+
 echo "== periderm.workspace: real age =="
 if [[ -n "$REAL_AGE" && -n "$REAL_KEYGEN" ]]; then
   rm -f "$AW_ETC/age.key"; "$REAL_KEYGEN" -o "$AW_ETC/age.key" 2>/dev/null; chmod 600 "$AW_ETC/age.key"

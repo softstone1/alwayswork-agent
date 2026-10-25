@@ -393,6 +393,8 @@ control_health_json() {
   local fu; if fu="$(health_failing_units_json 2>/dev/null)"; then _health_raw failingUnits "$fu"; fi
   local la; la="$(jq -c 'select(type == "object")' "$AW_STATE/last-apply.json" 2>/dev/null || true)"
   [[ -n "$la" ]] && _health_raw lastApply "$la"
+  local lp; lp="$(jq -c 'select(type == "object")' "$AW_STATE/last-periderm.json" 2>/dev/null || true)"
+  [[ -n "$lp" ]] && _health_raw lastPeriderm "$lp"
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
   # Inventory (capacity, not load): what this box is made of.

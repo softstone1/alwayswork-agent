@@ -344,7 +344,7 @@ check "no trust role: delivered work is ignored, nothing runs" \
 
 echo "== periderm trust: control-agent wiring =="
 check "same-sequence deliveries still pick up new work; ticks flush the outbox; apply runs it isolated" \
-  'grep -q "( periderm_trust_apply \"\$out\" current ) >&2 || true" "$ROOT/lib/control.sh" && grep -q "( periderm_trust_tick ) || true" "$ROOT/lib/control.sh" && grep -q "( periderm_trust_apply \"\$json\" full ) || warn" "$ROOT/lib/control.sh"'
+  'grep -q "( periderm_trust_apply \"\$out\" current ) >&2 || true" "$ROOT/lib/control.sh" && grep -q "( periderm_trust_tick ) || true" "$ROOT/lib/control.sh" && grep -q "( periderm_trust_apply \"\$json\" full ) >>\"\$plog\" 2>&1 || { prc=1" "$ROOT/lib/control.sh"'
 
 printf 'periderm.trust: passed %d failed %d\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))

@@ -2309,7 +2309,7 @@ fi
 
 echo "== periderm.workspace =="
 check "control_apply_delivery reconciles periderm after apply, failure-isolated" \
-  'grep -q "( periderm_apply_from_delivery \"\$json\" ) || warn" "$ROOT/lib/control.sh" && grep -q "source \"\$AW_ROOT/lib/periderm.sh\"" "$ROOT/bin/alwayswork"'
+  'grep -q "( periderm_apply_from_delivery \"\$json\" ) >>\"\$plog\" 2>&1 || { prc=1" "$ROOT/lib/control.sh" && grep -q "source \"\$AW_ROOT/lib/periderm.sh\"" "$ROOT/bin/alwayswork"'
 if yq --version 2>/dev/null | grep -qi mikefarah; then
   check "periderm.workspace: networks, proxy, workspace and preview units, token, removal, gate (tests/periderm-workspace.sh)" \
     'bash "$ROOT/tests/periderm-workspace.sh" > "$TMP/periderm.out" 2>&1 || { grep -E "FAIL|passed" "$TMP/periderm.out"; false; }'
