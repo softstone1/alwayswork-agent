@@ -249,7 +249,17 @@ pd_work_take() {
   id="$(jq -r '.id // ""' <<<"$item")"; attempt="$(jq -r '.attempt // "" | tostring' <<<"$item")"
   [[ "$id" =~ ^[A-Za-z0-9_-]{1,64}$ && "$attempt" =~ ^[1-9][0-9]{0,3}$ ]] || { warn "periderm: refusing malformed work"; return 1; }
   wd="$(pd_work_dir "$id" "$attempt")"
-  [[ -d "$wd/claimed" ]] && return 0          # taken before: at most once per attempt
+  if [[ -d "$wd/claimed" ]]; then             # taken before: at most once per attempt
+    # …unless its job died without finishing (the node restarted, the unit was
+    # killed): that is said once, and the control plane starts a new attempt.
+    if [[ ! -e "$wd/done" && ! -e "$wd/orphaned" ]] && have systemctl \
+       && ! systemctl is-active --quiet "alwayswork-pdjob-$id-$attempt.service" 2>/dev/null \
+       && [[ "$(jq -r '.kind' <<<"$item")" == verify ]]; then
+      touch "$wd/orphaned"
+      pd_verify_fail "$id" "$attempt" "the job stopped without finishing" || true
+    fi
+    return 0
+  fi
   [[ -e "$wd/refused" ]] && return 1          # refused for good before: not logged again
   local crc=0; pd_work_check "$item" || crc=$?
   if (( crc != 0 )); then
