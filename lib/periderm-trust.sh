@@ -378,6 +378,15 @@ pd_ensure_verify_network() {
   if [[ "$(podman network inspect "$PD_VERIFY_NET" --format '{{.Internal}}' 2>/dev/null)" != "true" ]]; then
     err "periderm: network '$PD_VERIFY_NET' exists but is not --internal; refusing to verify on it"; return 1
   fi
+  # The verifier reaches each candidate by its container name: name lookups go
+  # to the network's DNS on the host, which a strict host firewall drops (live:
+  # every candidate "did not answer /healthz" on periderm-verify-1). Only DNS is
+  # opened; the network stays internal, with no route out.
+  local sub
+  if declare -F fw_active >/dev/null && fw_active && sub="$(pd_subnet "$PD_VERIFY_NET")"; then
+    fw_allow_subnet_port periderm.verifier "$sub" 53 udp >/dev/null 2>&1 || true
+    fw_allow_subnet_port periderm.verifier "$sub" 53 tcp >/dev/null 2>&1 || true
+  fi
 }
 
 # pd_verify_fail <id> <attempt> <error>: the verifier could not run. Said to
