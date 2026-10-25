@@ -364,6 +364,14 @@ check "failing units carry a redacted log tail" '
   chmod +x "$d/systemctl" "$d/journalctl"
   out="$(PATH="$d:$PATH" AW_TEST=1 AW_TEST_UNITS=1 bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; health_failing_units_json")"; rm -rf "$d"
   jq -e "length == 1 and .[0].unit == \"alwayswork-postgres.service\" and .[0].sub == \"auto-restart\" and .[0].restarts == 7 and (.[0].logTail | test(\"private key\"))" <<<"$out" >/dev/null && ! grep -q hunter2 <<<"$out"'
+check "running periderm jobs are reported with their age and their container's last lines" '
+  d="$(mktemp -d)"
+  printf "%s\n" "#!/bin/sh" "case \"\$1\" in" "  list-units) echo \"alwayswork-pdjob-pdwv_x-1.service loaded active running v\" ;;" "  show) echo \"Sun 2026-10-25 16:26:30 UTC\" ;;" "esac" > "$d/systemctl"
+  printf "%s\n" "#!/bin/sh" "echo \"periderm: verifying pdwv_x (candidate)\"" "echo \"token=abc123\"" > "$d/journalctl"
+  printf "%s\n" "#!/bin/sh" "case \"\$1\" in ps) echo periderm-verifier-ab12 ;; logs) echo \"mutant 3 of 8 survived\" ;; esac" > "$d/podman"
+  chmod +x "$d/systemctl" "$d/journalctl" "$d/podman"
+  out="$(PATH="$d:$PATH" AW_TEST=1 AW_TEST_UNITS=1 bash -c "source \"$ROOT/lib/core.sh\"; source \"$ROOT/lib/health.sh\"; health_periderm_jobs_json")"; rm -rf "$d"
+  jq -e "length == 1 and .[0].unit == \"alwayswork-pdjob-pdwv_x-1.service\" and .[0].since == \"2026-10-25T16:26:30Z\" and (.[0].logTail | test(\"verifying pdwv_x\")) and (.[0].logTail | test(\"mutant 3 of 8\"))" <<<"$out" >/dev/null && ! grep -q abc123 <<<"$out"'
 check "postgres init/ and conf/ are world-readable (userns=auto containers read them)" 'grep -q "chmod 0755 \"\$dir\"" "$ROOT/capabilities/services.postgres/postgres.sh" && grep -q "chmod 0755 \"\$(pg_conf_dir)\"" "$ROOT/capabilities/services.postgres/postgres.sh"'
 check "postgres data mounts one level up (postgres:18 layout), PGDATA below it" 'grep -q "PG_PGDATA=\"/var/lib/postgresql/pgdata\"" "$ROOT/capabilities/services.postgres/postgres.sh" && ! grep -q ":/var/lib/postgresql/data:U" "$ROOT/capabilities/services.postgres/postgres.sh"'
 check "every enrol path finishes in one place" '[[ "$(grep -c "control_finish_enrolled" "$ROOT/lib/control.sh")" -ge 3 ]] && grep -q "control_enroll_resume_once" "$ROOT/commands/provision.sh"'

@@ -242,6 +242,30 @@ health_failing_units_json() {
   printf '[%s]' "${rows%,}"
 }
 
+# health_periderm_jobs_json — Periderm build/verify/backup jobs running right now
+# (transient alwayswork-pdjob-* units, lib/periderm-trust.sh): how long each has
+# run, its last log lines, and its container's (a verifier logs to its own
+# file, not the unit's journal). A job used to be invisible until it finished.
+health_periderm_jobs_json() {
+  have systemctl && have journalctl || return 1
+  [[ -n "${AW_TEST:-}" && -z "${AW_TEST_UNITS:-}" ]] && return 1
+  local u since tail ctr rows="" n=0
+  while read -r u; do
+    [[ "$u" == alwayswork-pdjob-*.service ]] || continue
+    since="$(systemctl show -p ActiveEnterTimestamp --value "$u" 2>/dev/null)"
+    since="$(date -u -d "$since" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+    tail="$(journalctl -u "$u" -n 8 -o cat --no-pager 2>/dev/null)"
+    if have podman; then
+      ctr="$(podman ps --filter label=dev.alwayswork.periderm.work --format '{{.Names}}' 2>/dev/null | head -n 1)"
+      [[ -n "$ctr" ]] && tail="$(printf '%s\n-- %s\n%s' "$tail" "$ctr" "$(podman logs --tail 8 "$ctr" 2>&1)")"
+    fi
+    tail="$(printf '%s' "$tail" | sed -E 's/(password|passwd|secret|token|key)([=: ]+)[^ ]+/\1\2[redacted]/Ig' | tr -cd '[:print:]\n' | tail -c 1200)"
+    rows+="$(jq -nc --arg u "$u" --arg s "$since" --arg t "$tail" '{unit:$u, since:(if $s == "" then null else $s end), logTail:$t}'),"
+    n=$((n + 1)); (( n >= 4 )) && break
+  done < <(systemctl list-units --state=active --plain --no-legend 'alwayswork-pdjob-*.service' 2>/dev/null | awk '{print $1}')
+  printf '[%s]' "${rows%,}"
+}
+
 # health_listeners_json — the health.listeners array (max 32). Fails (prints
 # nothing) when `ss` is unavailable, so the field is omitted, not [] .
 health_listeners_json() {
@@ -395,6 +419,7 @@ control_health_json() {
   [[ -n "$la" ]] && _health_raw lastApply "$la"
   local lp; lp="$(jq -c 'select(type == "object")' "$AW_STATE/last-periderm.json" 2>/dev/null || true)"
   [[ -n "$lp" ]] && _health_raw lastPeriderm "$lp"
+  local pj; if pj="$(health_periderm_jobs_json 2>/dev/null)" && [[ "$pj" != "[]" ]]; then _health_raw peridermJobs "$pj"; fi
 
   _health_raw clockSynced "$(_health_bool control_clock_trusted)"
   # Inventory (capacity, not load): what this box is made of.
