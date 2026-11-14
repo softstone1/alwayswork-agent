@@ -39,6 +39,13 @@
 #   standby    on | off (default off): with seed_from, run as a standby that
 #              keeps replaying that node's archived WAL; set off to promote,
 #              after which this node backs up to its own path
+#   read_only  on | off (default off): the write fence for a switchover. The
+#              server restarts with default_transaction_read_only=on (every
+#              client session is dropped; new ones cannot write), forces a
+#              WAL switch so the last segment is archived, and reports
+#              metrics.fence {lsn, wal, archived}. Roles, the aw schema and
+#              disk facts are not written while fenced. A standby that has
+#              replayed past fence.lsn holds every committed write.
 # Secrets (sealed store): POSTGRES_PASSWORD (superuser) and
 # POSTGRES_APP_PASSWORD are generated here and node-owned — a delivered group
 # secret never replaces them. PG_ROLE_<NAME>_PASSWORD is generated when
@@ -388,6 +395,9 @@ pg_workload_vars() {
   WL_VOLUMES=("$(pg_data):/var/lib/postgresql:U" "$(pg_root)/init:/docker-entrypoint-initdb.d:ro" "$(pg_conf_dir):$PG_CONF_MNT:ro")
   WL_ARGS=(postgres -c "hba_file=$PG_CONF_MNT/pg_hba.conf" -c password_encryption=scram-sha-256)
   [[ -n "$(pg_io_method)" ]] && WL_ARGS+=(-c "io_method=$(pg_io_method)")
+  # The switchover fence: on the command line, never ALTER SYSTEM — postgresql.auto.conf is in
+  # every backup, and a node seeded from one would come up read-only after its promotion.
+  pg_fenced && WL_ARGS+=(-c default_transaction_read_only=on)
   if [[ "$(pg_tls)" == "on" ]]; then
     WL_VOLUMES+=("$(pg_tls_srv_dir):$PG_TLS_MNT:ro,U")
     WL_ARGS+=(-c ssl=on -c "ssl_cert_file=$PG_TLS_MNT/server.crt" -c "ssl_key_file=$PG_TLS_MNT/server.key" -c ssl_min_protocol_version=TLSv1.2)
@@ -565,6 +575,7 @@ SQL
 # enough for every healthcheck; a failure only means stale facts.
 pg_status_facts() {
   [[ "$DRY_RUN" == "1" ]] && return 0
+  pg_fenced && return 0   # fenced: nothing is written after the fence LSN
   local free total
   read -r total free < <(df -Pk "$(pg_data)" 2>/dev/null | awk 'NR == 2 { print $2 * 1024, $4 * 1024 }')
   [[ "$free" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] || return 1
@@ -607,6 +618,11 @@ PG_METRICS_TTL="${PG_METRICS_TTL:-60}"
 PG_METRICS_SQL="SELECT json_build_object(
   'serverVersion', current_setting('server_version'),
   'inRecovery', pg_is_in_recovery(),
+  'readOnly', current_setting('default_transaction_read_only') = 'on',
+  'walLsn', CASE WHEN pg_is_in_recovery() THEN NULL ELSE pg_current_wal_lsn()::text END,
+  'replayLsn', CASE WHEN pg_is_in_recovery() THEN pg_last_wal_replay_lsn()::text END,
+  'replayAt', to_char(pg_last_xact_replay_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),
+  'lastArchivedWal', CASE WHEN current_setting('archive_mode') = 'off' THEN NULL ELSE a.last_archived_wal END,
   'uptimeSec', extract(epoch FROM now() - pg_postmaster_start_time())::bigint,
   'connections', (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')::int,
   'maxConnections', current_setting('max_connections')::int,
@@ -701,6 +717,7 @@ pg_reconcile_owed() {
   pg_br_drill_owed
   [[ -e "$(pg_reconcile_pending_file)" && "$DRY_RUN" != "1" ]] || return 0
   pg_in_recovery && return 0
+  pg_fenced && return 0
   PG_READY_TRIES=1 pg_reconcile || return 0
   pg_reconcile_pending_clear
   if pg_br_on; then pg_br_stanza_ensure || true; fi
@@ -724,12 +741,16 @@ pg_metrics_sample() {
     [[ "$free" =~ ^[0-9]+$ ]] || free=null
     [[ "$total" =~ ^[0-9]+$ ]] || total=null
     htcp=false; pg_host_tcp_ok && htcp=true
-    jq -c --arg at "$at" --argjson free "$free" --argjson total "$total" --argjson htcp "$htcp" '
-      {at:$at, up:true, serverVersion, inRecovery, uptimeSec, connections, maxConnections, activeQueries,
+    local fence=null
+    pg_fenced 2>/dev/null && fence="$(jq -ce 'select(type == "object" and (.wal | type) == "string")' "$(pg_fence_file)" 2>/dev/null)" || fence=null
+    [[ -n "$fence" ]] || fence=null
+    jq -c --arg at "$at" --argjson free "$free" --argjson total "$total" --argjson htcp "$htcp" --argjson fence "$fence" '
+      {at:$at, up:true, serverVersion, inRecovery, readOnly, walLsn, replayLsn, replayAt, uptimeSec, connections, maxConnections, activeQueries,
        dbSizeBytes, diskFreeBytes:$free, diskTotalBytes:$total, cacheHitRatio,
        xactCommit, xactRollback, deadlocks, longestQuerySec, longestTxSec,
-       walArchivedCount, walFailedCount, lastFailedWal, lastArchivedAt, archiveLagSec, replicationSlots, backrestSessions, checkpointer}
-      + {hostTcp: $htcp}' <<<"$row"
+       walArchivedCount, walFailedCount, lastFailedWal, lastArchivedAt, lastArchivedWal, archiveLagSec, replicationSlots, backrestSessions, checkpointer}
+      + {hostTcp: $htcp}
+      + (if $fence == null then {} else {fence: ($fence + {archived: ((.lastArchivedWal // "") >= $fence.wal)})} end)' <<<"$row"
   else
     jq -nc --arg at "$at" '{at:$at, up:false}'
   fi
@@ -910,6 +931,26 @@ pg_backup_bucket() {
   printf '%s' "$b"
 }
 pg_node_name() { hostname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-\n' '-' | head -c 63; }
+pg_read_only() {
+  local v; v="$(cap_config read_only)"; [[ -n "$v" ]] || v=off
+  case "$v" in on|off) ;; *) die "services.postgres: bad read_only '$v' (on|off)" ;; esac
+  printf '%s' "$v"
+}
+# Fenced: a primary started read-only for a switchover (a standby is read-only anyway).
+pg_fenced() { [[ "$(pg_read_only)" == on && "$(pg_standby)" != on ]]; }
+pg_fence_file() { printf '%s' "$(pg_root)/fence.json"; }
+# Close the last segment so the archive holds every write made before the fence; record where.
+pg_fence_settle() {
+  [[ "$DRY_RUN" == "1" ]] && { info "dry-run: SELECT pg_switch_wal()"; return 0; }
+  local row lsn wal
+  row="$(pg_exec_t 30 psql -X -At -F ' ' -U postgres -d postgres -c 'SELECT l, pg_walfile_name(l) FROM pg_switch_wal() AS l' </dev/null 2>/dev/null)" || row=""
+  read -r lsn wal <<<"$row"
+  [[ "$lsn" =~ ^[0-9A-F]+/[0-9A-F]+$ && "$wal" =~ ^[0-9A-F]{24}$ ]] || { warn "services.postgres: could not switch WAL for the fence; the next apply retries"; return 1; }
+  jq -nc --arg lsn "$lsn" --arg wal "$wal" --arg at "$(pg_now)" '{lsn:$lsn, wal:$wal, at:$at}' | aw_write "$(pg_fence_file)" || return 1
+  chmod 644 "$(pg_fence_file)" 2>/dev/null || true
+  rm -f "$(pg_metrics_file)" 2>/dev/null || true
+  ok "services.postgres: fenced read-only at $lsn ($wal); waiting for it to be archived"
+}
 pg_seed_from() {
   local p; p="$(cap_config seed_from)"
   [[ -z "$p" ]] && return 0

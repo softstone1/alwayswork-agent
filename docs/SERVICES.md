@@ -312,6 +312,20 @@ Set up R2 once per fleet:
    node). The next delivery carries the sealed secrets and the apply turns on
    archiving, creates the stanza, checks it and starts the first full.
 
+**Switchover fence (`read_only`).** `read_only=on` restarts the primary with
+`default_transaction_read_only=on` on its command line (never `ALTER SYSTEM`:
+`postgresql.auto.conf` travels in every backup, and a node seeded from one
+would come up read-only after its promotion). The restart drops every client
+session and new ones cannot write. The agent then runs `pg_switch_wal()` and
+records the fence in `fence.json`; nothing else is written while fenced (no
+role or `aw` schema reconcile, no disk facts). The heartbeat's
+`postgres.metrics` carries `readOnly`, `walLsn` (primary), `replayLsn` and
+`replayAt` (standby), `lastArchivedWal`, and on a fenced primary
+`fence: { lsn, wal, at, archived }`. A standby whose `replayLsn` is at or past
+`fence.lsn`, with `fence.archived` true, holds every committed write: promote
+it then (`standby=off`). The control plane's switchover check
+(docs/DATABASE_SWITCHOVER.md in alwayswork-control) compares the two.
+
 **Restore drill.** Weekly, `aw service drill postgres` restores the latest
 backup plus all archived WAL from repo1 into
 `/var/lib/alwayswork/services/postgres/drill/` inside a throwaway container

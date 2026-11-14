@@ -41,11 +41,16 @@ wl_report_manifest_surfaces services.postgres
 pg_promote_if_asked || warn "services.postgres: promotion did not complete; the next apply retries"
 # A database still initialising is not a failed apply: the next one retries. A standby is
 # read-only: roles and the aw schema are reconciled once it is promoted.
+# Fenced (read_only=on): no role, schema or fact is written, so the fence LSN is the last write.
 pg_up=0
 if pg_wait_ready && pg_in_recovery; then
   pg_reconcile_pending_mark
   info "services.postgres: standby of $(pg_seed_from); roles and backups wait for promotion"
+elif pg_fenced; then
+  pg_reconcile_pending_mark
+  pg_fence_settle || warn "services.postgres: the fence is not settled yet; the next apply retries"
 elif pg_reconcile; then pg_up=1; pg_reconcile_pending_clear; else pg_reconcile_pending_mark; fi
+pg_fenced || rm -f "$(pg_fence_file)" 2>/dev/null || true
 if pg_br_on && [[ "$(pg_standby)" == on ]]; then
   pg_br_disable || warn "services.postgres: could not remove the backup schedules"
 elif pg_br_on; then

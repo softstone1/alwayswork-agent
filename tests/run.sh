@@ -1130,7 +1130,7 @@ printf '%s\n' "$*" >> "$PG_LOG.argv"
 cat >> "$PG_LOG.stdin"
 printf 'x\n' >> "$PG_LOG.count"
 [[ -n "${PG_DOWN:-}" ]] && { echo 'psql: error: connection to server on socket failed' >&2; exit 2; }
-printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastFailedWal" : null, "lastArchivedAt" : null, "archiveLagSec" : null, "replicationSlots" : 1, "backrestSessions" : [], "checkpointer" : {"wait" : null}, "query" : "SELECT q-Secret-7"}'
+printf '%s\n' '{"serverVersion" : "17.6", "inRecovery" : false, "readOnly" : false, "walLsn" : "3/4001BA0", "replayLsn" : null, "replayAt" : null, "uptimeSec" : 86400, "connections" : 7, "maxConnections" : 100, "activeQueries" : 2, "dbSizeBytes" : 123456789, "cacheHitRatio" : 0.9934, "xactCommit" : 5000, "xactRollback" : 12, "deadlocks" : 0, "longestQuerySec" : 3.2, "longestTxSec" : 41.0, "walArchivedCount" : null, "walFailedCount" : null, "lastFailedWal" : null, "lastArchivedAt" : null, "lastArchivedWal" : null, "archiveLagSec" : null, "replicationSlots" : 1, "backrestSessions" : [], "checkpointer" : {"wait" : null}, "query" : "SELECT q-Secret-7"}'
 EOS
 mkdir -p "$TMP/pgmbin"; cp "$TMP/pgbin/podman-metrics" "$TMP/pgmbin/podman"; chmod +x "$TMP/pgmbin/podman"
 pg_mprobe() { PATH="$TMP/pgmbin:$PATH" PG_LOG="$TMP/pgmlog" PG_FAKE_SEC="$TMP/pg/sec" pg_probe "$@"; }
@@ -1139,9 +1139,10 @@ pg_t_metrics() {
   local c="$TMP/pg/state/postgres-metrics.json" j
   rm -f "$TMP/pgmlog".* "$c"; mkdir -p "$TMP/pg/state/services/postgres/data"
   j="$(pg_mprobe pg_metrics_json)" || return 1
-  jq -e '(keys_unsorted) == ["at","up","serverVersion","inRecovery","uptimeSec","connections","maxConnections","activeQueries",
+  jq -e '(keys_unsorted) == ["at","up","serverVersion","inRecovery","readOnly","walLsn","replayLsn","replayAt","uptimeSec","connections","maxConnections","activeQueries",
           "dbSizeBytes","diskFreeBytes","diskTotalBytes","cacheHitRatio","xactCommit","xactRollback","deadlocks",
-          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastFailedWal","lastArchivedAt","archiveLagSec","replicationSlots","backrestSessions","checkpointer","hostTcp"]
+          "longestQuerySec","longestTxSec","walArchivedCount","walFailedCount","lastFailedWal","lastArchivedAt","lastArchivedWal","archiveLagSec","replicationSlots","backrestSessions","checkpointer","hostTcp"]
+     and .readOnly == false and .walLsn == "3/4001BA0" and .replayLsn == null
      and .up == true and .serverVersion == "17.6" and .connections == 7 and .cacheHitRatio == 0.9934
      and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
      and (.diskFreeBytes | type) == "number" and .diskTotalBytes >= .diskFreeBytes and .walArchivedCount == null' <<<"$j" >/dev/null || { echo "$j"; return 1; }
@@ -1525,6 +1526,27 @@ bk_t_stanza_retry() {
   rm -f "$TMP/bklog.locks"; bk_off
   return "$r"
 }
+bk_t_fence() {
+  local r=0 st="$TMP/pg/state/services/postgres" u="$TMP/pg/systemd/alwayswork-postgres.service"
+  # read_only: on|off only; on puts the fence on the server's command line, never ALTER SYSTEM.
+  pg_cfg '.capabilities.config.services.postgres.read_only = "maybe"'
+  ! pg_probe pg_read_only >/dev/null 2>&1 || r=1
+  pg_cfg '.capabilities.config.services.postgres.read_only = "on"'
+  pg_probe pg_fenced || r=1
+  pg_probe pg_write_unit >/dev/null 2>&1; grep -q -- "-c default_transaction_read_only=on" "$u" || r=1
+  # Fenced: no disk facts and no deferred reconcile are written.
+  : > "$TMP/pg/state/postgres-reconcile-pending"
+  pg_probe pg_status_facts >/dev/null 2>&1 || r=1
+  # A standby is read-only on its own: the fence flag does nothing there.
+  pg_cfg '.capabilities.config.services.postgres.seed_from = "/a/b" | .capabilities.config.services.postgres.standby = "on"'
+  ! pg_probe pg_fenced || r=1
+  pg_probe pg_write_unit >/dev/null 2>&1; ! grep -q default_transaction_read_only "$u" || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.seed_from) | del(.capabilities.config.services.postgres.standby) | del(.capabilities.config.services.postgres.read_only)'
+  ! pg_probe pg_fenced || r=1
+  pg_probe pg_write_unit >/dev/null 2>&1; ! grep -q default_transaction_read_only "$u" || r=1
+  rm -f "$TMP/pg/state/postgres-reconcile-pending" "$st/fence.json"
+  return "$r"
+}
 bk_t_seed() {
   local r=0 st="$TMP/pg/state/services/postgres" a
   bk_reset; bk_secrets; bk_on
@@ -1621,6 +1643,7 @@ if have yq; then
   check "pg backup: PITR restore needs --yes, moves the data dir aside (never deletes), restores to the target, verifies; a failure puts it back" 'bk_t_restore'
   check "pg: the stanza is retried past an archive-lock race, and owed from the heartbeat at most every ten minutes" 'bk_t_stanza_retry'
   check "pg: seed_from restores an empty node from another's backup as a standby, never twice; standby=off is its own repository again" 'bk_t_seed'
+  check "pg: read_only fences a primary on the command line (never ALTER SYSTEM), writes nothing, and is a no-op on a standby" 'bk_t_fence'
   check "pg backup: heartbeat postgres.backup = {mode, lastBackupAt/Ok, lastDrillAt/Ok}, no secret" 'bk_t_heartbeat'
   check "pg backup: PGBACKREST_* are group secrets — imported from deliveries, never node-owned" 'bk_t_secrets'
   check "pg backup: image tracking compares the node-built image's base with the wanted one" 'bk_t_updates'
