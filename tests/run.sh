@@ -1525,6 +1525,27 @@ bk_t_stanza_retry() {
   rm -f "$TMP/bklog.locks"; bk_off
   return "$r"
 }
+bk_t_fence() {
+  local r=0 st="$TMP/pg/state/services/postgres" u="$TMP/pg/systemd/alwayswork-postgres.service"
+  # read_only: on|off only; on puts the fence on the server's command line, never ALTER SYSTEM.
+  pg_cfg '.capabilities.config.services.postgres.read_only = "maybe"'
+  ! pg_probe pg_read_only >/dev/null 2>&1 || r=1
+  pg_cfg '.capabilities.config.services.postgres.read_only = "on"'
+  pg_probe pg_fenced || r=1
+  pg_probe pg_write_unit >/dev/null 2>&1; grep -q -- "-c default_transaction_read_only=on" "$u" || r=1
+  # Fenced: no disk facts and no deferred reconcile are written.
+  : > "$TMP/pg/state/postgres-reconcile-pending"
+  pg_probe pg_status_facts >/dev/null 2>&1 || r=1
+  # A standby is read-only on its own: the fence flag does nothing there.
+  pg_cfg '.capabilities.config.services.postgres.seed_from = "/a/b" | .capabilities.config.services.postgres.standby = "on"'
+  ! pg_probe pg_fenced || r=1
+  pg_probe pg_write_unit >/dev/null 2>&1; ! grep -q default_transaction_read_only "$u" || r=1
+  pg_cfg 'del(.capabilities.config.services.postgres.seed_from) | del(.capabilities.config.services.postgres.standby) | del(.capabilities.config.services.postgres.read_only)'
+  ! pg_probe pg_fenced || r=1
+  pg_probe pg_write_unit >/dev/null 2>&1; ! grep -q default_transaction_read_only "$u" || r=1
+  rm -f "$TMP/pg/state/postgres-reconcile-pending" "$st/fence.json"
+  return "$r"
+}
 bk_t_seed() {
   local r=0 st="$TMP/pg/state/services/postgres" a
   bk_reset; bk_secrets; bk_on
@@ -1621,6 +1642,7 @@ if have yq; then
   check "pg backup: PITR restore needs --yes, moves the data dir aside (never deletes), restores to the target, verifies; a failure puts it back" 'bk_t_restore'
   check "pg: the stanza is retried past an archive-lock race, and owed from the heartbeat at most every ten minutes" 'bk_t_stanza_retry'
   check "pg: seed_from restores an empty node from another's backup as a standby, never twice; standby=off is its own repository again" 'bk_t_seed'
+  check "pg: read_only fences a primary on the command line (never ALTER SYSTEM), writes nothing, and is a no-op on a standby" 'bk_t_fence'
   check "pg backup: heartbeat postgres.backup = {mode, lastBackupAt/Ok, lastDrillAt/Ok}, no secret" 'bk_t_heartbeat'
   check "pg backup: PGBACKREST_* are group secrets — imported from deliveries, never node-owned" 'bk_t_secrets'
   check "pg backup: image tracking compares the node-built image's base with the wanted one" 'bk_t_updates'
