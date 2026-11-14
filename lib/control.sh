@@ -978,6 +978,13 @@ control_handle_revoked() {
 
 control_agent() {
   local interval="30" once=0
+  # The unit is NotifyAccess=all (WatchdogSec), so any child that inherits
+  # NOTIFY_SOCKET can send MAINPID=: podman does (conmon), and a restore that
+  # ran in the foreground became the unit's main process — when it exited 0,
+  # systemd marked the agent inactive (always1, 2026-11-14). The socket stays
+  # private to the watchdog ping; nothing the agent starts can see it.
+  AW_NOTIFY_SOCKET="${NOTIFY_SOCKET:-}"
+  unset NOTIFY_SOCKET
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --once)    once=1 ;;
@@ -1036,9 +1043,10 @@ control_agent() {
 # WatchdogSec kills and restarts an agent (and everything it started, such as
 # a hung network fetch) that stops pinging. A no-op outside systemd.
 control_watchdog_ping() {
-  [[ -n "${NOTIFY_SOCKET:-}" ]] || return 0
+  local sock="${AW_NOTIFY_SOCKET:-${NOTIFY_SOCKET:-}}"
+  [[ -n "$sock" ]] || return 0
   have systemd-notify || return 0
-  systemd-notify --pid="${AW_AGENT_PID:-$$}" WATCHDOG=1 2>/dev/null || true
+  NOTIFY_SOCKET="$sock" systemd-notify --pid="${AW_AGENT_PID:-$$}" WATCHDOG=1 2>/dev/null || true
 }
 
 # One long-poll for desired state. Returns 0 when it ended normally (change
