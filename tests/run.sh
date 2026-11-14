@@ -1569,6 +1569,10 @@ bk_t_seed() {
   ! bk_probe pg_seed_needed || r=1
   rm -f "$TMP/bklog.argv" "$st/pgbackrest.stanza" "$st/pgbackrest.stanza.tried"
   bk_probe pg_br_stanza_owed >/dev/null 2>&1; ! grep -q "stanza-create" "$TMP/bklog.argv" 2>/dev/null || r=1
+  # A standby drops its schedules but keeps the config its restore_command (archive-get) reads.
+  bk_probe pg_br_render >/dev/null 2>&1
+  bk_probe pg_br_timers_remove >/dev/null 2>&1 || r=1
+  [[ -s "$st/pgbackrest/pgbackrest.conf" ]] || r=1
   # seed_generation: a new token re-seeds a node with data (moved aside), once.
   pg_cfg '.capabilities.config.services.postgres.seed_generation = "g2"'
   bk_probe pg_seed_needed || r=1

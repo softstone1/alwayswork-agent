@@ -1230,9 +1230,28 @@ pg_br_timers_apply() {
 }
 # backup=off (or remove): no schedules, no secrets on disk. The repository
 # and its backups stay where they are.
-pg_br_disable() {
+# A standby has no backup schedules of its own, but its restore_command is pgBackRest
+# archive-get: the config it reads (mounted at /etc/pgbackrest) must stay. Removing it with the
+# schedules stopped replay at the end of the base backup ("unable to open missing file
+# '/etc/pgbackrest/pgbackrest.conf'", always1, 2026-11-14).
+pg_br_timers_remove() {
   local t
   for t in "${PG_BR_TIMERS[@]}"; do wl_remove_timer "$t" || return 1; done
+  return 0
+}
+# The container mounts the config directory: if it was removed and rendered again while the
+# server ran, the container still sees the old, empty directory. A restart remounts it.
+pg_br_conf_heal() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  pg_br_on && have podman || return 0
+  podman container exists "$(pg_container)" 2>/dev/null || return 0
+  [[ -s "$(pg_br_conf)" ]] || return 0
+  pg_exec_t 10 test -s "$PG_BR_MNT/pgbackrest.conf" </dev/null >/dev/null 2>&1 && return 0
+  warn "services.postgres: the container lost its pgBackRest config; restarting to remount it"
+  run systemctl restart "$(pg_unit)"
+}
+pg_br_disable() {
+  pg_br_timers_remove || return 1
   [[ -e "$(pg_br_dir)" ]] && run rm -rf "$(pg_br_dir)"
   [[ -e "$(pg_br_stanza_mark)" ]] && run rm -f "$(pg_br_stanza_mark)"
   return 0
