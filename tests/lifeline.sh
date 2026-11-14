@@ -13,7 +13,8 @@ check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 S="$TMP/stubs"; mkdir -p "$S"
 export CALLS="$TMP/calls" AGENT_ACTIVE="$TMP/agent-active"
-printf '#!/usr/bin/env bash\necho "systemctl $*" >> "$CALLS"\ncase "$*" in *is-active*alwayswork-agent*) [[ -f "$AGENT_ACTIVE" ]];; *) exit 0;; esac\n' > "$S/systemctl"; chmod +x "$S/systemctl"
+export AGENT_DISABLED="$TMP/agent-disabled"
+printf '#!/usr/bin/env bash\necho "systemctl $*" >> "$CALLS"\ncase "$*" in *is-active*alwayswork-agent*) [[ -f "$AGENT_ACTIVE" ]];; *is-enabled*alwayswork-agent*) [[ ! -f "$AGENT_DISABLED" ]];; *) exit 0;; esac\n' > "$S/systemctl"; chmod +x "$S/systemctl"
 export PATH="$S:$PATH"
 export AW_TEST=1 DRY_RUN=0 AW_ROOT="$ROOT" AW_ETC="$TMP/etc" AW_STATE="$TMP/state" AW_LOG_DIR="$TMP/log" AW_CONFIG="$TMP/etc/worker.yaml"
 mkdir -p "$AW_ETC" "$AW_STATE" "$AW_LOG_DIR"; touch "$AGENT_ACTIVE"
@@ -52,6 +53,13 @@ reset
 check "but only once per stale window"               'run_lifeline && ! calls | grep -q "systemctl restart"'
 date +%s > "$AW_STATE/last-heartbeat"; rm -f "$AW_STATE/lifeline.json"
 
+echo "== lifeline: stopped agent =="
+rm -f "$AGENT_ACTIVE"; reset
+check "an enabled agent that is not running is restarted" 'run_lifeline && calls | grep -q "systemctl restart alwayswork-agent.service"'
+touch "$AGENT_DISABLED"; reset
+check "a disabled agent is left alone"               'run_lifeline && ! calls | grep -q "systemctl restart"'
+rm -f "$AGENT_DISABLED"; touch "$AGENT_ACTIVE"; rm -f "$AW_STATE/lifeline.json"
+
 echo "== lifeline: signed recovery =="
 reset
 check "no command: nothing happens"                  'run_lifeline && ! calls | grep -q "systemctl restart" && ! calls | grep -q ack'
@@ -78,6 +86,7 @@ echo "== self-healing units =="
 J="$ROOT/capabilities/control.join/install.sh"
 check "agent unit has a watchdog systemd can kill on" 'grep -q "^WatchdogSec=900$" "$J" && grep -q "^NotifyAccess=all$" "$J"'
 check "the agent loop pings the watchdog"            'grep -q "control_watchdog_ping" "$ROOT/lib/control.sh" && grep -q "systemd-notify --pid" "$ROOT/lib/control.sh"'
+check "children never inherit the notify socket"       '( source "$ROOT/lib/core.sh"; source "$ROOT/lib/control.sh"; require_root(){ :; }; cfg_require(){ :; }; cfg_need(){ :; }; control_require(){ :; }; control_enrolled(){ true; }; control_pending(){ true; }; warn(){ :; }; NOTIFY_SOCKET=/run/x control_agent >/dev/null 2>&1; [[ -z "${NOTIFY_SOCKET:-}" && "$AW_NOTIFY_SOCKET" == /run/x ]] )'
 check "lifeline timer every two minutes, bounded"   'grep -q "^OnUnitActiveSec=2min$" "$J" && grep -q "alwayswork lifeline" "$J" && grep -q "^TimeoutStartSec=900$" "$J"'
 check "uninstall removes the lifeline"              'grep -q "alwayswork-lifeline.timer" "$ROOT/capabilities/control.join/uninstall.sh"'
 check "doctor runs out of band with a runtime limit" 'grep -q "systemd-run --quiet --collect --unit=alwayswork-doctor --property=RuntimeMaxSec=300" "$ROOT/lib/health.sh"'

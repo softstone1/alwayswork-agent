@@ -7,7 +7,7 @@
 #   1. the agent unit's WatchdogSec restarts a loop that stops pinging;
 #   2. doctor runs out of band (lib/health.sh), never inside the heartbeat;
 #   3. this lifeline, a separate timer that does not depend on the agent:
-#      - restarts the agent when its heartbeats stopped, and
+#      - restarts the agent when it stopped or its heartbeats stopped, and
 #      - runs the control plane's signed recovery commands.
 #
 # Recovery commands are fixed verbs (restart-agent, reinstall-agent), each
@@ -31,10 +31,18 @@ lifeline_restart_agent() {
   run systemctl restart alwayswork-agent.service
 }
 
-# Layer 3a: heartbeats stopped while the agent claims to run.
+# Layer 3a: the agent is enabled but not running (it exited 0, which
+# Restart=on-failure does not cover), or its heartbeats stopped while it
+# claims to run. A disabled unit (decommission, `systemctl disable --now`)
+# is left alone.
 lifeline_local_check() {
   local last now last_action_at
-  systemctl is-active --quiet alwayswork-agent.service 2>/dev/null || return 0
+  if ! systemctl is-active --quiet alwayswork-agent.service 2>/dev/null; then
+    systemctl is-enabled --quiet alwayswork-agent.service 2>/dev/null || return 0
+    lifeline_restart_agent "the agent is enabled but not running"
+    lifeline_note restart-agent "agent not running"
+    return 0
+  fi
   last="$(cat "$AW_STATE/last-heartbeat" 2>/dev/null || echo 0)"
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
   now="$(date +%s)"
